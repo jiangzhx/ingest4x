@@ -1,0 +1,14 @@
+#!/bin/sh
+
+echo "Running pre-push checks..."
+
+echo "Running cargo fmt..."
+cargo fmt --all -- --check || exit 1
+
+echo "Running cargo clippy..."
+cargo clippy --all-targets --all-features -- -D warnings || exit 1
+
+echo "Running cargo test..."
+cargo test || exit 1
+
+echo "All pre-push checks passed."

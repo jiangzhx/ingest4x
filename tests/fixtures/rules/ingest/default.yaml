@@ -1,0 +1,37 @@
+fields:
+  appid:
+    required: true
+    type: string
+  xwhat:
+    required: true
+    type: string
+  xcontext:
+    required: true
+    type: object
+  xcontext.installid:
+    required: true
+    type: string
+  xcontext.os:
+    required: true
+    type: string
+    enum:
+      - ios
+      - android
+      - harmony
+      - wechat
+      - toutiao
+      - tiktok
+    required_any_when:
+      - equals: ios
+        fields: [xcontext.idfa, xcontext.caid]
+      - equals: android
+        fields: [xcontext.oaid, xcontext.androidid]
+      - equals: harmony
+        fields: [xcontext.oaid, xcontext.androidid]
+      - equals: wechat
+        fields: [xcontext.openid, xcontext.unionid]
+    required_when:
+      - equals: toutiao
+        fields: [xcontext.openid]
+      - equals: tiktok
+        fields: [xcontext.openid]

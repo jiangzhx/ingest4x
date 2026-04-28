@@ -1,0 +1,231 @@
+# 付费事件，缺乏transactionid属性
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+fail
+missing required field `xcontext.transactionid`
+
+# 付费事件，缺乏paymenttype属性
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+fail
+missing required field `xcontext.paymenttype`
+
+# 付费事件，缺乏currencytype属性
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "paymenttype":"wechatpay",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+fail
+missing required field `xcontext.currencytype`
+
+# 付费事件，currencytype取值，不在标准付费CNY，USD范围内
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "paymenttype":"wechatpay",
+    "currencytype":"XXX",
+    "currencyamount":123,
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+fail
+field `xcontext.currencytype` must be one of [JPY, EUR, BRL, HKD, TWD, COP, MXN, CHF, CAD, CLP, AUD, PEN, GBP, CRC, PLN, PYG, BOB, QAR, ILS, SEK, RUB, CNY, ZAR, SGD, NZD, BGN, LKR, IQD, TRY, AED, DZD, EGP, IDR, INR, NGN, NOK, PHP, PKR, THB, UAH, VND]
+
+# 付费事件，缺乏currencyamount属性
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "paymenttype":"wechatpay",
+    "currencytype":"CNY",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+fail
+missing required field `xcontext.currencyamount`
+
+# 付费事件，currencyamount的值类型，不是数值
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "paymenttype":"wechatpay",
+    "currencytype":"CNY",
+    "currencyamount":"123",
+    "paymentstatus": true,
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+fail
+field `xcontext.currencyamount` expected type `Number`
+
+# 付费事件，currencyamount的值，是小数
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "paymenttype":"wechatpay",
+    "currencytype":"CNY",
+    "currencyamount":0.99,
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+pass
+
+# 付费事件，paymentstatus=true
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "paymenttype":"wechatpay",
+    "currencytype":"CNY",
+    "currencyamount":0.99,
+    "paymentstatus":true,
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+pass
+
+# 付费事件，paymentstatus的值是字符串"true"
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "transactionid":"example_transactionid",
+    "paymenttype":"wechatpay",
+    "currencytype":"CNY",
+    "currencyamount":0.99,
+    "paymentstatus":"true",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "payment",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+fail
+field `xcontext.paymentstatus` expected type `Boolean`
+

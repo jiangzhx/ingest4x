@@ -1,0 +1,26 @@
+#!/bin/sh
+
+# 格式化代码
+echo "Running cargo fmt..."
+cargo fmt --all -- --check
+if [ $? -ne 0 ]; then
+    echo "cargo fmt failed. Please run 'cargo fmt' to format your code."
+    exit 1
+fi
+
+# 运行 clippy
+echo "Running cargo clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
+if [ $? -ne 0 ]; then
+    echo "cargo clippy found issues. Running 'cargo clippy --fix' to fix..."
+    cargo clippy --all-targets --all-features --fix
+    if [ $? -ne 0 ]; then
+        echo "cargo clippy --fix failed. Please fix the issues manually."
+        exit 1
+    fi
+    echo "Issues fixed by cargo clippy --fix. Please review the changes and commit again."
+    exit 1
+fi
+cargo test
+echo "All checks passed. Proceeding with commit."
+

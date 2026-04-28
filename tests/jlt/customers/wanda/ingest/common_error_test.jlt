@@ -1,0 +1,75 @@
+# 缺少appid
+{
+  "xwhat": "custom_event",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  }
+}
+----
+fail
+missing required field `appid`
+
+# 缺少xwhat
+{
+  "appid":"APPID",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  }
+}
+----
+fail
+missing required field `xwhat`
+
+# 缺少xwhen
+{
+  "appid":"APPID",
+  "xwhat": "custom_event",
+  "xwho": "someoneelse",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  }
+}
+----
+pass
+
+# 缺少xcontext
+{
+  "appid":"APPID",
+  "xwhat": "custom_event",
+  "xwho": "someoneelse",
+  "xwhen": 1735136409520
+}
+----
+fail
+missing required field `xcontext`

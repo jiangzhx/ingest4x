@@ -1,0 +1,60 @@
+[package]
+name = "ingest4x"
+version = "3.2.1"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = ["ingest"]
+
+ingest = []
+
+[dependencies]
+actix-files = "0.6.6"
+actix-http = '3.9.0'
+actix-web = "4.9.0"
+actix-web-prom = { version = "0.9.0", features = ["process"] }
+serde = { version = "1.0.203", features = ["derive"] }
+serde_derive = "1.0.203"
+serde_json = "1.0.117"
+serde_yaml = "0.9.34"
+log = "0.4.21"
+tracing = "0.1.41"
+tracing-appender = "0.2.3"
+tracing-log = "0.2.0"
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "json"] }
+rdkafka = { version = "0.37.0", features = ["cmake-build", "ssl-vendored"] }
+clap = { version = "4.5.6", features = ["derive"] }
+redis = { version = "1", features = ["r2d2", "cluster", "connection-manager", "tokio-comp", "tokio-native-tls-comp"] }
+r2d2 = "0.8.10"
+config = "0.15.4"
+strum = "0.26"
+strum_macros = "0.26"
+local-ip-address = "0.6.1"
+moka = { version = "0.12.7", features = ["sync"] }
+prometheus = "0.13.4"
+futures = "0.3.30"
+anyhow = "1.0.94"
+base64 = "0.22.1"
+serde_urlencoded = "0.7.1"
+bytes = "1.10.1"
+walkdir = "2.5.0"
+humantime = "2.1.0"
+sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio", "sqlx-mysql", "sqlx-sqlite"] }
+sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-mysql", "sqlx-sqlite"] }
+tokio = { version = "1.43.0", features = ["macros", "rt-multi-thread"] }
+utoipa = { version = "5.4.0", features = ["actix_extras"] }
+utoipa-swagger-ui = { version = "9.0.2", features = ["actix-web", "vendored"] }
+
+[dev-dependencies]
+actix-rt = "2.10.0"
+assert-json-diff = "2.0.2"
+criterion = { version = "0.5.1", features = ["html_reports"] }
+tempfile = "3.15.0"
+redis-test = "1"
+
+
+[[bin]]
+name = "ingest4x"
+path = "src/main.rs"

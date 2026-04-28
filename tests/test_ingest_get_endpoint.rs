@@ -1,0 +1,180 @@
+#![cfg(feature = "ingest")]
+
+use actix_http::StatusCode;
+use actix_web::{test, App};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use ingest4x::server;
+use ingest4x::settings::Settings;
+use serde_json::{json, Value};
+use std::fs;
+use std::sync::Arc;
+use tempfile::tempdir;
+
+#[actix_rt::test]
+async fn get_ingest_decodes_base64_json_and_sends_it_to_file_sink() {
+    let temp = tempdir().expect("temp dir");
+    let config_path = temp.path().join("mock-config.toml");
+    let sink_path = temp.path().join("mock-events.jsonl");
+
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[events.sink.file_valid]
+type = "file"
+path = "{}"
+format = "jsonl"
+rotation = "never"
+
+[[events.valid.routes]]
+sinks = ["file_valid"]
+ack = ["file_valid"]
+
+[events.sink.stdout_invalid]
+type = "stdout"
+
+[[events.invalid.routes]]
+sinks = ["stdout_invalid"]
+ack = ["stdout_invalid"]
+"#,
+            sink_path.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+
+    let input_payload = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-1",
+            "os": "ios",
+            "idfa": "idfa-1",
+            "currencytype": "cny"
+        }
+    });
+
+    let encoded = STANDARD.encode(serde_json::to_vec(&input_payload).expect("serialize payload"));
+    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+    let req = test::TestRequest::get()
+        .uri(format!("/ingest?{query}").as_str())
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    let status_code = resp.status();
+    let body = test::read_body(resp).await;
+
+    assert_eq!(status_code, StatusCode::OK);
+    assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
+
+    let output = fs::read_to_string(&sink_path).expect("read event sink");
+    let line = output.lines().next().expect("missing emitted event");
+    let emitted = parse_event_sink_line(line);
+
+    assert_eq!(emitted, input_payload);
+}
+
+fn parse_event_sink_line(line: &str) -> Value {
+    serde_json::from_str(line).expect("event sink line should be valid json")
+}
+
+#[actix_rt::test]
+async fn get_ingest_returns_not_found_for_unknown_project_via_real_server_wiring() {
+    let temp = tempdir().expect("temp dir");
+    let config_path = temp.path().join("mock-config.toml");
+    let sink_path = temp.path().join("mock-events.jsonl");
+
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[events.sink.file_valid]
+type = "file"
+path = "{}"
+format = "jsonl"
+rotation = "never"
+
+[[events.valid.routes]]
+sinks = ["file_valid"]
+ack = ["file_valid"]
+
+[events.sink.stdout_invalid]
+type = "stdout"
+
+[[events.invalid.routes]]
+sinks = ["stdout_invalid"]
+ack = ["stdout_invalid"]
+"#,
+            sink_path.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+
+    let input_payload = json!({
+        "appid": "UNKNOWN",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-1",
+            "os": "ios",
+            "idfa": "idfa-1"
+        }
+    });
+
+    let encoded = STANDARD.encode(serde_json::to_vec(&input_payload).expect("serialize payload"));
+    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+    let req = test::TestRequest::get()
+        .uri(format!("/ingest?{query}").as_str())
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    let status_code = resp.status();
+    let body = test::read_body(resp).await;
+
+    assert_eq!(status_code, StatusCode::NOT_FOUND);
+    assert_eq!(
+        std::str::from_utf8(body.as_ref()).unwrap(),
+        "Project not found"
+    );
+    assert!(
+        fs::read_to_string(&sink_path)
+            .map(|content| content.trim().is_empty())
+            .unwrap_or(true),
+        "unknown project should not emit event sink events"
+    );
+}

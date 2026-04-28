@@ -1,0 +1,24 @@
+# 激活事件
+{
+    "appid": "APPID",
+    "xcontext": {
+        "oaid": "oaid1",
+        "androidid": "androidid1",
+        "installid": "example_installid",
+        "os": "harmony",
+        "os_version": "15.0",
+        "brand": "apple",
+        "channelid": "example_channelid",
+        "model": "example_model",
+        "pkgname": "example_pkgname",
+        "arg1": "arg1",
+        "arg2": "arg2",
+        "arg3": "arg3",
+        "arg4": "arg4"
+    },
+    "xwhat": "custom_event",
+    "xwhen": 1718255925637,
+    "xwho": "someoneelse"
+}
+----
+pass

@@ -1,0 +1,5 @@
+fields:
+  xcontext.level:
+    required: true
+    type: integer
+    gt: 0

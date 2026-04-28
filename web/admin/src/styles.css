@@ -1,0 +1,24 @@
+:root {
+  color: rgba(0, 0, 0, 0.88);
+  background: #f5f7fa;
+  font-family:
+    "SF Pro Text",
+    "PingFang SC",
+    "Helvetica Neue",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-width: 320px;
+}

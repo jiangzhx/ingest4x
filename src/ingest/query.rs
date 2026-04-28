@@ -1,0 +1,46 @@
+#[cfg(feature = "ingest")]
+use crate::ingest::json::process_ingest_payload;
+#[cfg(feature = "ingest")]
+use crate::projects::ProjectRegistryState;
+#[cfg(feature = "ingest")]
+use crate::rules::RuleRepository;
+#[cfg(feature = "ingest")]
+use crate::utils::events::EventSinkState;
+#[cfg(feature = "ingest")]
+use actix_web::web::{Data, Query};
+#[cfg(feature = "ingest")]
+use actix_web::HttpResponse;
+#[cfg(feature = "ingest")]
+use base64::engine::general_purpose::STANDARD;
+#[cfg(feature = "ingest")]
+use base64::Engine;
+#[cfg(feature = "ingest")]
+use serde_json::Value;
+#[cfg(feature = "ingest")]
+use std::collections::HashMap;
+
+#[cfg(feature = "ingest")]
+pub async fn get_ingest(
+    query_params: Query<HashMap<String, String>>,
+    project_registry: Data<ProjectRegistryState>,
+    event_sinks: Data<EventSinkState>,
+    rule_repository: Data<RuleRepository>,
+) -> HttpResponse {
+    let query_params = query_params.into_inner();
+
+    let Some(data) = query_params.get("data") else {
+        return HttpResponse::BadRequest().body("missing query param: data");
+    };
+
+    let decoded = match STANDARD.decode(data) {
+        Ok(decoded) => decoded,
+        Err(err) => return HttpResponse::BadRequest().body(format!("invalid base64 data: {err}")),
+    };
+
+    let json = match serde_json::from_slice::<Value>(&decoded) {
+        Ok(json) => json,
+        Err(err) => return HttpResponse::BadRequest().body(format!("invalid json payload: {err}")),
+    };
+
+    process_ingest_payload(json, project_registry, event_sinks, rule_repository).await
+}

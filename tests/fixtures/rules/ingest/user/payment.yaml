@@ -1,0 +1,57 @@
+fields:
+  xcontext.transactionid:
+    required: true
+    type: string
+  xcontext.paymenttype:
+    required: true
+    type: string
+  xcontext.currencytype:
+    required: true
+    type: string
+    enum:
+      - JPY
+      - EUR
+      - BRL
+      - HKD
+      - TWD
+      - COP
+      - MXN
+      - CHF
+      - CAD
+      - CLP
+      - AUD
+      - PEN
+      - GBP
+      - CRC
+      - PLN
+      - PYG
+      - BOB
+      - QAR
+      - ILS
+      - SEK
+      - RUB
+      - CNY
+      - ZAR
+      - SGD
+      - NZD
+      - BGN
+      - LKR
+      - IQD
+      - TRY
+      - AED
+      - DZD
+      - EGP
+      - IDR
+      - INR
+      - NGN
+      - NOK
+      - PHP
+      - PKR
+      - THB
+      - UAH
+      - VND
+  xcontext.currencyamount:
+    required: true
+    type: number
+  xcontext.paymentstatus:
+    type: boolean

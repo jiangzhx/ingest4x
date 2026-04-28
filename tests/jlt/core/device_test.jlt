@@ -1,0 +1,101 @@
+# 自定义事件，测试os="harmony"场景
+{
+    "appid": "APPID",
+    "xcontext": {
+        "oaid": "oaid1",
+        "androidid": "androidid1",
+        "installid": "example_installid",
+        "os": "harmony",
+        "os_version": "15.0",
+        "brand": "apple",
+        "channelid": "example_channelid",
+        "model": "example_model",
+        "pkgname": "example_pkgname"
+    },
+    "xwhat": "custom_event",
+    "xwhen": 1718255925637,
+    "xwho": "someoneelse"
+}
+----
+pass
+
+# os="ios" 缺少caid和idaf
+{
+    "appid": "APPID",
+    "xcontext": {
+        "installid": "example_installid",
+        "os": "ios",
+        "os_version": "15.0",
+        "brand": "apple",
+        "channelid": "example_channelid",
+        "model": "example_model",
+        "pkgname": "example_pkgname"
+    },
+    "xwhat": "custom_event",
+    "xwhen": 1718255925637,
+    "xwho": "someoneelse"
+}
+----
+fail
+at least one field is required: xcontext.idfa, xcontext.caid
+
+# os="android" 缺少oaid或androidid
+{
+    "appid": "APPID",
+    "xcontext": {
+        "installid": "example_installid",
+        "os": "android",
+        "os_version": "15.0",
+        "brand": "apple",
+        "channelid": "example_channelid",
+        "model": "example_model",
+        "pkgname": "example_pkgname"
+    },
+    "xwhat": "custom_event",
+    "xwhen": 1718255925637,
+    "xwho": "someoneelse"
+}
+----
+fail
+at least one field is required: xcontext.oaid, xcontext.androidid
+
+# os="wechat" 缺少openid或unionid
+{
+    "appid": "APPID",
+    "xcontext": {
+        "installid": "example_installid",
+        "os": "wechat",
+        "os_version": "15.0",
+        "brand": "apple",
+        "channelid": "example_channelid",
+        "model": "example_model",
+        "pkgname": "example_pkgname"
+    },
+    "xwhat": "custom_event",
+    "xwhen": 1718255925637,
+    "xwho": "someoneelse"
+}
+----
+fail
+at least one field is required: xcontext.openid, xcontext.unionid
+
+# 自定义事件，缺少installid
+{
+    "appid": "APPID",
+    "xcontext": {
+        "oaid": "oaid1",
+        "androidid": "androidid1",
+        "os": "harmony",
+        "os_version": "15.0",
+        "brand": "apple",
+        "channelid": "example_channelid",
+        "model": "example_model",
+        "pkgname": "example_pkgname"
+    },
+    "xwhat": "custom_event",
+    "xwhen": 1718255925637,
+    "xwho": "someoneelse"
+}
+----
+fail
+missing required field `xcontext.installid`

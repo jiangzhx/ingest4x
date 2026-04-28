@@ -1,0 +1,22 @@
+# 自定义事件，并且带IP的场景
+{
+  "appid": "APPID",
+  "xcontext": {
+    "idfa": "example_idfa",
+    "idfv": "example_idfv",
+    "caid": "example_caid",
+    "installid": "example_installid",
+    "ip": "8.8.8.8",
+    "os": "ios",
+    "os_version": "15.0",
+    "brand": "apple",
+    "channelid": "example_channelid",
+    "model": "example_model",
+    "pkgname": "example_pkgname"
+  },
+  "xwhat": "custom_event",
+  "xwhen": 1718255925637,
+  "xwho": "someoneelse"
+}
+----
+pass

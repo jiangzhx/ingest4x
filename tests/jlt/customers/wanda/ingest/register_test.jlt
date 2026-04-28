@@ -1,0 +1,25 @@
+# 正常的register场景
+{
+  "appid": "APPID",
+  "xwho": "3000239715",
+  "xwhat": "register",
+  "xwhen": 1735112991427,
+  "xcontext": {
+    "installid": "example_installid",
+    "brand": "apple",
+    "model": "iPhone13,4",
+    "channelid": "22",
+    "udid": "G7B37GIM1ZNSKRD7",
+    "caid": "d3256fbcf2ddf7af1e850da4c3205458.1730098417279",
+    "tz": "+8",
+    "idfv": "612CBD82-373C-459B-A015-4CFBF26F2AAB",
+    "productid": "6001",
+    "androidid": "",
+    "os": "iOS",
+    "idfa": "15B6ED2B-6399-4C40-9290-6337EFDD51D4",
+    "os_version": "18.1",
+    "pkgname": "com.hoolai.saintseiya"
+  }
+}
+----
+pass

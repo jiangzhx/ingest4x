@@ -1,0 +1,9 @@
+[server]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[database]
+url = "sqlite://tmp/admin.db?mode=rwc"
+refresh_interval_secs = 7

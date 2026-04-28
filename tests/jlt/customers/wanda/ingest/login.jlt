@@ -1,0 +1,75 @@
+# Hulai login 场景，带 xwho
+{
+  "appid": "APPID",
+  "xwho": "3000239715",
+  "xwhat": "login",
+  "xwhen": 1735112991427,
+  "xcontext": {
+    "installid": "example_installid",
+    "brand": "apple",
+    "model": "iPhone13,4",
+    "channelid": "22",
+    "udid": "G7B37GIM1ZNSKRD7",
+    "caid": "d3256fbcf2ddf7af1e850da4c3205458.1730098417279",
+    "tz": "+8",
+    "idfv": "612CBD82-373C-459B-A015-4CFBF26F2AAB",
+    "productid": "6001",
+    "androidid": "",
+    "os": "iOS",
+    "idfa": "15B6ED2B-6399-4C40-9290-6337EFDD51D4",
+    "os_version": "18.1",
+    "pkgname": "com.hoolai.saintseiya"
+  }
+}
+----
+pass
+
+# Hulai login 场景，缺少 xwho
+{
+  "appid": "APPID",
+  "xwhat": "login",
+  "xwhen": 1735112991427,
+  "xcontext": {
+    "installid": "example_installid",
+    "brand": "apple",
+    "model": "iPhone13,4",
+    "channelid": "22",
+    "udid": "G7B37GIM1ZNSKRD7",
+    "caid": "d3256fbcf2ddf7af1e850da4c3205458.1730098417279",
+    "tz": "+8",
+    "idfv": "612CBD82-373C-459B-A015-4CFBF26F2AAB",
+    "productid": "6001",
+    "androidid": "",
+    "os": "iOS",
+    "idfa": "15B6ED2B-6399-4C40-9290-6337EFDD51D4",
+    "os_version": "18.1",
+    "pkgname": "com.hoolai.saintseiya"
+  }
+}
+----
+fail
+missing required field `xwho`
+
+# Hulai 微信小游戏 login 场景
+{
+    "appid": "APPID",
+    "xwho": "example_xwho",
+    "xwhen": 1735136410102,
+    "xwhat": "login",
+    "xcontext": {
+        "os": "wechat",
+        "platform": "android",
+        "brand": "vivo",
+        "openid": "ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "scene": 1089,
+        "tz": "+8",
+        "installid": "1729864748585_ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "sdkversion": "3.7.1",
+        "system": "Android 14",
+        "os_version": "8.0.54",
+        "model": "V2337A",
+        "querystring": {"k1": "v1","k2": "v2"}
+    }
+}
+----
+pass

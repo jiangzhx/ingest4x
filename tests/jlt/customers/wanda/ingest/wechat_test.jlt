@@ -1,0 +1,100 @@
+# 微信小游戏，install事件
+{
+    "appid": "APPID",
+    "xwho": null,
+    "xwhen": 1735136410102,
+    "xwhat": "install",
+    "xcontext": {
+        "os": "wechat",
+        "platform": "android",
+        "brand": "vivo",
+        "openid": "ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "scene": 1089,
+        "tz": "+8",
+        "installid": "1729864748585_ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "sdkversion": "3.7.1",
+        "system": "Android 14",
+        "os_version": "8.0.54",
+        "model": "V2337A",
+        "querystring": {"k1": "v1","k2": "v2"}
+    }
+}
+----
+pass
+
+# 微信小游戏，startup事件
+{
+    "appid": "APPID",
+    "xwho": null,
+    "xwhen": 1735136410102,
+    "xwhat": "startup",
+    "xcontext": {
+        "os": "wechat",
+        "platform": "android",
+        "brand": "vivo",
+        "openid": "ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "scene": 1089,
+        "tz": "+8",
+        "installid": "1729864748585_ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "sdkversion": "3.7.1",
+        "system": "Android 14",
+        "os_version": "8.0.54",
+        "model": "V2337A",
+        "querystring": {"k1": "v1","k2": "v2"}
+    }
+}
+----
+pass
+
+# 微信小游戏，register事件
+{
+    "appid": "APPID",
+    "xwho": "example_xwho",
+    "xwhen": 1735136410102,
+    "xwhat": "register",
+    "xcontext": {
+        "os": "wechat",
+        "platform": "android",
+        "brand": "vivo",
+        "openid": "ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "scene": 1089,
+        "tz": "+8",
+        "installid": "1729864748585_ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "sdkversion": "3.7.1",
+        "system": "Android 14",
+        "os_version": "8.0.54",
+        "model": "V2337A",
+        "querystring": {"k1": "v1","k2": "v2"}
+    }
+}
+----
+pass
+
+# 微信小游戏，payment事件
+{
+    "appid": "APPID",
+    "xwho": "example_xwho",
+    "xwhen": 1735136410102,
+    "xwhat": "payment",
+    "xcontext": {
+        "os": "wechat",
+        "platform": "android",
+        "brand": "vivo",
+        "openid": "ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "scene": 1089,
+        "tz": "+8",
+        "installid": "1729864748585_ov7wJ0YFwhRTbd2kNI40WuP239OM",
+        "sdkversion": "3.7.1",
+        "system": "Android 14",
+        "os_version": "8.0.54",
+        "model": "V2337A",
+        "querystring": {"k1": "v1","k2": "v2"},
+        "transactionid":"example_transactionid",
+        "paymenttype":"wechatpay",
+        "currencytype":"CNY",
+        "currencyamount":0.99,
+        "paymentstatus":true
+    }
+}
+----
+pass
