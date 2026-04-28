@@ -58,3 +58,7 @@ redis-test = "1"
 [[bin]]
 name = "ingest4x"
 path = "src/main.rs"
+
+[[bench]]
+name = "rules"
+harness = false
