@@ -1,16 +1,16 @@
+use crate::rhai_ctx::{enter_validation_context, register_api};
 use crate::rules::Rules;
 use crate::settings::default_processor_max_operations;
-use crate::utils::get_host_ip;
 use anyhow::{anyhow, Result};
 use rhai::module_resolvers::StaticModuleResolver;
 use rhai::serde::{from_dynamic, to_dynamic};
-use rhai::{Dynamic, Engine, EvalAltResult, ImmutableString, Map, Module, Scope, AST};
+use rhai::{Dynamic, Engine, Module, Scope, AST};
 use serde_json::Value;
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+pub use crate::rhai_ctx::ProcessorRequestContext;
 
 const DEFAULT_RHAI_PROCESSOR_PATH: &str = "pipeline/main.rhai";
 
@@ -29,72 +29,6 @@ pub enum ProcessorOutput {
     Accepted(Value),
     Rejected { event: Value, error: String },
     Dropped { reason: String },
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ProcessorRequestContext {
-    ip: Option<String>,
-    method: String,
-    path: String,
-    headers: HashMap<String, String>,
-}
-
-#[derive(Clone)]
-struct ValidationContext {
-    rules: Rules,
-    event_name: String,
-}
-
-thread_local! {
-    static VALIDATION_CONTEXT: RefCell<Option<ValidationContext>> = const { RefCell::new(None) };
-}
-
-struct ValidationContextGuard(Option<ValidationContext>);
-
-impl Drop for ValidationContextGuard {
-    fn drop(&mut self) {
-        VALIDATION_CONTEXT.with(|context| {
-            context.replace(self.0.take());
-        });
-    }
-}
-
-impl ProcessorRequestContext {
-    pub fn new(
-        ip: Option<String>,
-        method: impl Into<String>,
-        path: impl Into<String>,
-        headers: HashMap<String, String>,
-    ) -> Self {
-        Self {
-            ip,
-            method: method.into(),
-            path: path.into(),
-            headers,
-        }
-    }
-
-    fn ip(&mut self) -> Dynamic {
-        self.ip
-            .as_ref()
-            .map(|ip| ip.to_string().into())
-            .unwrap_or(Dynamic::UNIT)
-    }
-
-    fn method(&mut self) -> ImmutableString {
-        self.method.clone().into()
-    }
-
-    fn path(&mut self) -> ImmutableString {
-        self.path.clone().into()
-    }
-
-    fn header(&mut self, name: &str) -> Dynamic {
-        self.headers
-            .get(&name.to_ascii_lowercase())
-            .map(|value| value.to_string().into())
-            .unwrap_or(Dynamic::UNIT)
-    }
 }
 
 impl ProcessorState {
@@ -150,8 +84,7 @@ fn compile_script(
     let mut engine = Engine::new();
     engine.set_max_operations(max_operations);
     engine.set_max_expr_depths(0, 0);
-    register_processor_helpers(&mut engine);
-    register_validate_helper(&mut engine);
+    register_api(&mut engine);
     register_script_modules(&mut engine, modules)?;
     let ast = engine.compile_into_self_contained(&Scope::new(), script)?;
     Ok((Arc::new(engine), ast))
@@ -173,76 +106,6 @@ fn register_script_modules(engine: &mut Engine, modules: Vec<(String, String)>) 
     }
     engine.set_module_resolver(resolver);
     Ok(())
-}
-
-fn register_processor_helpers(engine: &mut Engine) {
-    engine.register_type::<ProcessorRequestContext>();
-    engine.register_fn("ip", ProcessorRequestContext::ip);
-    engine.register_fn("method", ProcessorRequestContext::method);
-    engine.register_fn("path", ProcessorRequestContext::path);
-    engine.register_fn("header", ProcessorRequestContext::header);
-    engine.register_fn("epoch_ms", crate::current_timestamp_as_u64);
-    engine.register_fn("host_ip", get_host_ip);
-    engine.register_fn("ingest4x_version", || env!("CARGO_PKG_VERSION"));
-    engine.register_fn("accept", |event: Dynamic| -> Map {
-        let mut output = Map::new();
-        output.insert("status".into(), "accepted".into());
-        output.insert("event".into(), event);
-        output
-    });
-    engine.register_fn("reject", |event: Dynamic, error: &str| -> Map {
-        let mut output = Map::new();
-        output.insert("status".into(), "rejected".into());
-        output.insert("event".into(), event);
-        output.insert("error".into(), error.into());
-        output
-    });
-    engine.register_fn("drop", |reason: &str| -> Map {
-        let mut output = Map::new();
-        output.insert("status".into(), "dropped".into());
-        output.insert("reason".into(), reason.into());
-        output
-    });
-}
-
-fn enter_validation_context(rules: Rules, event_name: String) -> ValidationContextGuard {
-    let context = ValidationContext { rules, event_name };
-    let previous = VALIDATION_CONTEXT.with(|current| current.replace(Some(context)));
-    ValidationContextGuard(previous)
-}
-
-fn register_validate_helper(engine: &mut Engine) {
-    engine.register_fn(
-        "validate",
-        |event: Dynamic| -> Result<Map, Box<EvalAltResult>> {
-            let value: Value = from_dynamic(&event).map_err(|err| {
-                EvalAltResult::ErrorRuntime(err.to_string().into(), rhai::Position::NONE)
-            })?;
-            let result: anyhow::Result<()> = VALIDATION_CONTEXT.with(
-                |context| -> std::result::Result<anyhow::Result<()>, Box<EvalAltResult>> {
-                    let context = context.borrow();
-                    let context = context.as_ref().ok_or_else(|| {
-                        EvalAltResult::ErrorRuntime(
-                            "validate(event) called outside processor validation context".into(),
-                            rhai::Position::NONE,
-                        )
-                    })?;
-                    Ok(context.rules.validate(&context.event_name, &value))
-                },
-            )?;
-            let mut output = Map::new();
-            match result {
-                Ok(()) => {
-                    output.insert("ok".into(), true.into());
-                }
-                Err(err) => {
-                    output.insert("ok".into(), false.into());
-                    output.insert("error".into(), err.to_string().into());
-                }
-            }
-            Ok(output)
-        },
-    );
 }
 
 fn parse_processor_output(result: Dynamic) -> Result<ProcessorOutput> {

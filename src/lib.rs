@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod jlt;
 pub mod logging;
 pub mod projects;
+pub mod rhai_ctx;
 pub mod rules;
 pub mod server;
 pub mod settings;
