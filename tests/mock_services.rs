@@ -9,6 +9,8 @@ use ingest4x::db::init_sqlite_database;
 #[cfg(feature = "ingest")]
 use ingest4x::ingest::post_ingest;
 #[cfg(feature = "ingest")]
+use ingest4x::ingest::processor::ProcessorState;
+#[cfg(feature = "ingest")]
 use ingest4x::projects::{CreateProjectInput, ProjectRegistryState, ProjectRepository};
 use ingest4x::rules::{
     CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, RuleRepository,
@@ -105,9 +107,38 @@ pub async fn create_app_with_valid_file_sink(
     .await
 }
 
+pub async fn create_app_with_processor_script(
+    file_path: &Path,
+    script: &str,
+) -> (
+    impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
+    TestService,
+) {
+    create_app_with_project_event_settings_and_processor(
+        HashMap::from([
+            ("re_attribution".to_string(), "300".to_string()),
+            ("os".to_string(), "android".to_string()),
+        ]),
+        Some(file_path),
+        Some(script),
+    )
+    .await
+}
+
 async fn create_app_with_project_and_event_settings(
     project: HashMap<String, String>,
     valid_file_path: Option<&Path>,
+) -> (
+    impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
+    TestService,
+) {
+    create_app_with_project_event_settings_and_processor(project, valid_file_path, None).await
+}
+
+async fn create_app_with_project_event_settings_and_processor(
+    project: HashMap<String, String>,
+    valid_file_path: Option<&Path>,
+    processor_script: Option<&str>,
 ) -> (
     impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
     TestService,
@@ -127,6 +158,12 @@ async fn create_app_with_project_and_event_settings(
     .expect("event sinks should initialize");
     #[cfg(feature = "ingest")]
     let (project_registry, rule_repository) = create_project_state(project).await;
+    #[cfg(feature = "ingest")]
+    let processor = match processor_script {
+        Some(script) => ProcessorState::new(script.to_string(), 10_000)
+            .expect("test processor should initialize"),
+        None => ProcessorState::from_default_entry().expect("processor should initialize"),
+    };
 
     let mut app = App::new().app_data(event_sinks);
 
@@ -135,6 +172,7 @@ async fn create_app_with_project_and_event_settings(
         app = app
             .app_data(Data::new(project_registry))
             .app_data(Data::new(rule_repository))
+            .app_data(Data::new(processor))
             .route("/ingest", web::post().to(post_ingest));
     }
 

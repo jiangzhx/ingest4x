@@ -1,5 +1,7 @@
 #[cfg(feature = "ingest")]
-use crate::ingest::json::process_ingest_payload;
+use crate::ingest::json::{process_ingest_payload, processor_request_context};
+#[cfg(feature = "ingest")]
+use crate::ingest::processor::ProcessorState;
 #[cfg(feature = "ingest")]
 use crate::projects::ProjectRegistryState;
 #[cfg(feature = "ingest")]
@@ -9,7 +11,7 @@ use crate::utils::events::EventSinkState;
 #[cfg(feature = "ingest")]
 use actix_web::web::{Data, Query};
 #[cfg(feature = "ingest")]
-use actix_web::HttpResponse;
+use actix_web::{HttpRequest, HttpResponse};
 #[cfg(feature = "ingest")]
 use base64::engine::general_purpose::STANDARD;
 #[cfg(feature = "ingest")]
@@ -21,10 +23,12 @@ use std::collections::HashMap;
 
 #[cfg(feature = "ingest")]
 pub async fn get_ingest(
+    req: HttpRequest,
     query_params: Query<HashMap<String, String>>,
     project_registry: Data<ProjectRegistryState>,
     event_sinks: Data<EventSinkState>,
     rule_repository: Data<RuleRepository>,
+    processor: Data<ProcessorState>,
 ) -> HttpResponse {
     let query_params = query_params.into_inner();
 
@@ -42,5 +46,13 @@ pub async fn get_ingest(
         Err(err) => return HttpResponse::BadRequest().body(format!("invalid json payload: {err}")),
     };
 
-    process_ingest_payload(json, project_registry, event_sinks, rule_repository).await
+    process_ingest_payload(
+        json,
+        project_registry,
+        event_sinks,
+        rule_repository,
+        processor,
+        processor_request_context(&req),
+    )
+    .await
 }

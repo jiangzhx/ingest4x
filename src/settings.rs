@@ -174,6 +174,10 @@ pub const fn default_database_refresh_interval_secs() -> u64 {
     3
 }
 
+pub const fn default_processor_max_operations() -> u64 {
+    10_000
+}
+
 pub fn default_log_format() -> String {
     "json".to_string()
 }

@@ -3,6 +3,8 @@ use crate::admin_ui;
 use crate::db::{init_database, seed};
 #[cfg(feature = "ingest")]
 use crate::ingest;
+#[cfg(feature = "ingest")]
+use crate::ingest::processor::ProcessorState;
 use crate::projects::{
     spawn_project_registry_refresh_loop, CreateProjectInput, ProjectRegistryState,
     ProjectRepository,
@@ -63,6 +65,8 @@ pub struct AppState {
     project_repository: Data<ProjectRepository>,
     rule_repository: Data<RuleRepository>,
     project_registry: Data<ProjectRegistryState>,
+    #[cfg(feature = "ingest")]
+    processor: Data<ProcessorState>,
 }
 
 pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
@@ -110,6 +114,10 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
     })?;
     let (project_repository, rule_repository, project_registry) =
         init_project_state(settings.clone()).await?;
+    #[cfg(feature = "ingest")]
+    let processor = Data::new(ProcessorState::from_default_entry().map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+    })?);
 
     Ok(AppState {
         settings,
@@ -117,6 +125,8 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
         project_repository,
         rule_repository,
         project_registry,
+        #[cfg(feature = "ingest")]
+        processor,
     })
 }
 
@@ -132,6 +142,7 @@ pub fn configure_public_app(cfg: &mut ServiceConfig, state: AppState) {
                 .app_data(state.rule_repository.clone())
                 .app_data(state.event_sinks.clone())
                 .app_data(state.project_registry.clone())
+                .app_data(state.processor.clone())
                 .route(web::post().to(ingest::post_ingest))
                 .route(web::get().to(ingest::get_ingest)),
         );

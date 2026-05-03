@@ -46,3 +46,9 @@ pub fn get_process_info() -> HashMap<String, Value> {
     );
     process_info
 }
+
+pub fn get_host_ip() -> String {
+    local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| String::new())
+}

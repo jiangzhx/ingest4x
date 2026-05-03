@@ -1,5 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use ingest4x::db::{init_sqlite_database, seed};
+use ingest4x::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
 use ingest4x::projects::ProjectRepository;
 use ingest4x::rules::RuleRepository;
 use ingest4x::rules::Rules;
@@ -7,9 +8,34 @@ use serde_json::{json, Value};
 use tokio::runtime::Runtime;
 
 const RULES_DIR: &str = "tests/fixtures/rules/ingest";
+const RHAI_VALIDATE_SCRIPT: &str = r#"
+fn main(event, request) {
+    let validation = validate(event);
+    if !validation["ok"] {
+        return reject(event, validation["error"]);
+    }
+
+    return accept(event);
+}
+"#;
+const RHAI_ACCEPT_SCRIPT: &str = r#"
+fn main(event, request) {
+    return accept(event);
+}
+"#;
 
 fn load_rules() -> Rules {
     Rules::load_from_dir(RULES_DIR).expect("fixture rules should load")
+}
+
+fn rhai_validator_processor() -> ProcessorState {
+    ProcessorState::new(RHAI_VALIDATE_SCRIPT.to_string(), 10_000)
+        .expect("rhai validator script should compile")
+}
+
+fn rhai_accept_processor() -> ProcessorState {
+    ProcessorState::new(RHAI_ACCEPT_SCRIPT.to_string(), 10_000)
+        .expect("rhai accept script should compile")
 }
 
 struct RepositoryBenchState {
@@ -232,6 +258,129 @@ fn rules_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    let processor = rhai_validator_processor();
+    let accept_processor = rhai_accept_processor();
+    let request = ProcessorRequestContext::default();
+
+    let mut overhead_group = c.benchmark_group("rules_vs_rhai_validator/overhead");
+    overhead_group.bench_with_input(
+        BenchmarkId::new("value_clone", "payment"),
+        &payment,
+        |b, payload| b.iter(|| black_box((*payload).clone())),
+    );
+    overhead_group.bench_function("rules_clone", |b| b.iter(|| black_box(rules.clone())));
+    overhead_group.bench_with_input(
+        BenchmarkId::new("rhai_accept_only", "payment"),
+        &payment,
+        |b, payload| {
+            b.iter_batched(
+                || ((*payload).clone(), rules.clone(), request.clone()),
+                |(payload, rules, request)| {
+                    let output = accept_processor
+                        .process(black_box(payload), black_box(rules), black_box(request))
+                        .expect("rhai accept should run");
+                    match output {
+                        ProcessorOutput::Accepted(event) => black_box(event),
+                        _ => panic!("payload should be accepted"),
+                    }
+                },
+                BatchSize::SmallInput,
+            )
+        },
+    );
+    overhead_group.finish();
+
+    let mut valid_group = c.benchmark_group("rules_vs_rhai_validator/valid");
+    for (event_name, payload) in [
+        ("install", &install),
+        ("payment", &payment),
+        ("levelup", &levelup),
+    ] {
+        valid_group.bench_with_input(
+            BenchmarkId::new("rules", event_name),
+            payload,
+            |b, payload| {
+                b.iter(|| {
+                    black_box(
+                        rules
+                            .validate(black_box(event_name), black_box(payload))
+                            .expect("payload should validate"),
+                    )
+                })
+            },
+        );
+        valid_group.bench_with_input(
+            BenchmarkId::new("rhai_validate_helper", event_name),
+            payload,
+            |b, payload| {
+                b.iter_batched(
+                    || ((*payload).clone(), rules.clone(), request.clone()),
+                    |(payload, rules, request)| {
+                        let output = processor
+                            .process(black_box(payload), black_box(rules), black_box(request))
+                            .expect("rhai validator should run");
+                        match output {
+                            ProcessorOutput::Accepted(event) => black_box(event),
+                            _ => panic!("valid payload should be accepted"),
+                        }
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+    valid_group.finish();
+
+    let mut invalid_group = c.benchmark_group("rules_vs_rhai_validator/invalid");
+    for (event_name, payload, case_name) in [
+        (
+            "install",
+            &invalid_install_missing_id,
+            "install_missing_required",
+        ),
+        ("install", &invalid_install_unknown_os, "install_enum"),
+        ("payment", &invalid_payment_currency, "payment_enum"),
+        (
+            "levelup",
+            &invalid_levelup_zero,
+            "levelup_number_constraint",
+        ),
+    ] {
+        invalid_group.bench_with_input(
+            BenchmarkId::new("rules", case_name),
+            payload,
+            |b, payload| {
+                b.iter(|| {
+                    black_box(
+                        rules
+                            .validate(black_box(event_name), black_box(payload))
+                            .expect_err("payload should fail validation"),
+                    )
+                })
+            },
+        );
+        invalid_group.bench_with_input(
+            BenchmarkId::new("rhai_validate_helper", case_name),
+            payload,
+            |b, payload| {
+                b.iter_batched(
+                    || ((*payload).clone(), rules.clone(), request.clone()),
+                    |(payload, rules, request)| {
+                        let output = processor
+                            .process(black_box(payload), black_box(rules), black_box(request))
+                            .expect("rhai validator should run");
+                        match output {
+                            ProcessorOutput::Rejected { error, .. } => black_box(error),
+                            _ => panic!("invalid payload should be rejected"),
+                        }
+                    },
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+    invalid_group.finish();
 }
 
 criterion_group!(benches, rules_benchmark);

@@ -1,5 +1,5 @@
 mod json;
-pub mod normalize;
+pub mod processor;
 mod query;
 
 #[cfg(feature = "ingest")]

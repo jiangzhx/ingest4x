@@ -1,7 +1,7 @@
 #[cfg(feature = "ingest")]
 use crate::event::Event;
 #[cfg(feature = "ingest")]
-use crate::ingest::normalize::normalize_ingest_event;
+use crate::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
 #[cfg(feature = "ingest")]
 use crate::projects::ProjectRegistryState;
 #[cfg(feature = "ingest")]
@@ -9,11 +9,15 @@ use crate::rules::RuleRepository;
 #[cfg(feature = "ingest")]
 use crate::utils::events::{EventSinkState, EventStatus};
 #[cfg(feature = "ingest")]
+use crate::utils::get_ip;
+#[cfg(feature = "ingest")]
 use actix_web::web::Data;
 #[cfg(feature = "ingest")]
 use actix_web::{web, HttpRequest, HttpResponse};
 #[cfg(feature = "ingest")]
 use serde_json::Value;
+#[cfg(feature = "ingest")]
+use std::collections::HashMap;
 #[cfg(feature = "ingest")]
 use tracing::{error, warn};
 
@@ -24,6 +28,7 @@ pub async fn post_ingest(
     project_registry: Data<ProjectRegistryState>,
     event_sinks: Data<EventSinkState>,
     rule_repository: Data<RuleRepository>,
+    processor: Data<ProcessorState>,
 ) -> HttpResponse {
     let json = data.into_inner();
     let event_name = json["xwhat"].as_str().unwrap_or("default").to_string();
@@ -67,67 +72,73 @@ pub async fn post_ingest(
         }
     };
 
-    if rules.event(&event_name).is_none()
-        && matches!(
-            rule_repository
-                .enabled_rule_exists_for_xwhat(&event_name)
-                .await,
-            Ok(true)
-        )
-    {
-        warn!(
-            appid = event.appid(),
-            xwhat = event_name.as_str(),
-            "rule not enabled for project"
-        );
-        return HttpResponse::BadRequest().body("rule not enabled for project");
-    }
+    let request_context = processor_request_context(&req);
+    let processed = match processor.process(original_json.clone(), rules, request_context) {
+        Ok(output) => output,
+        Err(err) => {
+            error!(
+                appid = event.appid(),
+                xwhat = event_name.as_str(),
+                error = %err,
+                "failed to process ingest payload"
+            );
+            return HttpResponse::InternalServerError().body("Failed to process event");
+        }
+    };
 
-    if !rules.can_validate(&event_name) {
-        warn!(
-            appid = event.appid(),
-            xwhat = event_name.as_str(),
-            "unknown rule for xwhat"
-        );
-        return HttpResponse::BadRequest().body("unknown rule for xwhat");
-    }
-
-    if let Err(err) = rules.validate(&event_name, &original_json) {
-        warn!(
-            appid = event.appid(),
-            xwhat = event_name.as_str(),
-            error = %err,
-            "ingest payload failed validation"
-        );
-        if let Err(sink_err) = event_sinks
-            .send_json(
-                EventStatus::Invalid,
-                event.appid(),
-                event_name.as_str(),
-                &original_json,
-            )
-            .await
-        {
+    let processed_json = match processed {
+        ProcessorOutput::Accepted(value) => value,
+        ProcessorOutput::Rejected {
+            event: rejected_event,
+            error,
+        } => {
             warn!(
                 appid = event.appid(),
                 xwhat = event_name.as_str(),
-                error = %sink_err,
-                "failed to send invalid ingest payload to event sinks"
+                error = %error,
+                "ingest payload rejected by processor"
             );
+            if let Err(sink_err) = event_sinks
+                .send_json(
+                    EventStatus::Invalid,
+                    event.appid(),
+                    event_name.as_str(),
+                    &rejected_event,
+                )
+                .await
+            {
+                warn!(
+                    appid = event.appid(),
+                    xwhat = event_name.as_str(),
+                    error = %sink_err,
+                    "failed to send rejected ingest payload to event sinks"
+                );
+            }
+            return HttpResponse::BadRequest().body(error);
         }
+        ProcessorOutput::Dropped { reason } => {
+            warn!(
+                appid = event.appid(),
+                xwhat = event_name.as_str(),
+                reason = %reason,
+                "ingest payload dropped by processor"
+            );
+            return HttpResponse::Ok().body("200");
+        }
+    };
 
-        return HttpResponse::BadRequest().body(err.to_string());
-    }
-
-    if let Err(err) = normalize_ingest_event(&mut event, &req) {
-        error!(
-            appid = event.appid(),
-            xwhat = event_name.as_str(),
-            error = %err,
-            "failed to normalize ingest payload"
-        );
-        return HttpResponse::InternalServerError().body("Failed to normalize event");
-    }
+    event = match Event::from_value(processed_json) {
+        Ok(event) => event,
+        Err(err) => {
+            error!(
+                appid = event.appid(),
+                xwhat = event_name.as_str(),
+                error = %err,
+                "processor returned invalid canonical event"
+            );
+            return HttpResponse::InternalServerError().body("Processor returned invalid event");
+        }
+    };
 
     match event_sinks
         .send_json(
@@ -157,16 +168,18 @@ pub(crate) async fn process_ingest_payload(
     project_registry: Data<ProjectRegistryState>,
     event_sinks: Data<EventSinkState>,
     rule_repository: Data<RuleRepository>,
+    processor: Data<ProcessorState>,
+    request_context: ProcessorRequestContext,
 ) -> HttpResponse {
-    let event_name = json["xwhat"].as_str().unwrap_or("default");
+    let event_name = json["xwhat"].as_str().unwrap_or("default").to_string();
 
     let Some(appid) = json.get("appid").and_then(Value::as_str) else {
-        warn!(xwhat = event_name, "missing or invalid appid");
+        warn!(xwhat = event_name.as_str(), "missing or invalid appid");
         return HttpResponse::BadRequest().body("missing or invalid appid");
     };
 
     if !project_registry.contains(appid) {
-        warn!(appid, xwhat = event_name, "project not found");
+        warn!(appid, xwhat = event_name.as_str(), "project not found");
         return HttpResponse::NotFound().body("Project not found");
     }
 
@@ -175,7 +188,7 @@ pub(crate) async fn process_ingest_payload(
         Err(err) => {
             error!(
                 appid,
-                xwhat = event_name,
+                xwhat = event_name.as_str(),
                 error = %err,
                 "failed to compile project rules"
             );
@@ -183,57 +196,81 @@ pub(crate) async fn process_ingest_payload(
         }
     };
 
-    if rules.event(event_name).is_none()
-        && matches!(
-            rule_repository
-                .enabled_rule_exists_for_xwhat(event_name)
-                .await,
-            Ok(true)
-        )
-    {
-        warn!(appid, xwhat = event_name, "rule not enabled for project");
-        return HttpResponse::BadRequest().body("rule not enabled for project");
-    }
+    let processed = match processor.process(json.clone(), rules, request_context) {
+        Ok(output) => output,
+        Err(err) => {
+            error!(
+                appid,
+                xwhat = event_name.as_str(),
+                error = %err,
+                "failed to process ingest payload"
+            );
+            return HttpResponse::InternalServerError().body("Failed to process event");
+        }
+    };
 
-    if !rules.can_validate(event_name) {
-        warn!(appid, xwhat = event_name, "unknown rule for xwhat");
-        return HttpResponse::BadRequest().body("unknown rule for xwhat");
-    }
-
-    if let Err(err) = rules.validate(event_name, &json) {
-        warn!(
-            appid,
-            xwhat = event_name,
-            error = %err,
-            "ingest payload failed validation"
-        );
-        if let Err(sink_err) = event_sinks
-            .send_json(EventStatus::Invalid, appid, event_name, &json)
-            .await
-        {
+    let json = match processed {
+        ProcessorOutput::Accepted(value) => value,
+        ProcessorOutput::Rejected { event, error } => {
             warn!(
                 appid,
-                xwhat = event_name,
-                error = %sink_err,
-                "failed to send invalid ingest payload to event sinks"
+                xwhat = event_name.as_str(),
+                error = %error,
+                "ingest payload rejected by processor"
             );
+            if let Err(sink_err) = event_sinks
+                .send_json(EventStatus::Invalid, appid, event_name.as_str(), &event)
+                .await
+            {
+                warn!(
+                    appid,
+                    xwhat = event_name.as_str(),
+                    error = %sink_err,
+                    "failed to send rejected ingest payload to event sinks"
+                );
+            }
+            return HttpResponse::BadRequest().body(error);
         }
-        return HttpResponse::BadRequest().body(err.to_string());
-    }
+        ProcessorOutput::Dropped { reason } => {
+            warn!(appid, xwhat = event_name.as_str(), reason = %reason, "ingest payload dropped by processor");
+            return HttpResponse::Ok().body("200");
+        }
+    };
 
     match event_sinks
-        .send_json(EventStatus::Valid, appid, event_name, &json)
+        .send_json(EventStatus::Valid, appid, event_name.as_str(), &json)
         .await
     {
         Ok(_) => HttpResponse::Ok().body("200"),
         Err(err) => {
             error!(
                 appid,
-                xwhat = event_name,
+                xwhat = event_name.as_str(),
                 error = %err,
                 "failed to send event to sinks"
             );
             HttpResponse::InternalServerError().body(err.to_string())
         }
     }
+}
+
+#[cfg(feature = "ingest")]
+pub(crate) fn processor_request_context(req: &HttpRequest) -> ProcessorRequestContext {
+    let headers = req
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
+        })
+        .collect::<HashMap<_, _>>();
+
+    ProcessorRequestContext::new(
+        get_ip(req),
+        req.method().as_str().to_string(),
+        req.path().to_string(),
+        headers,
+    )
 }

@@ -3,7 +3,8 @@
 mod mock_services;
 
 use crate::mock_services::{
-    create_app, create_app_with_project, create_app_with_valid_file_sink, TestService,
+    create_app, create_app_with_processor_script, create_app_with_project,
+    create_app_with_valid_file_sink, TestService,
 };
 use actix_http::StatusCode;
 use actix_web::test;
@@ -147,6 +148,47 @@ async fn post_ingest_can_write_valid_events_to_kafka_and_file_sinks() {
         serde_json::from_str::<Value>(file_line).unwrap(),
         serde_json::from_str::<Value>(kafka_string.as_str()).unwrap()
     );
+}
+
+#[actix_rt::test]
+async fn post_ingest_runs_rhai_processor_before_file_sink() {
+    let temp = tempdir().expect("temp dir");
+    let event_file = temp.path().join("events.jsonl");
+    let script = r#"
+fn main(event, ctx) {
+    let validation = validate(event);
+    if !validation["ok"] {
+        return reject(event, validation["error"]);
+    }
+
+    event["xcontext"]["processor_marker"] = "rhai";
+    return accept(event);
+}
+"#;
+    let (app, _testservice) = create_app_with_processor_script(&event_file, script).await;
+
+    let req = test::TestRequest::post()
+        .uri("/ingest")
+        .set_json(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-1",
+                "os": "ios",
+                "idfa": "idfa-1"
+            }
+        }))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let file_output = fs::read_to_string(&event_file).expect("read event file");
+    let file_line = file_output.lines().next().expect("missing file event");
+    let emitted: Value = serde_json::from_str(file_line).expect("event json");
+
+    assert_eq!(emitted["xcontext"]["processor_marker"], json!("rhai"));
 }
 
 #[actix_rt::test]
