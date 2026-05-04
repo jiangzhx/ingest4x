@@ -489,6 +489,13 @@ fn read_segment_entries_after(
             format!("invalid wal checkpoint offset: {}", path.display()),
         ));
     }
+    let segment_len = reader.get_ref().metadata()?.len();
+    if start_offset > segment_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid wal checkpoint offset: {}", path.display()),
+        ));
+    }
     reader.seek(SeekFrom::Start(start_offset))?;
 
     let segment_id = segment_id_from_path(path)?;

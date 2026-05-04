@@ -6,7 +6,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ingest4x::server;
 use ingest4x::settings::{Settings, WalSettings};
-use ingest4x::wal::{new_record, read_all_records, read_entries_after_limit, WalWriter};
+use ingest4x::wal::{
+    new_record, read_all_records, read_entries_after_limit, WalPosition, WalWriter,
+};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -895,6 +897,31 @@ async fn read_entries_after_limit_stops_before_scanning_extra_frames() {
     let err = read_entries_after_limit(&wal_dir, Some(entries[0].next_position), Some(1))
         .expect_err("next frame should still be corrupt");
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[actix_rt::test]
+async fn read_entries_after_rejects_checkpoint_offset_beyond_segment_file() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    writer.append(&test_record("first")).expect("append first");
+    drop(writer);
+
+    let segment_len = fs::metadata(wal_segment_path(&wal_dir))
+        .expect("segment metadata")
+        .len();
+    let error = read_entries_after_limit(
+        &wal_dir,
+        Some(WalPosition {
+            lsn: 1,
+            segment: 1,
+            offset: segment_len + 1,
+        }),
+        None,
+    )
+    .expect_err("checkpoint offset beyond segment file should fail");
+
+    assert!(error.to_string().contains("invalid wal checkpoint offset"));
 }
 
 #[actix_rt::test]
