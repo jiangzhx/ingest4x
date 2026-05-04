@@ -4,7 +4,6 @@ pub mod db;
 pub mod errors;
 pub mod event;
 pub mod ingest;
-pub mod jlt;
 pub mod logging;
 pub mod projects;
 pub mod rhai_ctx;

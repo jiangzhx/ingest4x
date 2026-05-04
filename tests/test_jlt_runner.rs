@@ -1,6 +1,8 @@
-use ingest4x::jlt::{run_scope, ExpectedResult, Scope, TestCase};
+mod support;
+
 use ingest4x::rules::Rules;
 use serde_json::json;
+use support::jlt::{run_scope, ExpectedResult, Scope, TestCase};
 use tempfile::tempdir;
 
 #[test]

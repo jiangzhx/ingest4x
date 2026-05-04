@@ -1,7 +1,9 @@
+mod support;
+
 use ingest4x::db::{init_sqlite_database, seed};
-use ingest4x::jlt::{parse_test_data_from_str, repo_scopes, run_scope_from_disk, ExpectedResult};
 use ingest4x::projects::{CreateProjectInput, ProjectRepository};
 use ingest4x::rules::{RuleRepository, Rules};
+use support::jlt::{parse_test_data_from_str, repo_scopes, run_scope_from_disk, ExpectedResult};
 
 #[tokio::test]
 async fn ingest_jlt_cases_match_rules() {

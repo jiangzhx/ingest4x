@@ -1,5 +1,7 @@
-use crate::rules::Rules;
+#![allow(dead_code)]
+
 use anyhow::{anyhow, bail, Context, Result};
+use ingest4x::rules::Rules;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -100,14 +102,6 @@ pub fn load_cases(root: &Path) -> Result<Vec<TestCase>> {
         bail!("no .jlt files found under {}", root.display());
     }
 
-    Ok(results)
-}
-
-pub fn load_cases_from_paths(paths: &[PathBuf]) -> Result<Vec<TestCase>> {
-    let mut results = Vec::new();
-    for path in paths {
-        results.extend(load_cases_from_file(path)?);
-    }
     Ok(results)
 }
 
