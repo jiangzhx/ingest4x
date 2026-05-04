@@ -732,6 +732,25 @@ async fn wal_writer_recovers_next_lsn_from_checkpoint_when_segments_are_deleted(
 }
 
 #[actix_rt::test]
+async fn wal_writer_creates_segment_after_checkpoint_when_segments_are_deleted() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    fs::create_dir_all(&wal_dir).expect("create wal dir");
+    fs::write(wal_dir.join("node_id"), "checkpoint-node\n").expect("write node id");
+    write_checkpoint(&wal_dir, "checkpoint-node", 7, 3, 2048);
+
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let position = writer
+        .append(&test_record("after-deleted-segment"))
+        .expect("append record after deleted segment");
+    drop(writer);
+
+    assert_eq!(position.segment, 4);
+    assert!(wal_dir.join("00000000000000000004.wal").exists());
+    assert!(!wal_dir.join("00000000000000000001.wal").exists());
+}
+
+#[actix_rt::test]
 async fn wal_writer_rejects_second_writer_for_same_directory() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");

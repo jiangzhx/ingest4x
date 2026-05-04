@@ -97,8 +97,9 @@ impl WalWriter {
         fs::create_dir_all(&dir)?;
         let lock_file = acquire_wal_lock(&dir)?;
         let node_id = resolve_node_id(settings.node_id.as_deref(), &dir)?;
-        let segment_id = last_segment_id(&dir)?.unwrap_or(FIRST_SEGMENT_ID);
-        let next_lsn = recover_next_lsn(&dir, &node_id)?;
+        let checkpoint = read_checkpoint(&dir, &node_id)?;
+        let segment_id = recover_active_segment_id(&dir, checkpoint.as_ref())?;
+        let next_lsn = recover_next_lsn(&dir, checkpoint.as_ref())?;
         ensure_segment_file(&dir, segment_id, &node_id, next_lsn)?;
         let offset = repair_segment_tail(&segment_path(&dir, segment_id))?;
         let wal_flush_interval =
@@ -971,15 +972,25 @@ fn assign_wal_metadata(record: &mut WalRecord, lsn: u64, node_id: &str) {
     record.node_id = node_id.to_string();
 }
 
-fn recover_next_lsn(dir: &Path, node_id: &str) -> io::Result<u64> {
+fn recover_active_segment_id(dir: &Path, checkpoint: Option<&WalCheckpoint>) -> io::Result<u64> {
+    let last_segment_id = last_segment_id(dir)?;
+    let checkpoint_next_segment = checkpoint.map(|checkpoint| checkpoint.checkpoint_segment_id + 1);
+    Ok(last_segment_id
+        .into_iter()
+        .chain(checkpoint_next_segment)
+        .max()
+        .unwrap_or(FIRST_SEGMENT_ID))
+}
+
+fn recover_next_lsn(dir: &Path, checkpoint: Option<&WalCheckpoint>) -> io::Result<u64> {
     let mut max_lsn = 0;
     for segment_id in segment_ids(dir)? {
         for record in read_segment_records(&segment_path(dir, segment_id))? {
             max_lsn = max_lsn.max(record.lsn);
         }
     }
-    if let Some(checkpoint_lsn) = read_checkpoint_lsn(dir, node_id)? {
-        max_lsn = max_lsn.max(checkpoint_lsn);
+    if let Some(checkpoint) = checkpoint {
+        max_lsn = max_lsn.max(checkpoint.checkpoint_lsn);
     }
     Ok(max_lsn + 1)
 }
@@ -1005,7 +1016,7 @@ struct WalCheckpointChecksum<'a> {
     updated_at: u64,
 }
 
-fn read_checkpoint_lsn(dir: &Path, node_id: &str) -> io::Result<Option<u64>> {
+fn read_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint>> {
     let path = dir.join(CHECKPOINT_FILE);
     if !path.exists() {
         return Ok(None);
@@ -1039,7 +1050,7 @@ fn read_checkpoint_lsn(dir: &Path, node_id: &str) -> io::Result<Option<u64>> {
         ));
     }
 
-    Ok(Some(checkpoint.checkpoint_lsn))
+    Ok(Some(checkpoint))
 }
 
 fn sync_directory(dir: &Path) -> io::Result<()> {
