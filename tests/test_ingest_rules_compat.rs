@@ -1,5 +1,3 @@
-#![cfg(feature = "ingest")]
-
 use ingest4x::db::{init_sqlite_database, seed};
 use ingest4x::jlt::{parse_test_data_from_str, repo_scopes, run_scope_from_disk, ExpectedResult};
 use ingest4x::projects::{CreateProjectInput, ProjectRepository};

@@ -1,5 +1,3 @@
-#![cfg(feature = "ingest")]
-
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use ingest4x::server;

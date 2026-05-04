@@ -1,16 +1,11 @@
-#![cfg(feature = "ingest")]
-
 use std::process::Command;
 
 #[test]
-fn ingest4x_prints_version_in_ingest_only_build() {
+fn ingest4x_prints_version() {
     let output = Command::new("cargo")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("run")
         .arg("--quiet")
-        .arg("--no-default-features")
-        .arg("--features")
-        .arg("ingest")
         .arg("--bin")
         .arg("ingest4x")
         .arg("--")
@@ -32,14 +27,11 @@ fn ingest4x_prints_version_in_ingest_only_build() {
 }
 
 #[test]
-fn ingest4x_server_prints_version_in_ingest_only_build() {
+fn ingest4x_server_prints_version() {
     let output = Command::new("cargo")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("run")
         .arg("--quiet")
-        .arg("--no-default-features")
-        .arg("--features")
-        .arg("ingest")
         .arg("--bin")
         .arg("ingest4x")
         .arg("--")

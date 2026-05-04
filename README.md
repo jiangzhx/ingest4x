@@ -1,12 +1,6 @@
 # ingest4x
 
-`ingest4x` 是一个基于 Rust 的事件接收服务。当前仓库按业务域拆成以下几个 feature：
-
-- `ingest`
-  `/ingest` 收数主链路，也是当前最核心的能力；对应规则定义、JLT 校验和事件 normalization 都围绕它展开
-
-默认构建只启用 `ingest`。
-如果你只想下载可直接运行的 `ingest-only` 版本，可以使用 release 里的多平台 `ingest4x` 二进制，见 [ingest4x 下载与发布](docs/ingest4x-release.md)。
+`ingest4x` 是一个基于 Rust 的事件接收服务，`/ingest` 收数主链路是核心能力；对应规则定义、JLT 校验和事件 normalization 都围绕它展开。
 
 ## Quick Start
 
@@ -17,7 +11,7 @@
 直接运行：
 
 ```bash
-cargo test --no-default-features --features ingest --test test_ingest_rules_compat
+cargo test --test test_ingest_rules_compat
 ```
 
 这条命令会创建内存 SQLite，执行内置 seed，再用 seed 出来的 ruleset 跑 `tests/jlt/core/*.jlt`，适合先确认：
@@ -26,12 +20,12 @@ cargo test --no-default-features --features ingest --test test_ingest_rules_comp
 - `.jlt` 用例格式是对的
 - 仓库内置 JLT 与 seed 规则一致
 
-### 2. 启动 `ingest-only` 版本
+### 2. 启动服务
 
-如果你已经在本地准备好了 Kafka，并且 `ingest4x.toml` 中的 `[database]` 指向一个可写的 SQLite 文件，就可以直接启动 `ingest-only`：
+如果你已经在本地准备好了 Kafka，并且 `ingest4x.toml` 中的 `[database]` 指向一个可写的 SQLite 文件，就可以直接启动：
 
 ```bash
-cargo build --release --no-default-features --features ingest
+cargo build --release
 ./target/release/ingest4x
 # 或者显式写成
 ./target/release/ingest4x server
@@ -48,7 +42,7 @@ cargo build --release --no-default-features --features ingest
 如果你只是想在本地快速跑通 `/ingest`，现在可以直接使用不带 `[database]` 的示例配置：
 
 ```bash
-cargo run --no-default-features --features ingest --bin ingest4x -- \
+cargo run --bin ingest4x -- \
   server -c ingest4x.example.toml
 ```
 

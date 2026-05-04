@@ -1,5 +1,3 @@
-#![cfg(feature = "ingest")]
-
 use ingest4x::jlt::{run_scope, ExpectedResult, Scope, TestCase};
 use ingest4x::rules::Rules;
 use serde_json::json;

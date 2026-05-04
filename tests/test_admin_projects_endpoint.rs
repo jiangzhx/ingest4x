@@ -225,7 +225,6 @@ where
 }
 
 #[actix_rt::test]
-#[cfg(feature = "ingest")]
 async fn admin_create_is_visible_to_ingest_immediately() {
     with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
         let app_state = create_app_state("").await;
@@ -512,7 +511,6 @@ async fn create_reports_bad_request_for_non_json_content_type() {
     .await;
 }
 
-#[cfg(feature = "ingest")]
 fn valid_ingest_payload(appid: &str) -> Value {
     json!({
         "appid": appid,

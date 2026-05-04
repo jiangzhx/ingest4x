@@ -1,15 +1,13 @@
-# ingest feature
+# ingest 能力
 
-`ingest` 是 `ingest4x` 最核心的收数能力。
+`/ingest` 是 `ingest4x` 最核心的收数能力，当前作为必选功能随默认构建一起编译。
 
 ## 提供的能力
 
 - 注册 `POST /ingest`
 - 注册 `GET /ingest`
 - 通过 `cargo test` 运行 JLT 校验
-- 启用 `/ingest` 相关 rules、normalization 和测试
-
-如果你只是需要“收数”，通常只开这个 feature 就够了。
+- `/ingest` 相关 rules、normalization 和测试
 
 ## 请求处理流程
 
@@ -47,9 +45,7 @@
 - 接入面端口：`8090`，只承载 `/` 与 `/ingest`
 - 管理面端口：`18090`，承载 `/metrics`、`/admin`、`/api/admin/*` 与 API 文档
 - WAL 可靠写入语义：`docs/wal-reliable-write-v0.1.md`
-- `POST /ingest` handler：`src/ingest/json.rs`
-- `GET /ingest` handler：`src/ingest/query.rs`
-- normalization：`src/ingest/normalize.rs`
+- `GET/POST /ingest` handler：`src/ingest/endpoint.rs`
 - 项目仓储：`src/projects/repository.rs`
 - 项目 registry：`src/projects/registry.rs`
 - 第一版管理 API：`src/admin/projects.rs`
@@ -58,20 +54,20 @@
 
 ## 常用命令
 
-只编译 `ingest`：
+编译：
 
 ```bash
-cargo build --release --no-default-features --features ingest
+cargo build --release
 ```
 
-只用 `ingest` 运行 seed + JLT 测试：
+运行 seed + JLT 测试：
 
 ```bash
-cargo test --no-default-features --features ingest --test test_ingest_rules_compat
+cargo test --test test_ingest_rules_compat
 ```
 
-只跑 `ingest` 相关测试：
+只跑规则兼容测试：
 
 ```bash
-cargo test --no-default-features --features ingest --test test_ingest_rules_compat
+cargo test --test test_ingest_rules_compat
 ```

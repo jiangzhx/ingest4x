@@ -1,5 +1,3 @@
-#![cfg(feature = "ingest")]
-
 mod mock_services;
 
 use crate::mock_services::{

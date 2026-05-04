@@ -4,13 +4,9 @@ use actix_http::Request;
 use actix_web::dev::{Service, ServiceResponse};
 use actix_web::web::Data;
 use actix_web::{test, web, App};
-#[cfg(feature = "ingest")]
 use ingest4x::db::init_sqlite_database;
-#[cfg(feature = "ingest")]
-use ingest4x::ingest::post_ingest;
-#[cfg(feature = "ingest")]
+use ingest4x::ingest::ingest;
 use ingest4x::ingest::processor::ProcessorState;
-#[cfg(feature = "ingest")]
 use ingest4x::projects::{CreateProjectInput, ProjectRegistryState, ProjectRepository};
 use ingest4x::rules::{
     CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, RuleRepository,
@@ -136,9 +132,7 @@ async fn create_app_with_project_event_settings_and_processor(
         ERROR_TOPIC,
     ))
     .expect("event sinks should initialize");
-    #[cfg(feature = "ingest")]
     let (project_registry, rule_repository) = create_project_state(project).await;
-    #[cfg(feature = "ingest")]
     let processor = match processor_script {
         Some(script) => ProcessorState::new(script.to_string(), 10_000)
             .expect("test processor should initialize"),
@@ -146,15 +140,11 @@ async fn create_app_with_project_event_settings_and_processor(
     };
 
     let mut app = App::new().app_data(event_sinks);
-
-    #[cfg(feature = "ingest")]
-    {
-        app = app
-            .app_data(Data::new(project_registry))
-            .app_data(Data::new(rule_repository))
-            .app_data(Data::new(processor))
-            .route("/ingest", web::post().to(post_ingest));
-    }
+    app = app
+        .app_data(Data::new(project_registry))
+        .app_data(Data::new(rule_repository))
+        .app_data(Data::new(processor))
+        .route("/ingest", web::post().to(ingest));
 
     (
         test::init_service(app).await,
@@ -234,7 +224,6 @@ fn kafka_events_settings(
     }
 }
 
-#[cfg(feature = "ingest")]
 async fn create_project_state(
     project: HashMap<String, String>,
 ) -> (ProjectRegistryState, RuleRepository) {

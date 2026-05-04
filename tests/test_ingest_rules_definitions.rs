@@ -1,5 +1,3 @@
-#![cfg(feature = "ingest")]
-
 use ingest4x::db::{init_sqlite_database, seed};
 use ingest4x::projects::{CreateProjectInput, ProjectRepository};
 use ingest4x::rules::{RuleRepository, Rules};

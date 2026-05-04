@@ -13,7 +13,6 @@ pub mod server;
 pub mod settings;
 pub mod utils;
 pub mod wal;
-#[cfg(feature = "ingest")]
 pub mod wal_replay;
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -1,6 +1,6 @@
 # ingest4x 下载与发布
 
-这里发布的是 `ingest4x` 的多平台可执行文件，但构建参数固定为 `--no-default-features --features ingest`，也就是默认产出 `ingest-only` 版本。下载后可以直接运行，不需要本地再执行 Cargo 构建。
+这里发布的是 `ingest4x` 的多平台可执行文件。下载后可以直接运行，不需要本地再执行 Cargo 构建。
 
 ## 发布方式
 

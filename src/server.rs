@@ -1,9 +1,7 @@
 use crate::admin;
 use crate::admin_ui;
 use crate::db::{init_database, seed};
-#[cfg(feature = "ingest")]
 use crate::ingest;
-#[cfg(feature = "ingest")]
 use crate::ingest::processor::ProcessorState;
 use crate::projects::{
     spawn_project_registry_refresh_loop, CreateProjectInput, ProjectRegistryState,
@@ -13,9 +11,7 @@ use crate::rules::RuleRepository;
 use crate::settings::{default_database_refresh_interval_secs, Settings};
 use crate::utils::events::{init_event_sinks, EventSinkState};
 use crate::utils::prometheus::{init_private_prometheus, init_public_prometheus};
-#[cfg(feature = "ingest")]
 use crate::wal::WalWriter;
-#[cfg(feature = "ingest")]
 use crate::wal_replay::{replay_once, WalReplayContext};
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{web, App, HttpResponse, HttpServer};
@@ -24,7 +20,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
-#[cfg(feature = "ingest")]
 use tracing::warn;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -71,9 +66,7 @@ pub struct AppState {
     project_repository: Data<ProjectRepository>,
     rule_repository: Data<RuleRepository>,
     project_registry: Data<ProjectRegistryState>,
-    #[cfg(feature = "ingest")]
     processor: Data<ProcessorState>,
-    #[cfg(feature = "ingest")]
     wal: Option<Data<WalWriter>>,
 }
 
@@ -84,7 +77,6 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
         app_state.project_registry.clone(),
         project_registry_refresh_interval(&settings),
     );
-    #[cfg(feature = "ingest")]
     spawn_wal_replay_loop(app_state.clone());
 
     let public_prometheus = init_public_prometheus(shared_registry.clone());
@@ -124,11 +116,9 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
     })?;
     let (project_repository, rule_repository, project_registry) =
         init_project_state(settings.clone()).await?;
-    #[cfg(feature = "ingest")]
     let processor = Data::new(ProcessorState::from_default_entry().map_err(|error| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
     })?);
-    #[cfg(feature = "ingest")]
     let wal = settings
         .wal
         .as_ref()
@@ -143,9 +133,7 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
         project_repository,
         rule_repository,
         project_registry,
-        #[cfg(feature = "ingest")]
         processor,
-        #[cfg(feature = "ingest")]
         wal,
     })
 }
@@ -154,22 +142,18 @@ pub fn configure_public_app(cfg: &mut ServiceConfig, state: AppState) {
     cfg.app_data(Data::new(state.settings.clone()))
         .app_data(state.project_registry.clone())
         .service(web::scope("/").route("", web::get().to(index)));
-
-    #[cfg(feature = "ingest")]
-    {
-        if let Some(wal) = state.wal {
-            cfg.app_data(wal);
-        }
-        cfg.service(
-            web::resource("/ingest")
-                .app_data(state.rule_repository.clone())
-                .app_data(state.event_sinks.clone())
-                .app_data(state.project_registry.clone())
-                .app_data(state.processor.clone())
-                .route(web::post().to(ingest::post_ingest))
-                .route(web::get().to(ingest::get_ingest)),
-        );
+    if let Some(wal) = state.wal {
+        cfg.app_data(wal);
     }
+    cfg.service(
+        web::resource("/ingest")
+            .app_data(state.rule_repository.clone())
+            .app_data(state.event_sinks.clone())
+            .app_data(state.project_registry.clone())
+            .app_data(state.processor.clone())
+            .route(web::post().to(ingest::ingest))
+            .route(web::get().to(ingest::ingest)),
+    );
 }
 
 pub fn configure_private_app(cfg: &mut ServiceConfig, state: AppState) {
@@ -189,7 +173,6 @@ pub fn configure_app(cfg: &mut ServiceConfig, state: AppState) {
     configure_public_app(cfg, state);
 }
 
-#[cfg(feature = "ingest")]
 pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
     let Some(wal) = state.settings.wal.as_ref() else {
         return Ok(0);
@@ -206,7 +189,6 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
     .await
 }
 
-#[cfg(feature = "ingest")]
 fn spawn_wal_replay_loop(state: AppState) {
     if state.settings.wal.is_none() {
         return;
@@ -238,14 +220,13 @@ fn spawn_wal_replay_loop(state: AppState) {
     });
 }
 
-#[cfg(feature = "ingest")]
 fn wal_replay_retry_delay(consecutive_errors: u32) -> Duration {
     let capped_shift = consecutive_errors.min(9);
     let delay_ms = 100_u64.saturating_mul(1_u64 << capped_shift).min(30_000);
     Duration::from_millis(delay_ms)
 }
 
-#[cfg(all(test, feature = "ingest"))]
+#[cfg(test)]
 mod tests {
     use super::wal_replay_retry_delay;
     use std::time::Duration;

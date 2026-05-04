@@ -1,5 +1,3 @@
-#![cfg(feature = "ingest")]
-
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use base64::engine::general_purpose::STANDARD;

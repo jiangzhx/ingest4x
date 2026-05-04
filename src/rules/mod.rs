@@ -16,7 +16,6 @@ pub use types::{CompiledEventRule, CompiledFieldRule, FieldType, Rules};
 
 #[derive(Clone)]
 pub struct RuleSets {
-    #[cfg(feature = "ingest")]
     pub ingest: Rules,
 }
 
@@ -24,7 +23,6 @@ impl RuleSets {
     pub fn load_from_root(path: impl AsRef<Path>) -> Result<Self> {
         let root = path.as_ref();
         Ok(Self {
-            #[cfg(feature = "ingest")]
             ingest: Rules::load_from_dir(root.join("ingest"))?,
         })
     }

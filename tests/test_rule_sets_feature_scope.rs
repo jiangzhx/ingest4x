@@ -1,11 +1,9 @@
-#![cfg(feature = "ingest")]
-
 use ingest4x::rules::RuleSets;
 use std::fs;
 use tempfile::tempdir;
 
 #[test]
-fn load_from_root_allows_ingest_only_root_when_only_ingest_feature_is_enabled() {
+fn load_from_root_loads_ingest_rules() {
     let temp = tempdir().expect("temp dir");
     let ingest_dir = temp.path().join("ingest");
     fs::create_dir_all(&ingest_dir).expect("create ingest dir");
@@ -21,6 +19,6 @@ fields:
     )
     .expect("write ingest default");
 
-    let rule_sets = RuleSets::load_from_root(temp.path()).expect("load ingest-only root");
+    let rule_sets = RuleSets::load_from_root(temp.path()).expect("load ingest rules root");
     assert!(rule_sets.ingest.event("default").is_some());
 }
