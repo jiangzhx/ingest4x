@@ -133,7 +133,6 @@ async fn replay_record(context: &WalReplayContext<'_>, record: &WalRecord) -> Re
                 .send_json(EventStatus::Invalid, &appid, &xwhat, &event)
                 .await?;
         }
-        ProcessorOutput::Dropped { .. } => {}
     }
 
     Ok(())

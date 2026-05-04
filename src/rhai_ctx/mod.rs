@@ -15,7 +15,6 @@ def_package! {
         module.set_native_fn("ingest4x_version", ingest4x_version);
         module.set_native_fn("accept", accept);
         module.set_native_fn("reject", reject);
-        module.set_native_fn("drop", drop_event);
         module.set_native_fn("validate", validate);
     } |> |engine| {
         register_request_api(engine);
@@ -145,13 +144,6 @@ fn reject(event: Dynamic, error: &str) -> Result<Map, Box<EvalAltResult>> {
     output.insert("status".into(), "rejected".into());
     output.insert("event".into(), event);
     output.insert("error".into(), error.into());
-    Ok(output)
-}
-
-fn drop_event(reason: &str) -> Result<Map, Box<EvalAltResult>> {
-    let mut output = Map::new();
-    output.insert("status".into(), "dropped".into());
-    output.insert("reason".into(), reason.into());
     Ok(output)
 }
 

@@ -140,15 +140,6 @@ pub async fn post_ingest(
             }
             return HttpResponse::BadRequest().body(error);
         }
-        ProcessorOutput::Dropped { reason } => {
-            warn!(
-                appid = event.appid(),
-                xwhat = event_name.as_str(),
-                reason = %reason,
-                "ingest payload dropped by processor"
-            );
-            return HttpResponse::Ok().body("200");
-        }
     };
 
     event = match Event::from_value(processed_json) {
@@ -268,10 +259,6 @@ pub(crate) async fn process_ingest_payload(
                 );
             }
             return HttpResponse::BadRequest().body(error);
-        }
-        ProcessorOutput::Dropped { reason } => {
-            warn!(appid, xwhat = event_name.as_str(), reason = %reason, "ingest payload dropped by processor");
-            return HttpResponse::Ok().body("200");
         }
     };
 

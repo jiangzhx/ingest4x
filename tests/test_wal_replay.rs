@@ -384,6 +384,88 @@ ack = ["kafka_invalid"]
 }
 
 #[actix_rt::test]
+async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        valid: EventRouteSet {
+            routes: vec![EventRouteSettings {
+                sinks: vec!["stdout".to_string()],
+                ack: vec!["stdout".to_string()],
+                ..Default::default()
+            }],
+        },
+        invalid: EventRouteSet::default(),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn main(event, request) {
+                return #{
+                    status: "dropped",
+                    reason: "not a durable downstream decision"
+                };
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        wal_flush_interval: "1s".to_string(),
+        wal_max_write_buffer_size: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-drop",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    let error = replay_once(WalReplayContext {
+        dir: &wal_dir,
+        event_sinks: &event_sinks,
+        project_registry: &project_registry,
+        rule_repository: &rule_repository,
+        processor: &processor,
+    })
+    .await
+    .expect_err("processor drop should stop WAL replay");
+
+    assert!(error
+        .to_string()
+        .contains("unsupported processor status `dropped`"));
+    assert!(!wal_dir.join("checkpoint.json").exists());
+}
+
+#[actix_rt::test]
 async fn wal_replay_removes_segments_before_checkpoint() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");

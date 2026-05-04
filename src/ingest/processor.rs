@@ -28,7 +28,6 @@ struct ProcessorScript {
 pub enum ProcessorOutput {
     Accepted(Value),
     Rejected { event: Value, error: String },
-    Dropped { reason: String },
 }
 
 impl ProcessorState {
@@ -133,13 +132,6 @@ fn parse_processor_output(result: Dynamic) -> Result<ProcessorOutput> {
                 .unwrap_or("processor rejected event")
                 .to_string(),
         }),
-        "dropped" => Ok(ProcessorOutput::Dropped {
-            reason: value
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or("processor dropped event")
-                .to_string(),
-        }),
         other => Err(anyhow!("unsupported processor status `{other}`")),
     }
 }
@@ -231,7 +223,10 @@ fn rhai_module_name(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_script, read_processor_script};
+    use super::{compile_script, read_processor_script, ProcessorState};
+    use crate::ingest::processor::ProcessorRequestContext;
+    use crate::rules::Rules;
+    use serde_json::json;
     use std::fs;
     use tempfile::tempdir;
 
@@ -270,5 +265,34 @@ fn custom_step(event) {
         assert_eq!(script.modules[0].0, "custom");
         assert!(script.modules[0].1.contains("fn custom_step"));
         compile_script(&script.entry, script.modules, 10_000).expect("compiled processor modules");
+    }
+
+    #[test]
+    fn processor_does_not_expose_drop_decision_helper() {
+        let processor = ProcessorState::new(
+            r#"
+fn main(event, request) {
+    return drop("do not persist this event");
+}
+"#
+            .to_string(),
+            10_000,
+        )
+        .expect("processor should compile");
+
+        let error = match processor.process(
+            json!({
+                "appid": "APPID",
+                "xwhat": "custom_event",
+                "xcontext": {}
+            }),
+            Rules::default(),
+            ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+        ) {
+            Ok(_) => panic!("drop helper should not be available"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("Function not found: drop"));
     }
 }
