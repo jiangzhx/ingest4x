@@ -340,7 +340,10 @@ pub(crate) async fn append_wal_record(
                 error = %err,
                 "failed to append ingest payload to wal"
             );
-            HttpResponse::ServiceUnavailable().body("Failed to persist event")
+            HttpResponse::ServiceUnavailable().json(serde_json::json!({
+                "error": "wal_capacity_exceeded",
+                "message": "WAL disk space is insufficient or unavailable"
+            }))
         }
     }
 }
