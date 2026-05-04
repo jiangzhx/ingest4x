@@ -6,6 +6,7 @@ use rhai::{def_package, Dynamic, Engine, EvalAltResult, ImmutableString, Map};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 // Host-side APIs exposed to Rhai processor scripts.
 def_package! {
@@ -13,6 +14,7 @@ def_package! {
         module.set_native_fn("epoch_ms", epoch_ms);
         module.set_native_fn("host_ip", host_ip);
         module.set_native_fn("ingest4x_version", ingest4x_version);
+        module.set_native_fn("uuid_v4", uuid_v4);
         module.set_native_fn("accept", accept);
         module.set_native_fn("reject", reject);
         module.set_native_fn("drop", drop_event);
@@ -131,6 +133,10 @@ fn host_ip() -> Result<ImmutableString, Box<EvalAltResult>> {
 
 fn ingest4x_version() -> Result<ImmutableString, Box<EvalAltResult>> {
     Ok(env!("CARGO_PKG_VERSION").into())
+}
+
+fn uuid_v4() -> Result<ImmutableString, Box<EvalAltResult>> {
+    Ok(Uuid::new_v4().to_string().into())
 }
 
 fn accept(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {

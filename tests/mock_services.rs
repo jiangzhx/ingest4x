@@ -50,6 +50,7 @@ pub async fn create_configured_app(
             bind_address: "127.0.0.1:8090".to_string(),
             log_level: LogLevel::Info,
             log_format: "json".to_string(),
+            max_event_bytes: ingest4x::settings::default_max_event_bytes(),
         },
         management: ManagementSettings {
             bind_address: "127.0.0.1:18090".to_string(),

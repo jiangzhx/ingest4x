@@ -25,6 +25,8 @@ pub struct ServerSettings {
     pub log_level: LogLevel,
     #[serde(default = "default_log_format")]
     pub log_format: String,
+    #[serde(default = "default_max_event_bytes")]
+    pub max_event_bytes: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -155,6 +157,10 @@ pub const fn default_wal_max_write_buffer_size() -> usize {
 
 pub const fn default_processor_max_operations() -> u64 {
     10_000
+}
+
+pub const fn default_max_event_bytes() -> usize {
+    256 * 1024
 }
 
 pub fn default_log_format() -> String {

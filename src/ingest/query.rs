@@ -1,11 +1,16 @@
 #[cfg(feature = "ingest")]
-use crate::ingest::json::{append_wal_record, process_ingest_payload, processor_request_context};
+use crate::ingest::json::{
+    append_wal_record, process_ingest_payload, processor_request_context,
+    reject_if_payload_too_large,
+};
 #[cfg(feature = "ingest")]
 use crate::ingest::processor::ProcessorState;
 #[cfg(feature = "ingest")]
 use crate::projects::ProjectRegistryState;
 #[cfg(feature = "ingest")]
 use crate::rules::RuleRepository;
+#[cfg(feature = "ingest")]
+use crate::settings::Settings;
 #[cfg(feature = "ingest")]
 use crate::utils::events::EventSinkState;
 #[cfg(feature = "ingest")]
@@ -22,6 +27,8 @@ use base64::Engine;
 use serde_json::Value;
 #[cfg(feature = "ingest")]
 use std::collections::HashMap;
+#[cfg(feature = "ingest")]
+use std::sync::Arc;
 
 #[cfg(feature = "ingest")]
 pub async fn get_ingest(
@@ -32,6 +39,7 @@ pub async fn get_ingest(
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
     wal: Option<Data<WalWriter>>,
+    settings: Option<Data<Arc<Settings>>>,
 ) -> HttpResponse {
     let query_params = query_params.into_inner();
 
@@ -44,8 +52,25 @@ pub async fn get_ingest(
         Err(err) => return HttpResponse::BadRequest().body(format!("invalid base64 data: {err}")),
     };
 
+    if let Some(response) = reject_if_payload_too_large(
+        decoded.len(),
+        settings
+            .as_ref()
+            .map(|settings| settings.get_ref().as_ref()),
+    ) {
+        return response;
+    }
+
     if let Some(wal) = wal {
-        return append_wal_record(&req, decoded, &project_registry, &wal).await;
+        return append_wal_record(
+            &req,
+            decoded,
+            &project_registry,
+            &rule_repository,
+            &processor,
+            &wal,
+        )
+        .await;
     }
 
     let json = match serde_json::from_slice::<Value>(&decoded) {

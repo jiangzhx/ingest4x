@@ -7,6 +7,8 @@ use crate::projects::ProjectRegistryState;
 #[cfg(feature = "ingest")]
 use crate::rules::RuleRepository;
 #[cfg(feature = "ingest")]
+use crate::settings::{default_max_event_bytes, Settings};
+#[cfg(feature = "ingest")]
 use crate::utils::events::{EventSinkState, EventStatus};
 #[cfg(feature = "ingest")]
 use crate::utils::get_ip;
@@ -21,6 +23,8 @@ use serde_json::Value;
 #[cfg(feature = "ingest")]
 use std::collections::{BTreeMap, HashMap};
 #[cfg(feature = "ingest")]
+use std::sync::Arc;
+#[cfg(feature = "ingest")]
 use tracing::{error, warn};
 
 #[cfg(feature = "ingest")]
@@ -32,9 +36,27 @@ pub async fn post_ingest(
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
     wal: Option<Data<WalWriter>>,
+    settings: Option<Data<Arc<Settings>>>,
 ) -> HttpResponse {
+    if let Some(response) = reject_if_payload_too_large(
+        body.len(),
+        settings
+            .as_ref()
+            .map(|settings| settings.get_ref().as_ref()),
+    ) {
+        return response;
+    }
+
     if let Some(wal) = wal {
-        return append_wal_record(&req, body.to_vec(), &project_registry, &wal).await;
+        return append_wal_record(
+            &req,
+            body.to_vec(),
+            &project_registry,
+            &rule_repository,
+            &processor,
+            &wal,
+        )
+        .await;
     }
 
     let json = match serde_json::from_slice::<Value>(&body) {
@@ -173,6 +195,20 @@ pub async fn post_ingest(
 }
 
 #[cfg(feature = "ingest")]
+pub(crate) fn reject_if_payload_too_large(
+    payload_len: usize,
+    settings: Option<&Settings>,
+) -> Option<HttpResponse> {
+    let max_event_bytes = settings
+        .map(|settings| settings.server.max_event_bytes)
+        .unwrap_or_else(default_max_event_bytes);
+    if payload_len > max_event_bytes {
+        return Some(HttpResponse::PayloadTooLarge().body("Payload Too Large"));
+    }
+    None
+}
+
+#[cfg(feature = "ingest")]
 pub(crate) async fn process_ingest_payload(
     json: Value,
     project_registry: Data<ProjectRegistryState>,
@@ -290,6 +326,8 @@ pub(crate) async fn append_wal_record(
     req: &HttpRequest,
     body: Vec<u8>,
     project_registry: &ProjectRegistryState,
+    rule_repository: &RuleRepository,
+    processor: &ProcessorState,
     wal: &WalWriter,
 ) -> HttpResponse {
     let json = match serde_json::from_slice::<Value>(&body) {
@@ -297,13 +335,79 @@ pub(crate) async fn append_wal_record(
         Err(err) => return HttpResponse::BadRequest().body(format!("invalid json payload: {err}")),
     };
 
-    let Some(appid) = json.get("appid").and_then(Value::as_str) else {
+    let Some(appid) = json
+        .get("appid")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
         return HttpResponse::BadRequest().body("missing or invalid appid");
     };
 
-    if !project_registry.contains(appid) {
+    if !project_registry.contains(&appid) {
         return HttpResponse::NotFound().body("Project not found");
     }
+
+    let event_name = json["xwhat"].as_str().unwrap_or("default").to_string();
+    let rules = match rule_repository.compile_project_rules(&appid).await {
+        Ok(rules) => rules,
+        Err(err) => {
+            error!(
+                appid,
+                xwhat = event_name.as_str(),
+                error = %err,
+                "failed to compile project rules before wal append"
+            );
+            return HttpResponse::InternalServerError().body(err.to_string());
+        }
+    };
+
+    let processed = match processor.process(json, rules, processor_request_context(req)) {
+        Ok(output) => output,
+        Err(err) => {
+            error!(
+                appid,
+                xwhat = event_name.as_str(),
+                error = %err,
+                "failed to process ingest payload before wal append"
+            );
+            return HttpResponse::InternalServerError().body("Failed to process event");
+        }
+    };
+
+    let json = match processed {
+        ProcessorOutput::Accepted(value) => value,
+        ProcessorOutput::Rejected { error, .. } => {
+            warn!(
+                appid,
+                xwhat = event_name.as_str(),
+                error = %error,
+                "ingest payload rejected by processor before wal append"
+            );
+            return HttpResponse::BadRequest().body(error);
+        }
+        ProcessorOutput::Dropped { reason } => {
+            warn!(
+                appid,
+                xwhat = event_name.as_str(),
+                reason = %reason,
+                "ingest payload dropped by processor before wal append"
+            );
+            return HttpResponse::Ok().body("200");
+        }
+    };
+
+    let body = match serde_json::to_vec(&json) {
+        Ok(body) => body,
+        Err(err) => {
+            error!(
+                appid,
+                xwhat = event_name.as_str(),
+                error = %err,
+                "failed to serialize processor output before wal append"
+            );
+            return HttpResponse::InternalServerError().body("Processor returned invalid event");
+        }
+    };
 
     let record = new_record(
         req.method().as_str(),

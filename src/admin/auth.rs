@@ -125,6 +125,7 @@ mod tests {
                 bind_address: "127.0.0.1:0".to_string(),
                 log_level: crate::settings::LogLevel::Info,
                 log_format: "json".to_string(),
+                max_event_bytes: crate::settings::default_max_event_bytes(),
             },
             management: crate::settings::ManagementSettings {
                 bind_address: "127.0.0.1:0".to_string(),

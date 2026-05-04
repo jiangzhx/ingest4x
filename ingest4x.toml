@@ -2,6 +2,7 @@
 bind_address = "0.0.0.0:8090"
 log_level = "info"
 log_format = "json"
+max_event_bytes = 262144
 
 [management]
 bind_address = "127.0.0.1:18090"
@@ -15,6 +16,13 @@ connections_min_size = 10
 [database]
 url = "sqlite://db/ingest4x.db?mode=rwc"
 refresh_interval_secs = 3
+
+[wal]
+dir = "./wal"
+wal_flush_interval = "1s"
+wal_max_write_buffer_size = 100000
+no_sync = false
+wal_segment_max_bytes = 134217728
 
 [events.sink.stdout_all]
 type = "stdout"

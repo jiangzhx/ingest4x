@@ -45,7 +45,11 @@ async fn post_ingest_normalizes_and_sends_event() {
     let mut event_from_kafka =
         Event::from_json(&serde_json::from_str(kafka_string.as_str()).unwrap()).unwrap();
     let xwhen = event_from_kafka.xwhen().unwrap();
+    let event_id = event_from_kafka.xcontext_mut().remove("event_id");
     let process_info = event_from_kafka.xcontext_mut().remove("process_info");
+    assert!(event_id
+        .and_then(|value| value.as_str().map(str::to_string))
+        .is_some());
     assert!(process_info.is_some());
 
     assert_json_eq!(

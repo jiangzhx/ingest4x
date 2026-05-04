@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 #[actix_rt::test]
-async fn post_ingest_writes_raw_request_to_wal_when_configured() {
+async fn post_ingest_writes_processed_request_to_wal_when_configured() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -63,7 +63,8 @@ ack = ["kafka_valid"]
         "xwhat": "custom_event",
         "xcontext": {
             "installid": "iid-1",
-            "os": "ios"
+            "os": "ios",
+            "idfa": "idfa-1"
         }
     });
 
@@ -88,16 +89,21 @@ ack = ["kafka_valid"]
         record.headers.get("x-test-header").map(String::as_str),
         Some("kept")
     );
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
-        payload
-    );
+    let persisted =
+        serde_json::from_slice::<serde_json::Value>(&record.body).expect("processed json body");
+    assert_eq!(persisted["appid"], payload["appid"]);
+    assert_eq!(persisted["xwhat"], payload["xwhat"]);
+    assert_eq!(persisted["xcontext"]["installid"], json!("iid-1"));
+    assert_eq!(persisted["xcontext"]["os"], json!("ios"));
+    assert_eq!(persisted["xcontext"]["idfa"], json!("idfa-1"));
+    assert!(persisted["xcontext"]["event_id"].as_str().is_some());
+    assert!(persisted["xcontext"]["process_info"].is_object());
     assert!(record.record_id.starts_with("wal-"));
     assert!(record.received_at_ms > 0);
 }
 
 #[actix_rt::test]
-async fn get_ingest_writes_decoded_payload_to_wal_when_configured() {
+async fn get_ingest_writes_processed_payload_to_wal_when_configured() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -144,7 +150,8 @@ ack = ["kafka_valid"]
         "xwhat": "custom_event",
         "xcontext": {
             "installid": "iid-2",
-            "os": "android"
+            "os": "android",
+            "oaid": "oaid-1"
         }
     });
     let encoded = STANDARD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
@@ -161,10 +168,14 @@ ack = ["kafka_valid"]
     let record = &records[0];
     assert_eq!(record.method, "GET");
     assert_eq!(record.path, "/ingest");
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
-        payload
-    );
+    let persisted =
+        serde_json::from_slice::<serde_json::Value>(&record.body).expect("processed json body");
+    assert_eq!(persisted["appid"], payload["appid"]);
+    assert_eq!(persisted["xwhat"], payload["xwhat"]);
+    assert_eq!(persisted["xcontext"]["installid"], json!("iid-2"));
+    assert_eq!(persisted["xcontext"]["os"], json!("android"));
+    assert_eq!(persisted["xcontext"]["oaid"], json!("oaid-1"));
+    assert!(persisted["xcontext"]["event_id"].as_str().is_some());
 }
 
 #[actix_rt::test]
@@ -219,6 +230,142 @@ ack = ["kafka_valid"]
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(read_all_records(&wal_dir)
+        .expect("read wal records")
+        .is_empty());
+}
+
+#[actix_rt::test]
+async fn post_ingest_rejects_payload_over_server_max_event_bytes_before_wal_append() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+max_event_bytes = 128
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:65535"
+topic = "unused-valid"
+
+[[events.valid.routes]]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
+"#,
+            wal_dir.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+    let payload = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-too-large",
+            "os": "ios",
+            "idfa": "idfa-too-large",
+            "extra": "x".repeat(160)
+        }
+    });
+
+    let req = test::TestRequest::post()
+        .uri("/ingest")
+        .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
+        .insert_header(("content-type", "application/json"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(read_all_records(&wal_dir)
+        .expect("read wal records")
+        .is_empty());
+}
+
+#[actix_rt::test]
+async fn get_ingest_rejects_decoded_payload_over_server_max_event_bytes_before_wal_append() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+max_event_bytes = 128
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:65535"
+topic = "unused-valid"
+
+[[events.valid.routes]]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
+"#,
+            wal_dir.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+    let payload = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-get-too-large",
+            "os": "ios",
+            "idfa": "idfa-get-too-large",
+            "extra": "x".repeat(160)
+        }
+    });
+    let encoded = STANDARD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
+    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+
+    let req = test::TestRequest::get()
+        .uri(format!("/ingest?{query}").as_str())
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     assert!(read_all_records(&wal_dir)
         .expect("read wal records")
         .is_empty());
@@ -342,7 +489,8 @@ ack = ["kafka_valid"]
             "xwhat": "custom_event",
             "xcontext": {
                 "installid": format!("iid-{index}"),
-                "os": "ios"
+                "os": "ios",
+                "idfa": format!("idfa-{index}")
             }
         });
         let req = test::TestRequest::post()
@@ -411,7 +559,8 @@ ack = ["kafka_valid"]
         "xwhat": "custom_event",
         "xcontext": {
             "installid": "iid-format",
-            "os": "ios"
+            "os": "ios",
+            "idfa": "idfa-format"
         }
     });
 

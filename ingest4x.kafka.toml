@@ -2,6 +2,7 @@
 bind_address = "0.0.0.0:8090"
 log_level = "info"
 log_format = "json"
+max_event_bytes = 262144
 
 [management]
 bind_address = "127.0.0.1:18090"
