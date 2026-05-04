@@ -1,6 +1,4 @@
-mod mock_services;
-
-use crate::mock_services::{
+use crate::support::mock_services::{
     create_app, create_app_with_processor_script, create_app_with_project, TestService,
 };
 use actix_http::StatusCode;

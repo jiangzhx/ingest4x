@@ -1,8 +1,6 @@
-mod support;
-
+use crate::support::jlt::{run_scope, ExpectedResult, Scope, TestCase};
 use ingest4x::rules::Rules;
 use serde_json::json;
-use support::jlt::{run_scope, ExpectedResult, Scope, TestCase};
 use tempfile::tempdir;
 
 #[test]
