@@ -3,11 +3,8 @@ use crate::admin_ui;
 use crate::db::{init_database, seed};
 use crate::ingest;
 use crate::ingest::processor::ProcessorState;
-use crate::projects::{
-    spawn_project_registry_refresh_loop, CreateProjectInput, ProjectRegistryState,
-    ProjectRepository,
-};
-use crate::rules::RuleRepository;
+use crate::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
+use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
 use crate::settings::{default_database_refresh_interval_secs, Settings};
 use crate::utils::events::{init_event_sinks, EventSinkState};
 use crate::utils::prometheus::{init_private_prometheus, init_public_prometheus};
@@ -247,27 +244,21 @@ async fn init_project_state(
     Data<RuleRepository>,
     Data<ProjectRegistryState>,
 )> {
-    let repository = match settings.database.as_ref() {
-        Some(database) => {
-            let db = init_database(&database.url)
-                .await
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-            ProjectRepository::new(db)
-        }
-        None => {
-            let db = init_database("sqlite::memory:")
-                .await
-                .map_err(|error| std::io::Error::other(error.to_string()))?;
-            let repository = ProjectRepository::new(db);
-
-            import_mock_projects(&repository, &default_mock_projects()).await?;
-
-            repository
-        }
+    let db = match settings.database.as_ref() {
+        Some(database) => init_database(&database.url)
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+        None => init_database("sqlite::memory:")
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
     };
 
-    let rule_repository = RuleRepository::new(repository.database());
+    let repository = ProjectRepository::new(db.clone());
+    if settings.database.is_none() {
+        import_mock_projects(&repository, &default_mock_projects()).await?;
+    }
+
+    let rule_repository = RuleRepository::new(db);
     seed::run(&repository, &rule_repository).await?;
     let project_registry = Data::new(
         ProjectRegistryState::load(repository.clone())

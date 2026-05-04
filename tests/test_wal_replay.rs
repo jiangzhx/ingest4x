@@ -2,9 +2,9 @@ use actix_http::StatusCode;
 use actix_web::{test, App};
 use ingest4x::db::init_sqlite_database;
 use ingest4x::ingest::processor::ProcessorState;
-use ingest4x::projects::{CreateProjectInput, ProjectRegistryState, ProjectRepository};
-use ingest4x::rules::RuleRepository;
+use ingest4x::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
 use ingest4x::server;
+use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
     CheckpointSettings, EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings,
     Settings,

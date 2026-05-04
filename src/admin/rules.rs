@@ -1,4 +1,4 @@
-use crate::rules::{
+use crate::repositories::{
     CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, ProjectRuleSet, Rule,
     RuleRepository, RuleRepositoryError, RuleSet, UpdateRuleInput, UpdateRuleSetInput,
 };

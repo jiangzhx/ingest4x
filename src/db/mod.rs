@@ -1,4 +1,3 @@
-pub mod entities;
 pub mod migrate;
 pub mod seed;
 

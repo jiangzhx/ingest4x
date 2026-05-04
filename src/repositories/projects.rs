@@ -1,15 +1,78 @@
 use crate::current_timestamp_as_u64;
-use crate::db::entities::{app_meta, projects};
-use crate::projects::model::{
-    CreateProjectInput, Project, ProjectRepositoryError, ProjectRepositoryResult,
-    UpdateProjectInput,
-};
+use crate::entities::{app_meta, projects};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
 };
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
 const PROJECTS_VERSION_KEY: &str = "projects_version";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Project {
+    pub id: i32,
+    pub appid: String,
+    pub name: String,
+    pub enabled: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateProjectInput {
+    pub appid: String,
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpdateProjectInput {
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+}
+
+pub type ProjectRepositoryResult<T> = Result<T, ProjectRepositoryError>;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ProjectRepositoryError {
+    NotFound { appid: String },
+    DuplicateAppid { appid: String },
+    VersionMetadataMissing,
+    CorruptedVersion { value: String },
+    Database(DbErr),
+}
+
+impl Display for ProjectRepositoryError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound { appid } => write!(f, "project '{appid}' not found"),
+            Self::DuplicateAppid { appid } => {
+                write!(f, "project appid '{appid}' already exists")
+            }
+            Self::VersionMetadataMissing => write!(f, "projects_version metadata is missing"),
+            Self::CorruptedVersion { value } => {
+                write!(f, "projects_version contains invalid value '{value}'")
+            }
+            Self::Database(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl Error for ProjectRepositoryError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Database(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<DbErr> for ProjectRepositoryError {
+    fn from(value: DbErr) -> Self {
+        Self::Database(value)
+    }
+}
 
 #[derive(Clone)]
 pub struct ProjectRepository {
@@ -19,10 +82,6 @@ pub struct ProjectRepository {
 impl ProjectRepository {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
-    }
-
-    pub fn database(&self) -> DatabaseConnection {
-        self.db.clone()
     }
 
     pub async fn create_project(

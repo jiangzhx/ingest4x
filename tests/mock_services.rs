@@ -7,12 +7,12 @@ use actix_web::{test, web, App};
 use ingest4x::db::init_sqlite_database;
 use ingest4x::ingest::ingest;
 use ingest4x::ingest::processor::ProcessorState;
-use ingest4x::projects::{CreateProjectInput, ProjectRegistryState, ProjectRepository};
-use ingest4x::rules::{
-    CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, RuleRepository,
-    UpdateRuleSetInput,
+use ingest4x::repositories::{
+    CreateProjectInput, CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput,
+    ProjectRepository, RuleRepository, UpdateRuleSetInput,
 };
 use ingest4x::server;
+use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
     EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, LogLevel,
     ManagementSettings, ServerSettings, Settings,
@@ -230,8 +230,8 @@ async fn create_project_state(
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
-    let repository = ProjectRepository::new(db);
-    let rule_repository = RuleRepository::new(repository.database());
+    let repository = ProjectRepository::new(db.clone());
+    let rule_repository = RuleRepository::new(db);
 
     if !project.is_empty() {
         repository

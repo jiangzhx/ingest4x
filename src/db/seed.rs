@@ -1,7 +1,6 @@
-use crate::projects::{CreateProjectInput, ProjectRepository};
-use crate::rules::{
-    CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, RuleRepository,
-    UpdateRuleSetInput,
+use crate::repositories::{
+    CreateProjectInput, CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput,
+    ProjectRepository, RuleRepository, UpdateRuleSetInput,
 };
 
 const DEFAULT_RULE_CONTENT: &str = r#"fields:

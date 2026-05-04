@@ -1,6 +1,6 @@
 use ingest4x::db::{init_sqlite_database, seed};
-use ingest4x::projects::{CreateProjectInput, ProjectRepository};
-use ingest4x::rules::{RuleRepository, Rules};
+use ingest4x::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
+use ingest4x::rules::Rules;
 use serde_json::json;
 
 async fn load_rules() -> Rules {

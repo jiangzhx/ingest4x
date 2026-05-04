@@ -1,8 +1,8 @@
-use super::loader::compile_event_rule;
-use super::merge::merge_fragments;
-use super::types::{RuleFragment, Rules};
 use crate::current_timestamp_as_u64;
-use crate::db::entities::{project_rule_sets, projects, rule_sets, rules};
+use crate::entities::{project_rule_sets, projects, rule_sets, rules};
+use crate::rules::loader::compile_event_rule;
+use crate::rules::merge::merge_fragments;
+use crate::rules::types::{RuleFragment, Rules};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, IntoActiveModel,
     QueryFilter, QueryOrder, Set, SqlErr,

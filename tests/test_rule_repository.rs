@@ -1,8 +1,7 @@
 use ingest4x::db::init_sqlite_database;
-use ingest4x::projects::{CreateProjectInput, ProjectRepository};
-use ingest4x::rules::{
-    CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, RuleRepository,
-    UpdateRuleSetInput,
+use ingest4x::repositories::{
+    CreateProjectInput, CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput,
+    ProjectRepository, RuleRepository, UpdateRuleSetInput,
 };
 use serde_json::json;
 

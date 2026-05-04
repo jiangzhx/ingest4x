@@ -1,8 +1,8 @@
-use crate::projects::{
-    CreateProjectInput, Project, ProjectRegistryState, ProjectRepository, ProjectRepositoryError,
-    UpdateProjectInput,
+use crate::repositories::{
+    CreateProjectInput, CreateProjectRuleSetInput, Project, ProjectRepository,
+    ProjectRepositoryError, RuleRepository, UpdateProjectInput,
 };
-use crate::rules::{CreateProjectRuleSetInput, RuleRepository};
+use crate::services::ProjectRegistryState;
 use actix_web::web::{self, Data, Json, Path, ServiceConfig};
 use actix_web::HttpResponse;
 use log::warn;
@@ -225,7 +225,7 @@ async fn delete_project(
 
 fn finalize_success_response(
     response: HttpResponse,
-    refresh_result: crate::projects::ProjectRepositoryResult<bool>,
+    refresh_result: crate::repositories::ProjectRepositoryResult<bool>,
     operation: &str,
     appid: &str,
 ) -> HttpResponse {

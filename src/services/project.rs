@@ -1,4 +1,4 @@
-use crate::projects::{Project, ProjectRepository, ProjectRepositoryResult};
+use crate::repositories::{Project, ProjectRepository, ProjectRepositoryResult};
 use actix_web::rt::{spawn, task::JoinHandle, time::sleep};
 use futures::lock::Mutex as AsyncMutex;
 use log::error;
@@ -106,7 +106,7 @@ async fn load_snapshot(
 mod tests {
     use super::*;
     use crate::db::init_sqlite_database;
-    use crate::projects::CreateProjectInput;
+    use crate::repositories::CreateProjectInput;
     use std::sync::{Arc, Barrier};
 
     #[tokio::test]

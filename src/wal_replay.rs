@@ -1,6 +1,6 @@
 use crate::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
-use crate::projects::ProjectRegistryState;
-use crate::rules::RuleRepository;
+use crate::repositories::RuleRepository;
+use crate::services::ProjectRegistryState;
 use crate::settings::CheckpointSettings;
 use crate::utils::events::{EventSinkState, EventStatus};
 use crate::wal::{

@@ -1,5 +1,5 @@
 use ingest4x::db::init_sqlite_database;
-use ingest4x::projects::{
+use ingest4x::repositories::{
     CreateProjectInput, ProjectRepository, ProjectRepositoryError, UpdateProjectInput,
 };
 use sea_orm::{ConnectionTrait, DbBackend, Statement};

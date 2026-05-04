@@ -1,17 +1,12 @@
-mod loader;
-mod merge;
-mod repository;
-mod types;
+pub(crate) mod loader;
+pub(crate) mod merge;
+pub(crate) mod types;
 mod validate;
 
 use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub use repository::{
-    CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, ProjectRuleSet, Rule,
-    RuleRepository, RuleRepositoryError, RuleSet, UpdateRuleInput, UpdateRuleSetInput,
-};
 pub use types::{CompiledEventRule, CompiledFieldRule, FieldType, Rules};
 
 #[derive(Clone)]

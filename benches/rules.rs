@@ -1,8 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use ingest4x::db::{init_sqlite_database, seed};
 use ingest4x::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
-use ingest4x::projects::ProjectRepository;
-use ingest4x::rules::RuleRepository;
+use ingest4x::repositories::{ProjectRepository, RuleRepository};
 use ingest4x::rules::Rules;
 use serde_json::{json, Value};
 use tokio::runtime::Runtime;

@@ -1,14 +1,16 @@
 pub mod admin;
 pub mod admin_ui;
 pub mod db;
+pub mod entities;
 pub mod errors;
 pub mod event;
 pub mod ingest;
 pub mod logging;
-pub mod projects;
+pub mod repositories;
 pub mod rhai_ctx;
 pub mod rules;
 pub mod server;
+pub mod services;
 pub mod settings;
 pub mod utils;
 pub mod wal;
