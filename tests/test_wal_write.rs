@@ -753,6 +753,27 @@ async fn wal_writer_creates_segment_after_checkpoint_when_segments_are_deleted()
 }
 
 #[actix_rt::test]
+async fn wal_writer_recreates_empty_active_segment_with_stale_start_lsn() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    fs::create_dir_all(&wal_dir).expect("create wal dir");
+    fs::write(wal_dir.join("node_id"), "checkpoint-node\n").expect("write node id");
+    write_checkpoint(&wal_dir, "checkpoint-node", 7, 3, 2048);
+    write_empty_segment(&wal_dir, 4, "checkpoint-node", 1);
+
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let position = writer
+        .append(&test_record("after-stale-empty-segment"))
+        .expect("append record after stale empty segment");
+    drop(writer);
+
+    assert_eq!(position.segment, 4);
+    assert_eq!(position.lsn, 8);
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records[0].lsn, 8);
+}
+
+#[actix_rt::test]
 async fn wal_writer_rejects_second_writer_for_same_directory() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -1104,4 +1125,20 @@ fn write_checkpoint(
         .expect("serialize checkpoint"),
     )
     .expect("write checkpoint");
+}
+
+fn write_empty_segment(wal_dir: &Path, segment_id: u64, node_id: &str, start_lsn: u64) {
+    let node_id = node_id.as_bytes();
+    let mut header = vec![0_u8; 512];
+    header[0..8].copy_from_slice(b"i4x.seg\0");
+    header[8..10].copy_from_slice(&1_u16.to_be_bytes());
+    header[10..12].copy_from_slice(&512_u16.to_be_bytes());
+    header[12..20].copy_from_slice(&segment_id.to_be_bytes());
+    header[20..28].copy_from_slice(&1_777_877_000_000_u64.to_be_bytes());
+    header[28..36].copy_from_slice(&start_lsn.to_be_bytes());
+    header[36..38].copy_from_slice(&(node_id.len() as u16).to_be_bytes());
+    header[38..38 + node_id.len()].copy_from_slice(node_id);
+    let crc = crc32fast::hash(&header[..508]);
+    header[508..512].copy_from_slice(&crc.to_be_bytes());
+    fs::write(wal_dir.join(format!("{segment_id:020}.wal")), header).expect("write empty segment");
 }

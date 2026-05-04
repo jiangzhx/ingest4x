@@ -634,6 +634,12 @@ fn ensure_segment_file(
             format!("wal segment node_id mismatch: {}", path.display()),
         ));
     }
+    if file.metadata()?.len() == SEGMENT_HEADER_LEN && header.start_lsn != start_lsn {
+        drop(file);
+        fs::remove_file(&path)?;
+        sync_directory(dir)?;
+        return create_segment_file(dir, segment_id, node_id, start_lsn);
+    }
     file.seek(SeekFrom::End(0))?;
 
     Ok(file)
