@@ -105,6 +105,8 @@ pub struct DatabaseSettings {
 #[allow(unused)]
 pub struct WalSettings {
     pub dir: String,
+    #[serde(default)]
+    pub node_id: Option<String>,
     #[serde(default = "default_wal_flush_interval")]
     pub wal_flush_interval: String,
     #[serde(default = "default_wal_max_write_buffer_size")]

@@ -2,7 +2,9 @@ use crate::ingest::processor::{ProcessorOutput, ProcessorRequestContext, Process
 use crate::projects::ProjectRegistryState;
 use crate::rules::RuleRepository;
 use crate::utils::events::{EventSinkState, EventStatus};
-use crate::wal::{read_entries_after_limit, remove_segments_before, WalPosition, WalRecord};
+use crate::wal::{
+    read_entries_after_limit, remove_segments_covered_by_checkpoint, WalPosition, WalRecord,
+};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,15 +27,23 @@ pub struct WalReplayContext<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct WalCheckpoint {
-    segment: u64,
-    offset: u64,
+    #[serde(default = "checkpoint_version")]
+    version: u16,
+    #[serde(default)]
+    checkpoint_lsn: u64,
+    #[serde(default, alias = "segment")]
+    checkpoint_segment_id: u64,
+    #[serde(default, alias = "offset")]
+    checkpoint_segment_offset: u64,
 }
 
 impl From<WalPosition> for WalCheckpoint {
     fn from(position: WalPosition) -> Self {
         Self {
-            segment: position.segment,
-            offset: position.offset,
+            version: checkpoint_version(),
+            checkpoint_lsn: position.lsn,
+            checkpoint_segment_id: position.segment,
+            checkpoint_segment_offset: position.offset,
         }
     }
 }
@@ -41,10 +51,15 @@ impl From<WalPosition> for WalCheckpoint {
 impl From<WalCheckpoint> for WalPosition {
     fn from(checkpoint: WalCheckpoint) -> Self {
         Self {
-            segment: checkpoint.segment,
-            offset: checkpoint.offset,
+            lsn: checkpoint.checkpoint_lsn,
+            segment: checkpoint.checkpoint_segment_id,
+            offset: checkpoint.checkpoint_segment_offset,
         }
     }
+}
+
+const fn checkpoint_version() -> u16 {
+    1
 }
 
 pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
@@ -55,7 +70,11 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     for entry in entries {
         replay_record(&context, &entry.record).await?;
         write_checkpoint(context.dir, entry.next_position)?;
-        remove_segments_before(context.dir, entry.next_position.segment)?;
+        remove_segments_covered_by_checkpoint(
+            context.dir,
+            entry.next_position.lsn,
+            entry.next_position.segment,
+        )?;
         replayed += 1;
     }
 

@@ -474,7 +474,117 @@ async fn read_all_records_ignores_trailing_partial_frame() {
     );
 
     let records = read_all_records(&wal_dir).expect("read wal records");
-    assert_eq!(records, vec![record]);
+    let node_id = wal_node_id(&wal_dir);
+    assert_eq!(records, vec![with_wal_metadata(record, 1, &node_id)]);
+}
+
+#[actix_rt::test]
+async fn wal_writer_assigns_lsn_and_recovers_next_lsn_after_restart() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let first = test_record("first");
+    let first_position = writer.append(&first).expect("append first");
+    let second = test_record("second");
+    let second_position = writer.append(&second).expect("append second");
+    drop(writer);
+
+    assert_eq!(first_position.lsn, 1);
+    assert_eq!(second_position.lsn, 2);
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records[0].lsn, 1);
+    assert_eq!(records[1].lsn, 2);
+
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("restart wal writer");
+    let third_position = writer.append(&test_record("third")).expect("append third");
+    drop(writer);
+
+    assert_eq!(third_position.lsn, 3);
+    let records = read_all_records(&wal_dir).expect("read wal records after restart");
+    assert_eq!(
+        records.iter().map(|record| record.lsn).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+}
+
+#[actix_rt::test]
+async fn wal_writer_rejects_second_writer_for_same_directory() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("first wal writer");
+
+    let error = WalWriter::new(&wal_settings(&wal_dir)).expect_err("second writer should fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+    drop(writer);
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("writer after lock release");
+    drop(writer);
+}
+
+#[actix_rt::test]
+async fn wal_writer_generates_and_reuses_persistent_node_id_when_unconfigured() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let first = test_record("first");
+    writer.append(&first).expect("append first");
+    drop(writer);
+
+    let node_id_path = wal_dir.join("node_id");
+    let node_id = fs::read_to_string(&node_id_path).expect("read node id");
+    assert!(!node_id.trim().is_empty());
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records[0].node_id, node_id.trim());
+
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("restart wal writer");
+    writer
+        .append(&test_record("second"))
+        .expect("append second");
+    drop(writer);
+
+    let records = read_all_records(&wal_dir).expect("read wal records after restart");
+    assert_eq!(records[1].node_id, node_id.trim());
+}
+
+#[actix_rt::test]
+async fn wal_writer_persists_configured_node_id_and_rejects_conflict() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.node_id = Some("configured-node".to_string());
+
+    let writer = WalWriter::new(&settings).expect("wal writer");
+    writer.append(&test_record("first")).expect("append first");
+    drop(writer);
+
+    assert_eq!(wal_node_id(&wal_dir), "configured-node");
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records[0].node_id, "configured-node");
+
+    settings.node_id = Some("different-node".to_string());
+    let error = WalWriter::new(&settings).expect_err("node id conflict should fail");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[actix_rt::test]
+async fn wal_segment_creation_removes_stale_tmp_before_rename() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    fs::create_dir_all(&wal_dir).expect("create wal dir");
+    let stale_tmp = wal_dir.join("00000000000000000002.wal.tmp");
+    fs::write(&stale_tmp, b"stale tmp").expect("write stale tmp");
+
+    let mut settings = wal_settings(&wal_dir);
+    settings.wal_segment_max_bytes = 16;
+    let writer = WalWriter::new(&settings).expect("wal writer");
+    writer.append(&test_record("first")).expect("append first");
+    writer
+        .append(&test_record("second"))
+        .expect("append second");
+    drop(writer);
+
+    assert!(wal_dir.join("00000000000000000002.wal").exists());
+    assert!(!stale_tmp.exists());
 }
 
 #[actix_rt::test]
@@ -497,7 +607,14 @@ async fn wal_writer_truncates_trailing_partial_frame_before_append() {
     drop(writer);
 
     let records = read_all_records(&wal_dir).expect("read wal records");
-    assert_eq!(records, vec![first, second]);
+    let node_id = wal_node_id(&wal_dir);
+    assert_eq!(
+        records,
+        vec![
+            with_wal_metadata(first, 1, &node_id),
+            with_wal_metadata(second, 2, &node_id)
+        ]
+    );
 }
 
 #[actix_rt::test]
@@ -514,7 +631,8 @@ async fn read_entries_after_limit_stops_before_scanning_extra_frames() {
     let entries =
         read_entries_after_limit(&wal_dir, None, Some(1)).expect("read first limited entry");
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].record, first);
+    let node_id = wal_node_id(&wal_dir);
+    assert_eq!(entries[0].record, with_wal_metadata(first, 1, &node_id));
 
     let err = read_entries_after_limit(&wal_dir, Some(entries[0].next_position), Some(1))
         .expect_err("next frame should still be corrupt");
@@ -542,7 +660,14 @@ async fn no_sync_flush_failure_rolls_back_written_batch() {
     writer.flush().expect("flush retry");
 
     let records = read_all_records(&wal_dir).expect("read wal records");
-    assert_eq!(records, vec![first, second]);
+    let node_id = wal_node_id(&wal_dir);
+    assert_eq!(
+        records,
+        vec![
+            with_wal_metadata(first, 1, &node_id),
+            with_wal_metadata(second, 2, &node_id)
+        ]
+    );
 }
 
 #[actix_rt::test]
@@ -571,13 +696,22 @@ async fn no_sync_flush_failure_removes_segments_created_by_batch() {
     writer.flush().expect("flush retry");
 
     let records = read_all_records(&wal_dir).expect("read wal records");
-    assert_eq!(records, vec![first, second, third]);
+    let node_id = wal_node_id(&wal_dir);
+    assert_eq!(
+        records,
+        vec![
+            with_wal_metadata(first, 1, &node_id),
+            with_wal_metadata(second, 2, &node_id),
+            with_wal_metadata(third, 3, &node_id)
+        ]
+    );
 }
 
 fn wal_settings(wal_dir: &Path) -> WalSettings {
     ingest4x::wal::fail_after_test_writes(usize::MAX);
     WalSettings {
         dir: wal_dir.display().to_string(),
+        node_id: None,
         wal_flush_interval: "1s".to_string(),
         wal_max_write_buffer_size: 100_000,
         no_sync: false,
@@ -594,6 +728,23 @@ fn test_record(body: &str) -> ingest4x::wal::WalRecord {
         BTreeMap::new(),
         body.as_bytes().to_vec(),
     )
+}
+
+fn with_wal_metadata(
+    mut record: ingest4x::wal::WalRecord,
+    lsn: u64,
+    node_id: &str,
+) -> ingest4x::wal::WalRecord {
+    record.lsn = lsn;
+    record.node_id = node_id.to_string();
+    record
+}
+
+fn wal_node_id(wal_dir: &Path) -> String {
+    fs::read_to_string(wal_dir.join("node_id"))
+        .expect("read node id")
+        .trim()
+        .to_string()
 }
 
 fn append_bytes(path: &Path, bytes: &[u8]) {

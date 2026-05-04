@@ -12,3 +12,4 @@ web/admin/dist/
 /ingest4x.db-wal
 docs/features
 docs/superpowers
+wal/

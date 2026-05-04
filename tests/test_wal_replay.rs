@@ -130,6 +130,13 @@ ack = ["kafka_invalid"]
     assert_eq!(emitted["xcontext"]["installid"], json!("iid-wal-replay"));
     assert_eq!(emitted["xcontext"]["currencytype"], json!("CNY"));
     assert!(wal_dir.join("checkpoint.json").exists());
+    let checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoint.json")).expect("read checkpoint"),
+    )
+    .expect("checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
+    assert_eq!(checkpoint["checkpoint_segment_id"], json!(1));
+    assert!(checkpoint["checkpoint_segment_offset"].is_number());
 }
 
 #[actix_rt::test]
@@ -221,6 +228,7 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
     .expect("processor should initialize");
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
+        node_id: None,
         wal_flush_interval: "1s".to_string(),
         wal_max_write_buffer_size: 100_000,
         no_sync: false,
@@ -454,7 +462,8 @@ ack = ["kafka_invalid"]
                     "xwhat": "custom_event",
                     "xcontext": {
                         "installid": installid,
-                        "os": "ios"
+                        "os": "ios",
+                        "idfa": format!("idfa-{installid}")
                     }
                 }))
                 .expect("serialize payload"),

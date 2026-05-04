@@ -11,11 +11,14 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::error;
+use uuid::Uuid;
 
 const FILE_TYPE_IDENTIFIER: &[u8] = b"i4x.001";
 const SEGMENT_HEADER_LEN: u64 = FILE_TYPE_IDENTIFIER.len() as u64 + 4;
 const SEGMENT_EXTENSION: &str = "wal";
 const FIRST_SEGMENT_ID: u64 = 1;
+const NODE_ID_FILE: &str = "node_id";
+const WAL_LOCK_FILE: &str = "wal.lock";
 
 static RECORD_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[cfg(debug_assertions)]
@@ -26,6 +29,10 @@ thread_local! {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalRecord {
     pub record_id: String,
+    #[serde(default)]
+    pub lsn: u64,
+    #[serde(default)]
+    pub node_id: String,
     pub received_at_ms: u64,
     pub method: String,
     pub path: String,
@@ -37,6 +44,7 @@ pub struct WalRecord {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WalPosition {
+    pub lsn: u64,
     pub segment: u64,
     pub offset: u64,
 }
@@ -56,6 +64,8 @@ pub struct WalWriter {
 #[derive(Debug)]
 struct WalWriterInner {
     dir: PathBuf,
+    _lock_file: File,
+    node_id: String,
     segment_max_bytes: u64,
     wal_flush_interval: Duration,
     wal_max_write_buffer_size: usize,
@@ -67,6 +77,7 @@ struct WalWriterInner {
 struct WalWriterState {
     segment_id: u64,
     offset: u64,
+    next_lsn: u64,
     buffered: Vec<WalRecord>,
 }
 
@@ -74,9 +85,12 @@ impl WalWriter {
     pub fn new(settings: &WalSettings) -> io::Result<Self> {
         let dir = PathBuf::from(&settings.dir);
         fs::create_dir_all(&dir)?;
+        let lock_file = acquire_wal_lock(&dir)?;
+        let node_id = resolve_node_id(settings.node_id.as_deref(), &dir)?;
         let segment_id = last_segment_id(&dir)?.unwrap_or(FIRST_SEGMENT_ID);
         ensure_segment_file(&dir, segment_id)?;
         let offset = repair_segment_tail(&segment_path(&dir, segment_id))?;
+        let next_lsn = recover_next_lsn(&dir)?;
         let wal_flush_interval =
             humantime::parse_duration(&settings.wal_flush_interval).map_err(|error| {
                 io::Error::new(
@@ -88,6 +102,8 @@ impl WalWriter {
 
         let inner = Arc::new(WalWriterInner {
             dir,
+            _lock_file: lock_file,
+            node_id,
             segment_max_bytes: settings.wal_segment_max_bytes.max(SEGMENT_HEADER_LEN + 1),
             wal_flush_interval,
             wal_max_write_buffer_size: settings.wal_max_write_buffer_size.max(1),
@@ -95,6 +111,7 @@ impl WalWriter {
             state: Mutex::new(WalWriterState {
                 segment_id,
                 offset,
+                next_lsn,
                 buffered: Vec::new(),
             }),
         });
@@ -139,10 +156,14 @@ impl WalWriterInner {
             .lock()
             .map_err(|_| io::Error::other("wal writer mutex poisoned"))?;
         let position = WalPosition {
+            lsn: state.next_lsn,
             segment: state.segment_id,
             offset: state.offset,
         };
-        state.buffered.push(record.clone());
+        let mut record = record.clone();
+        assign_wal_metadata(&mut record, state.next_lsn, &self.node_id);
+        state.next_lsn += 1;
+        state.buffered.push(record);
 
         if state.buffered.len() >= self.wal_max_write_buffer_size {
             self.flush_buffer_locked(&mut state)?;
@@ -152,13 +173,18 @@ impl WalWriterInner {
     }
 
     fn append_persisted(&self, record: &WalRecord) -> io::Result<WalPosition> {
-        let bytes = serialize_frame(record)?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| io::Error::other("wal writer mutex poisoned"))?;
+        let lsn = state.next_lsn;
+        let mut record = record.clone();
+        assign_wal_metadata(&mut record, lsn, &self.node_id);
+        let bytes = serialize_frame(&record)?;
 
-        self.append_frame_locked(&mut state, &bytes, true)
+        let position = self.append_frame_locked(&mut state, &bytes, lsn, true)?;
+        state.next_lsn += 1;
+        Ok(position)
     }
 
     fn flush_buffer(&self) -> io::Result<()> {
@@ -182,7 +208,7 @@ impl WalWriterInner {
             let mut touched_segments = BTreeSet::new();
             for record in &buffered {
                 let bytes = serialize_frame(record)?;
-                let position = self.append_frame_locked(state, &bytes, false)?;
+                let position = self.append_frame_locked(state, &bytes, record.lsn, false)?;
                 touched_segments.insert(position.segment);
             }
             for segment_id in touched_segments {
@@ -206,6 +232,7 @@ impl WalWriterInner {
         &self,
         state: &mut WalWriterState,
         bytes: &[u8],
+        lsn: u64,
         sync: bool,
     ) -> io::Result<WalPosition> {
         if state.offset > SEGMENT_HEADER_LEN
@@ -219,6 +246,7 @@ impl WalWriterInner {
         let path = segment_path(&self.dir, state.segment_id);
         let mut file = OpenOptions::new().append(true).open(&path)?;
         let position = WalPosition {
+            lsn,
             segment: state.segment_id,
             offset: state.offset,
         };
@@ -284,6 +312,8 @@ pub fn new_record(
     let sequence = RECORD_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     WalRecord {
         record_id: format!("wal-{received_at_ms}-{sequence}"),
+        lsn: 0,
+        node_id: String::new(),
         received_at_ms,
         method: method.into(),
         path: path.into(),
@@ -359,6 +389,62 @@ pub fn remove_segments_before(dir: impl AsRef<Path>, segment: u64) -> io::Result
     sync_directory(dir)
 }
 
+fn acquire_wal_lock(dir: &Path) -> io::Result<File> {
+    let path = dir.join(WAL_LOCK_FILE);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)?;
+
+    if let Err(error) = file.try_lock() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "wal directory lock is already held: {}: {error}",
+                path.display()
+            ),
+        ));
+    }
+
+    file.set_len(0)?;
+    file.write_all(std::process::id().to_string().as_bytes())?;
+    file.write_all(b"\n")?;
+    file.sync_data()?;
+    sync_directory(dir)?;
+    Ok(file)
+}
+
+pub fn remove_segments_covered_by_checkpoint(
+    dir: impl AsRef<Path>,
+    checkpoint_lsn: u64,
+    keep_from_segment: u64,
+) -> io::Result<()> {
+    let dir = dir.as_ref();
+    let mut removed = false;
+    for segment_id in segment_ids(dir)? {
+        if segment_id >= keep_from_segment {
+            continue;
+        }
+        let path = segment_path(dir, segment_id);
+        let max_lsn = scan_segment(&path)?
+            .records
+            .into_iter()
+            .map(|record| record.lsn)
+            .max()
+            .unwrap_or(0);
+        if max_lsn <= checkpoint_lsn {
+            fs::remove_file(path)?;
+            removed = true;
+        }
+    }
+    if removed {
+        sync_directory(dir)?;
+    }
+    Ok(())
+}
+
 fn read_segment_records(path: &Path) -> io::Result<Vec<WalRecord>> {
     scan_segment(path).map(|scan| scan.records)
 }
@@ -392,10 +478,12 @@ fn read_segment_entries_after(
         };
         entries.push(WalEntry {
             position: WalPosition {
+                lsn: record.lsn,
                 segment: segment_id,
                 offset: frame_start,
             },
             next_position: WalPosition {
+                lsn: record.lsn,
                 segment: segment_id,
                 offset: next_offset,
             },
@@ -451,41 +539,57 @@ fn maybe_fail_test_write() -> io::Result<()> {
 
 fn ensure_segment_file(dir: &Path, segment_id: u64) -> io::Result<File> {
     let path = segment_path(dir, segment_id);
-    let mut file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .append(true)
-        .open(&path)?;
-
-    if file.metadata()?.len() == 0 {
-        file.write_all(FILE_TYPE_IDENTIFIER)?;
-        file.write_all(&compute_header_crc().to_be_bytes())?;
-        file.sync_data()?;
-        sync_directory(dir)?;
-    } else {
-        let mut identifier = vec![0; FILE_TYPE_IDENTIFIER.len()];
-        file.seek(SeekFrom::Start(0))?;
-        file.read_exact(&mut identifier)?;
-        if identifier != FILE_TYPE_IDENTIFIER {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid wal segment identifier: {}", path.display()),
-            ));
-        }
-        let mut header_crc = [0_u8; 4];
-        file.read_exact(&mut header_crc)?;
-        let expected_header_crc = u32::from_be_bytes(header_crc);
-        let actual_header_crc = compute_header_crc();
-        if actual_header_crc != expected_header_crc {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("wal segment header crc mismatch: {}", path.display()),
-            ));
-        }
-        file.seek(SeekFrom::End(0))?;
+    if !path.exists() {
+        return create_segment_file(dir, segment_id);
     }
 
+    let mut file = OpenOptions::new().read(true).append(true).open(&path)?;
+
+    let mut identifier = vec![0; FILE_TYPE_IDENTIFIER.len()];
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut identifier)?;
+    if identifier != FILE_TYPE_IDENTIFIER {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid wal segment identifier: {}", path.display()),
+        ));
+    }
+    let mut header_crc = [0_u8; 4];
+    file.read_exact(&mut header_crc)?;
+    let expected_header_crc = u32::from_be_bytes(header_crc);
+    let actual_header_crc = compute_header_crc();
+    if actual_header_crc != expected_header_crc {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal segment header crc mismatch: {}", path.display()),
+        ));
+    }
+    file.seek(SeekFrom::End(0))?;
+
     Ok(file)
+}
+
+fn create_segment_file(dir: &Path, segment_id: u64) -> io::Result<File> {
+    let path = segment_path(dir, segment_id);
+    let tmp_path = segment_tmp_path(dir, segment_id);
+    match fs::remove_file(&tmp_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&tmp_path)?;
+    file.write_all(FILE_TYPE_IDENTIFIER)?;
+    file.write_all(&compute_header_crc().to_be_bytes())?;
+    file.sync_data()?;
+    drop(file);
+    fs::rename(&tmp_path, &path)?;
+    sync_directory(dir)?;
+    OpenOptions::new().read(true).append(true).open(&path)
 }
 
 fn repair_segment_tail(path: &Path) -> io::Result<u64> {
@@ -515,10 +619,12 @@ fn scan_segment(path: &Path) -> io::Result<SegmentScan> {
         };
         let entry = WalEntry {
             position: WalPosition {
+                lsn: record.lsn,
                 segment: segment_id,
                 offset: frame_start,
             },
             next_position: WalPosition {
+                lsn: record.lsn,
                 segment: segment_id,
                 offset: next_offset,
             },
@@ -597,8 +703,77 @@ fn compute_header_crc() -> u32 {
     crc32fast::hash(FILE_TYPE_IDENTIFIER)
 }
 
+fn assign_wal_metadata(record: &mut WalRecord, lsn: u64, node_id: &str) {
+    record.lsn = lsn;
+    record.node_id = node_id.to_string();
+}
+
+fn recover_next_lsn(dir: &Path) -> io::Result<u64> {
+    let mut max_lsn = 0;
+    for segment_id in segment_ids(dir)? {
+        for record in read_segment_records(&segment_path(dir, segment_id))? {
+            max_lsn = max_lsn.max(record.lsn);
+        }
+    }
+    Ok(max_lsn + 1)
+}
+
 fn sync_directory(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()
+}
+
+fn resolve_node_id(configured_node_id: Option<&str>, dir: &Path) -> io::Result<String> {
+    if let Some(node_id) = configured_node_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let path = dir.join(NODE_ID_FILE);
+        if path.exists() {
+            let existing = fs::read_to_string(&path)?;
+            let existing = existing.trim();
+            if existing != node_id {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "configured wal node_id '{node_id}' conflicts with persisted node_id '{existing}'"
+                    ),
+                ));
+            }
+        } else {
+            write_node_id_file(dir, node_id)?;
+        }
+        return Ok(node_id.to_string());
+    }
+
+    let path = dir.join(NODE_ID_FILE);
+    if path.exists() {
+        let node_id = fs::read_to_string(&path)?;
+        let node_id = node_id.trim();
+        if !node_id.is_empty() {
+            return Ok(node_id.to_string());
+        }
+    }
+
+    let node_id = Uuid::new_v4().to_string();
+    write_node_id_file(dir, &node_id)?;
+    Ok(node_id)
+}
+
+fn write_node_id_file(dir: &Path, node_id: &str) -> io::Result<()> {
+    let tmp_path = dir.join(format!("{NODE_ID_FILE}.tmp"));
+    {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&tmp_path)?;
+        file.write_all(node_id.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_data()?;
+    }
+    fs::rename(&tmp_path, dir.join(NODE_ID_FILE))?;
+    sync_directory(dir)?;
+    Ok(())
 }
 
 fn segment_ids(dir: &Path) -> io::Result<Vec<u64>> {
@@ -630,6 +805,10 @@ fn last_segment_id(dir: &Path) -> io::Result<Option<u64>> {
 
 fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
     dir.join(format!("{segment_id:020}.{SEGMENT_EXTENSION}"))
+}
+
+fn segment_tmp_path(dir: &Path, segment_id: u64) -> PathBuf {
+    dir.join(format!("{segment_id:020}.{SEGMENT_EXTENSION}.tmp"))
 }
 
 fn segment_id_from_path(path: &Path) -> io::Result<u64> {
