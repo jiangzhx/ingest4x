@@ -661,6 +661,20 @@ fn wal_segment_path(wal_dir: &Path) -> std::path::PathBuf {
 }
 
 #[actix_rt::test]
+async fn read_all_records_rejects_segment_header_start_lsn_mismatch() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    writer.append(&test_record("first")).expect("append record");
+    drop(writer);
+
+    rewrite_segment_start_lsn(&wal_segment_path(&wal_dir), 2);
+
+    let error = read_all_records(&wal_dir).expect_err("segment start_lsn mismatch should fail");
+    assert!(error.to_string().contains("wal segment start_lsn mismatch"));
+}
+
+#[actix_rt::test]
 async fn read_all_records_ignores_trailing_partial_frame() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -968,4 +982,12 @@ fn append_bytes(path: &Path, bytes: &[u8]) {
         .expect("open wal segment")
         .write_all(bytes)
         .expect("append bytes");
+}
+
+fn rewrite_segment_start_lsn(path: &Path, start_lsn: u64) {
+    let mut bytes = fs::read(path).expect("read wal segment");
+    bytes[28..36].copy_from_slice(&start_lsn.to_be_bytes());
+    let crc = crc32fast::hash(&bytes[..508]);
+    bytes[508..512].copy_from_slice(&crc.to_be_bytes());
+    fs::write(path, bytes).expect("rewrite wal segment");
 }

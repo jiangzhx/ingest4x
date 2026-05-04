@@ -480,7 +480,7 @@ fn read_segment_entries_after(
     limit: Option<usize>,
 ) -> io::Result<Vec<WalEntry>> {
     let mut reader = BufReader::new(File::open(path)?);
-    verify_segment_header(&mut reader, path)?;
+    let header = read_segment_header(&mut reader, path)?;
     if start_offset < SEGMENT_HEADER_LEN {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -492,6 +492,8 @@ fn read_segment_entries_after(
     let segment_id = segment_id_from_path(path)?;
     let mut entries = Vec::new();
     let mut valid_offset = start_offset;
+    let validate_start_lsn = start_offset == SEGMENT_HEADER_LEN;
+    let mut first_lsn = None;
     loop {
         if limit.is_some_and(|limit| entries.len() >= limit) {
             break;
@@ -501,6 +503,7 @@ fn read_segment_entries_after(
         let Some((record, next_offset)) = read_record_frame(&mut reader, path, frame_start)? else {
             break;
         };
+        first_lsn.get_or_insert(record.lsn);
         entries.push(WalEntry {
             position: WalPosition {
                 lsn: record.lsn,
@@ -515,6 +518,13 @@ fn read_segment_entries_after(
             record,
         });
         valid_offset = next_offset;
+    }
+
+    if validate_start_lsn && first_lsn.is_some_and(|lsn| lsn != header.start_lsn) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal segment start_lsn mismatch: {}", path.display()),
+        ));
     }
 
     Ok(entries)
@@ -662,16 +672,18 @@ struct SegmentScan {
 
 fn scan_segment(path: &Path) -> io::Result<SegmentScan> {
     let mut reader = BufReader::new(File::open(path)?);
-    verify_segment_header(&mut reader, path)?;
+    let header = read_segment_header(&mut reader, path)?;
 
     let mut records = Vec::new();
     let mut valid_offset = SEGMENT_HEADER_LEN;
     let segment_id = segment_id_from_path(path)?;
+    let mut first_lsn = None;
     loop {
         let frame_start = valid_offset;
         let Some((record, next_offset)) = read_record_frame(&mut reader, path, frame_start)? else {
             break;
         };
+        first_lsn.get_or_insert(record.lsn);
         let entry = WalEntry {
             position: WalPosition {
                 lsn: record.lsn,
@@ -687,6 +699,13 @@ fn scan_segment(path: &Path) -> io::Result<SegmentScan> {
         };
         records.push(entry.record.clone());
         valid_offset = next_offset;
+    }
+
+    if first_lsn.is_some_and(|lsn| lsn != header.start_lsn) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal segment start_lsn mismatch: {}", path.display()),
+        ));
     }
 
     Ok(SegmentScan {
@@ -845,11 +864,8 @@ fn read_record_frame(
 #[derive(Debug)]
 struct SegmentHeader {
     segment_id: u64,
+    start_lsn: u64,
     node_id: String,
-}
-
-fn verify_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<()> {
-    read_segment_header(reader, path).map(|_| ())
 }
 
 fn read_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<SegmentHeader> {
@@ -892,6 +908,7 @@ fn read_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<Segmen
         ));
     }
     let segment_id = u64::from_be_bytes(header[12..20].try_into().expect("segment id bytes"));
+    let start_lsn = u64::from_be_bytes(header[28..36].try_into().expect("segment start_lsn bytes"));
     let node_id_len = u16::from_be_bytes(
         header[36..38]
             .try_into()
@@ -914,6 +931,7 @@ fn read_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<Segmen
     )?;
     Ok(SegmentHeader {
         segment_id,
+        start_lsn,
         node_id,
     })
 }
