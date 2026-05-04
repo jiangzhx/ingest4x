@@ -105,6 +105,7 @@ impl WalWriter {
         let next_lsn = recover_next_lsn(&dir, checkpoint.as_ref())?;
         ensure_segment_file(&dir, segment_id, &node_id, next_lsn)?;
         let offset = repair_segment_tail(&segment_path(&dir, segment_id))?;
+        ensure_wal_disk_space(&dir, settings.min_free_bytes, 0)?;
         let flush_max_interval =
             humantime::parse_duration(&settings.flush_max_interval).map_err(|error| {
                 io::Error::new(
@@ -276,17 +277,7 @@ impl WalWriterInner {
     }
 
     fn ensure_disk_space(&self, estimated_wal_bytes: u64) -> io::Result<()> {
-        if self.min_free_bytes == 0 {
-            return Ok(());
-        }
-        let available_bytes = fs2::available_space(&self.dir)?;
-        if available_bytes.saturating_sub(estimated_wal_bytes) < self.min_free_bytes {
-            return Err(io::Error::other(format!(
-                "wal disk space is insufficient: available_bytes={available_bytes} estimated_wal_bytes={estimated_wal_bytes} min_free_bytes={}",
-                self.min_free_bytes
-            )));
-        }
-        Ok(())
+        ensure_wal_disk_space(&self.dir, self.min_free_bytes, estimated_wal_bytes)
     }
 
     fn sync_segment(&self, segment_id: u64) -> io::Result<()> {
@@ -315,6 +306,23 @@ impl WalWriterInner {
         }
         sync_directory(&self.dir)
     }
+}
+
+fn ensure_wal_disk_space(
+    dir: &Path,
+    min_free_bytes: u64,
+    estimated_wal_bytes: u64,
+) -> io::Result<()> {
+    if min_free_bytes == 0 {
+        return Ok(());
+    }
+    let available_bytes = fs2::available_space(dir)?;
+    if available_bytes.saturating_sub(estimated_wal_bytes) < min_free_bytes {
+        return Err(io::Error::other(format!(
+            "wal disk space is insufficient: available_bytes={available_bytes} estimated_wal_bytes={estimated_wal_bytes} min_free_bytes={min_free_bytes}"
+        )));
+    }
+    Ok(())
 }
 
 fn spawn_flush_loop(inner: Weak<WalWriterInner>) {

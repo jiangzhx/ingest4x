@@ -808,16 +808,14 @@ async fn wal_writer_rejects_second_writer_for_same_directory() {
 }
 
 #[actix_rt::test]
-async fn wal_writer_rejects_append_when_min_free_bytes_cannot_be_met() {
+async fn wal_writer_rejects_startup_when_min_free_bytes_cannot_be_met() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
     settings.min_free_bytes = u64::MAX;
-    let writer = WalWriter::new(&settings).expect("wal writer");
 
-    let error = writer
-        .append(&test_record("oversized free space requirement"))
-        .expect_err("append should fail when WAL min free bytes cannot be preserved");
+    let error =
+        WalWriter::new(&settings).expect_err("startup should fail when WAL min free cannot be met");
 
     assert!(error.to_string().contains("wal disk space is insufficient"));
     assert!(read_all_records(&wal_dir)
