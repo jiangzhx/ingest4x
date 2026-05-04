@@ -5,7 +5,7 @@ use crate::utils::events::{EventSinkState, EventStatus};
 use crate::wal::{
     read_entries_after_limit, remove_segments_covered_by_checkpoint, WalPosition, WalRecord,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -132,9 +132,13 @@ async fn replay_record(context: &WalReplayContext<'_>, record: &WalRecord) -> Re
             warn!(
                 record_id = record.record_id.as_str(),
                 error = %error,
-                "skip invalid wal record json body"
+                "invalid wal record json body"
             );
-            return Ok(());
+            return Err(anyhow!(
+                "invalid wal record json body for {}: {}",
+                record.record_id,
+                error
+            ));
         }
     };
     let appid = json

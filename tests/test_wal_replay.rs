@@ -281,7 +281,7 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
 }
 
 #[actix_rt::test]
-async fn wal_replay_skips_invalid_json_record_and_continues() {
+async fn wal_replay_stops_on_invalid_json_record_without_checkpoint() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-replay-invalid-json.toml");
@@ -378,18 +378,15 @@ ack = ["kafka_invalid"]
         .await
         .expect("build app state");
 
-    assert_eq!(
-        server::replay_wal_once(&app_state)
-            .await
-            .expect("replay wal"),
-        2
-    );
+    let error = server::replay_wal_once(&app_state)
+        .await
+        .expect_err("invalid WAL json should stop replay");
 
-    let emitted = parse_json_message(read_message_payload(&consumer).await.as_str());
-    assert_eq!(
-        emitted["xcontext"]["installid"],
-        json!("iid-after-invalid-json")
-    );
+    assert!(error.to_string().contains("invalid wal record json body"));
+    assert!(!wal_dir.join("checkpoint.json").exists());
+    assert!(read_message_payload_with_short_timeout(&consumer)
+        .await
+        .is_none());
 }
 
 #[actix_rt::test]
