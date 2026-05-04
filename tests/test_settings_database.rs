@@ -53,6 +53,24 @@ fn settings_leaves_database_none_when_section_missing() {
     assert!(settings.database.is_none());
 }
 
+#[test]
+fn settings_reads_wal_flush_group_commit_fields() {
+    let settings = load_settings(
+        r#"
+[wal]
+dir = "./wal"
+flush_max_interval = "10ms"
+flush_max_records = 1000
+flush_max_bytes = 4194304
+"#,
+    );
+
+    let wal = settings.wal.expect("wal config");
+    assert_eq!(wal.flush_max_interval, "10ms");
+    assert_eq!(wal.flush_max_records, 1000);
+    assert_eq!(wal.flush_max_bytes, 4 * 1024 * 1024);
+}
+
 fn load_settings(database_section: &str) -> Settings {
     load_settings_with_management_section(&format!(
         r#"

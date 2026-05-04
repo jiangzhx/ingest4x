@@ -107,10 +107,12 @@ pub struct WalSettings {
     pub dir: String,
     #[serde(default)]
     pub node_id: Option<String>,
-    #[serde(default = "default_wal_flush_interval")]
-    pub wal_flush_interval: String,
-    #[serde(default = "default_wal_max_write_buffer_size")]
-    pub wal_max_write_buffer_size: usize,
+    #[serde(default = "default_wal_flush_max_interval")]
+    pub flush_max_interval: String,
+    #[serde(default = "default_wal_flush_max_records")]
+    pub flush_max_records: usize,
+    #[serde(default = "default_wal_flush_max_bytes")]
+    pub flush_max_bytes: u64,
     #[serde(default)]
     pub no_sync: bool,
     #[serde(default = "default_wal_segment_max_bytes")]
@@ -147,12 +149,16 @@ pub const fn default_wal_segment_max_bytes() -> u64 {
     128 * 1024 * 1024
 }
 
-pub fn default_wal_flush_interval() -> String {
-    "1s".to_string()
+pub fn default_wal_flush_max_interval() -> String {
+    "10ms".to_string()
 }
 
-pub const fn default_wal_max_write_buffer_size() -> usize {
-    100_000
+pub const fn default_wal_flush_max_records() -> usize {
+    1000
+}
+
+pub const fn default_wal_flush_max_bytes() -> u64 {
+    4 * 1024 * 1024
 }
 
 pub const fn default_processor_max_operations() -> u64 {

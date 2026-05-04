@@ -425,7 +425,7 @@ sinks = ["kafka_valid"]
 }
 
 #[actix_rt::test]
-async fn no_sync_buffers_until_wal_max_write_buffer_size_is_reached() {
+async fn no_sync_buffers_until_flush_max_records_is_reached() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -442,8 +442,9 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 no_sync = true
-wal_flush_interval = "1h"
-wal_max_write_buffer_size = 2
+flush_max_interval = "1h"
+flush_max_records = 2
+flush_max_bytes = 4194304
 
 [events.sink.kafka_valid]
 type = "kafka"
@@ -951,8 +952,8 @@ async fn no_sync_flush_failure_rolls_back_written_batch() {
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
     settings.no_sync = true;
-    settings.wal_max_write_buffer_size = 2;
-    settings.wal_flush_interval = "1h".to_string();
+    settings.flush_max_records = 2;
+    settings.flush_max_interval = "1h".to_string();
 
     let writer = WalWriter::new(&settings).expect("wal writer");
     ingest4x::wal::fail_after_test_writes(1);
@@ -982,8 +983,8 @@ async fn no_sync_flush_failure_removes_segments_created_by_batch() {
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
     settings.no_sync = true;
-    settings.wal_max_write_buffer_size = 3;
-    settings.wal_flush_interval = "1h".to_string();
+    settings.flush_max_records = 3;
+    settings.flush_max_interval = "1h".to_string();
     settings.wal_segment_max_bytes = 16;
 
     let writer = WalWriter::new(&settings).expect("wal writer");
@@ -1018,8 +1019,9 @@ fn wal_settings(wal_dir: &Path) -> WalSettings {
     WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        wal_flush_interval: "1s".to_string(),
-        wal_max_write_buffer_size: 100_000,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        flush_max_bytes: 4 * 1024 * 1024,
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,

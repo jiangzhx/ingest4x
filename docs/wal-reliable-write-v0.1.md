@@ -236,6 +236,12 @@ wal_flush_max_bytes: 4MB
 wal_flush_max_records: 1000
 ```
 
+当前实现状态：
+
+- `flush_max_interval` 已作为配置字段接入。
+- `flush_max_records` 已作为配置字段接入。
+- `flush_max_bytes` 已作为保留配置字段接入，但字节数触发 group commit 的逻辑尚未实现。
+
 允许配置范围：
 
 ```yaml
