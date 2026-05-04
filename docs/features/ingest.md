@@ -46,6 +46,7 @@
 - 路由注册：`src/server.rs`
 - 接入面端口：`8090`，只承载 `/` 与 `/ingest`
 - 管理面端口：`18090`，承载 `/metrics`、`/admin`、`/api/admin/*` 与 API 文档
+- WAL 可靠写入语义：`docs/wal-reliable-write-v0.1.md`
 - `POST /ingest` handler：`src/ingest/json.rs`
 - `GET /ingest` handler：`src/ingest/query.rs`
 - normalization：`src/ingest/normalize.rs`
