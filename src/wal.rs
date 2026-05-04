@@ -75,6 +75,7 @@ struct WalWriterInner {
     wal_flush_interval: Duration,
     wal_max_write_buffer_size: usize,
     no_sync: bool,
+    min_free_bytes: u64,
     state: Mutex<WalWriterState>,
 }
 
@@ -113,6 +114,7 @@ impl WalWriter {
             wal_flush_interval,
             wal_max_write_buffer_size: settings.wal_max_write_buffer_size.max(1),
             no_sync: settings.no_sync,
+            min_free_bytes: settings.min_free_bytes,
             state: Mutex::new(WalWriterState {
                 segment_id,
                 offset,
@@ -247,6 +249,7 @@ impl WalWriterInner {
             state.offset = SEGMENT_HEADER_LEN;
             ensure_segment_file(&self.dir, state.segment_id)?;
         }
+        self.ensure_disk_space(bytes.len() as u64)?;
 
         let path = segment_path(&self.dir, state.segment_id);
         let mut file = OpenOptions::new().append(true).open(&path)?;
@@ -261,6 +264,20 @@ impl WalWriterInner {
         }
         state.offset += bytes.len() as u64;
         Ok(position)
+    }
+
+    fn ensure_disk_space(&self, estimated_wal_bytes: u64) -> io::Result<()> {
+        if self.min_free_bytes == 0 {
+            return Ok(());
+        }
+        let available_bytes = fs2::available_space(&self.dir)?;
+        if available_bytes.saturating_sub(estimated_wal_bytes) < self.min_free_bytes {
+            return Err(io::Error::other(format!(
+                "wal disk space is insufficient: available_bytes={available_bytes} estimated_wal_bytes={estimated_wal_bytes} min_free_bytes={}",
+                self.min_free_bytes
+            )));
+        }
+        Ok(())
     }
 
     fn sync_segment(&self, segment_id: u64) -> io::Result<()> {

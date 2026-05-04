@@ -241,6 +241,7 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
         wal_max_write_buffer_size: 100_000,
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
     })
     .expect("wal writer");
     writer
@@ -443,6 +444,7 @@ async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write(
         wal_max_write_buffer_size: 100_000,
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
     })
     .expect("wal writer");
     writer
@@ -638,6 +640,7 @@ async fn wal_replay_rejects_checkpoint_with_invalid_checksum() {
         wal_max_write_buffer_size: 100_000,
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
     })
     .expect("wal writer");
     writer

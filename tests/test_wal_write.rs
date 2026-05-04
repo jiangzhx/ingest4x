@@ -703,6 +703,24 @@ async fn wal_writer_rejects_second_writer_for_same_directory() {
 }
 
 #[actix_rt::test]
+async fn wal_writer_rejects_append_when_min_free_bytes_cannot_be_met() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.min_free_bytes = u64::MAX;
+    let writer = WalWriter::new(&settings).expect("wal writer");
+
+    let error = writer
+        .append(&test_record("oversized free space requirement"))
+        .expect_err("append should fail when WAL min free bytes cannot be preserved");
+
+    assert!(error.to_string().contains("wal disk space is insufficient"));
+    assert!(read_all_records(&wal_dir)
+        .expect("read wal records")
+        .is_empty());
+}
+
+#[actix_rt::test]
 async fn wal_writer_generates_and_reuses_persistent_node_id_when_unconfigured() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -894,6 +912,7 @@ fn wal_settings(wal_dir: &Path) -> WalSettings {
         wal_max_write_buffer_size: 100_000,
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
     }
 }
 

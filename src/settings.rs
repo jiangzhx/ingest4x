@@ -117,6 +117,8 @@ pub struct WalSettings {
     pub no_sync: bool,
     #[serde(default = "default_wal_segment_max_bytes")]
     pub wal_segment_max_bytes: u64,
+    #[serde(default)]
+    pub min_free_bytes: u64,
 }
 
 pub fn default_kafka_delivery_timeout_ms() -> String {

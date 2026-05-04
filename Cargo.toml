@@ -44,6 +44,7 @@ crc32fast = "1.4.2"
 bitcode = { version = "0.6.7", features = ["serde"] }
 walkdir = "2.5.0"
 humantime = "2.1.0"
+fs2 = "0.4.3"
 uuid = { version = "1.18.1", features = ["v4"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio", "sqlx-mysql", "sqlx-sqlite"] }
 sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-mysql", "sqlx-sqlite"] }
