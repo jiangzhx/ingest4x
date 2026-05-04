@@ -34,7 +34,7 @@ pub async fn post_ingest(
     wal: Option<Data<WalWriter>>,
 ) -> HttpResponse {
     if let Some(wal) = wal {
-        return append_wal_record(&req, body.to_vec(), &wal).await;
+        return append_wal_record(&req, body.to_vec(), &project_registry, &wal).await;
     }
 
     let json = match serde_json::from_slice::<Value>(&body) {
@@ -289,8 +289,22 @@ pub(crate) fn processor_request_context(req: &HttpRequest) -> ProcessorRequestCo
 pub(crate) async fn append_wal_record(
     req: &HttpRequest,
     body: Vec<u8>,
+    project_registry: &ProjectRegistryState,
     wal: &WalWriter,
 ) -> HttpResponse {
+    let json = match serde_json::from_slice::<Value>(&body) {
+        Ok(json) => json,
+        Err(err) => return HttpResponse::BadRequest().body(format!("invalid json payload: {err}")),
+    };
+
+    let Some(appid) = json.get("appid").and_then(Value::as_str) else {
+        return HttpResponse::BadRequest().body("missing or invalid appid");
+    };
+
+    if !project_registry.contains(appid) {
+        return HttpResponse::NotFound().body("Project not found");
+    }
+
     let record = new_record(
         req.method().as_str(),
         req.path(),

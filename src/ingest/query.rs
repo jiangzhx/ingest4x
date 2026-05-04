@@ -45,7 +45,7 @@ pub async fn get_ingest(
     };
 
     if let Some(wal) = wal {
-        return append_wal_record(&req, decoded, &wal).await;
+        return append_wal_record(&req, decoded, &project_registry, &wal).await;
     }
 
     let json = match serde_json::from_slice::<Value>(&decoded) {

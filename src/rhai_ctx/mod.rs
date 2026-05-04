@@ -28,6 +28,7 @@ pub struct ProcessorRequestContext {
     method: String,
     path: String,
     headers: HashMap<String, String>,
+    request_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -62,7 +63,13 @@ impl ProcessorRequestContext {
             method: method.into(),
             path: path.into(),
             headers,
+            request_id: None,
         }
+    }
+
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        self
     }
 
     fn ip(&mut self) -> Dynamic {
@@ -86,6 +93,13 @@ impl ProcessorRequestContext {
             .map(|value| value.to_string().into())
             .unwrap_or(Dynamic::UNIT)
     }
+
+    fn request_id(&mut self) -> Dynamic {
+        self.request_id
+            .as_ref()
+            .map(|request_id| request_id.to_string().into())
+            .unwrap_or(Dynamic::UNIT)
+    }
 }
 
 pub(crate) fn register_api(engine: &mut Engine) {
@@ -104,6 +118,7 @@ fn register_request_api(engine: &mut Engine) {
     engine.register_fn("method", ProcessorRequestContext::method);
     engine.register_fn("path", ProcessorRequestContext::path);
     engine.register_fn("header", ProcessorRequestContext::header);
+    engine.register_fn("request_id", ProcessorRequestContext::request_id);
 }
 
 fn epoch_ms() -> Result<rhai::INT, Box<EvalAltResult>> {

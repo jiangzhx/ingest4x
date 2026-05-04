@@ -41,6 +41,13 @@ pub struct WalPosition {
     pub offset: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalEntry {
+    pub position: WalPosition,
+    pub next_position: WalPosition,
+    pub record: WalRecord,
+}
+
 #[derive(Debug)]
 pub struct WalWriter {
     inner: Arc<WalWriterInner>,
@@ -299,8 +306,105 @@ pub fn read_all_records(dir: impl AsRef<Path>) -> io::Result<Vec<WalRecord>> {
     Ok(records)
 }
 
+pub fn read_entries_after(
+    dir: impl AsRef<Path>,
+    checkpoint: Option<WalPosition>,
+) -> io::Result<Vec<WalEntry>> {
+    read_entries_after_limit(dir, checkpoint, None)
+}
+
+pub fn read_entries_after_limit(
+    dir: impl AsRef<Path>,
+    checkpoint: Option<WalPosition>,
+    limit: Option<usize>,
+) -> io::Result<Vec<WalEntry>> {
+    let dir = dir.as_ref();
+    let mut segments = segment_ids(dir)?;
+    segments.sort_unstable();
+
+    let mut entries = Vec::new();
+    for segment_id in segments {
+        if checkpoint.is_some_and(|checkpoint| segment_id < checkpoint.segment) {
+            continue;
+        }
+
+        let remaining = limit.map(|limit| limit.saturating_sub(entries.len()));
+        if remaining == Some(0) {
+            return Ok(entries);
+        }
+        let start_offset = checkpoint
+            .filter(|checkpoint| checkpoint.segment == segment_id)
+            .map(|checkpoint| checkpoint.offset)
+            .unwrap_or(SEGMENT_HEADER_LEN);
+        entries.extend(read_segment_entries_after(
+            &segment_path(dir, segment_id),
+            start_offset,
+            remaining,
+        )?);
+        if limit.is_some_and(|limit| entries.len() >= limit) {
+            return Ok(entries);
+        }
+    }
+    Ok(entries)
+}
+
+pub fn remove_segments_before(dir: impl AsRef<Path>, segment: u64) -> io::Result<()> {
+    let dir = dir.as_ref();
+    for segment_id in segment_ids(dir)? {
+        if segment_id >= segment {
+            continue;
+        }
+        fs::remove_file(segment_path(dir, segment_id))?;
+    }
+    sync_directory(dir)
+}
+
 fn read_segment_records(path: &Path) -> io::Result<Vec<WalRecord>> {
     scan_segment(path).map(|scan| scan.records)
+}
+
+fn read_segment_entries_after(
+    path: &Path,
+    start_offset: u64,
+    limit: Option<usize>,
+) -> io::Result<Vec<WalEntry>> {
+    let mut reader = BufReader::new(File::open(path)?);
+    verify_segment_header(&mut reader, path)?;
+    if start_offset < SEGMENT_HEADER_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid wal checkpoint offset: {}", path.display()),
+        ));
+    }
+    reader.seek(SeekFrom::Start(start_offset))?;
+
+    let segment_id = segment_id_from_path(path)?;
+    let mut entries = Vec::new();
+    let mut valid_offset = start_offset;
+    loop {
+        if limit.is_some_and(|limit| entries.len() >= limit) {
+            break;
+        }
+
+        let frame_start = valid_offset;
+        let Some((record, next_offset)) = read_record_frame(&mut reader, path, frame_start)? else {
+            break;
+        };
+        entries.push(WalEntry {
+            position: WalPosition {
+                segment: segment_id,
+                offset: frame_start,
+            },
+            next_position: WalPosition {
+                segment: segment_id,
+                offset: next_offset,
+            },
+            record,
+        });
+        valid_offset = next_offset;
+    }
+
+    Ok(entries)
 }
 
 fn serialize_frame(record: &WalRecord) -> io::Result<Vec<u8>> {
@@ -403,45 +507,68 @@ fn scan_segment(path: &Path) -> io::Result<SegmentScan> {
 
     let mut records = Vec::new();
     let mut valid_offset = SEGMENT_HEADER_LEN;
+    let segment_id = segment_id_from_path(path)?;
     loop {
         let frame_start = valid_offset;
-        let mut header = [0_u8; 8];
-        match reader.read_exact(&mut header) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error),
-        }
-
-        let len = u32::from_be_bytes(header[0..4].try_into().expect("length bytes")) as usize;
-        let expected_crc = u32::from_be_bytes(header[4..8].try_into().expect("crc bytes"));
-        let mut payload = vec![0; len];
-        match reader.read_exact(&mut payload) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error),
-        }
-        let actual_crc = crc32fast::hash(&payload);
-        if actual_crc != expected_crc {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("wal frame crc mismatch: {}", path.display()),
-            ));
-        }
-
-        let record = bitcode::deserialize::<WalRecord>(&payload).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid wal record payload: {error}"),
-            )
-        })?;
-        records.push(record);
-        valid_offset = frame_start + 8 + len as u64;
+        let Some((record, next_offset)) = read_record_frame(&mut reader, path, frame_start)? else {
+            break;
+        };
+        let entry = WalEntry {
+            position: WalPosition {
+                segment: segment_id,
+                offset: frame_start,
+            },
+            next_position: WalPosition {
+                segment: segment_id,
+                offset: next_offset,
+            },
+            record,
+        };
+        records.push(entry.record.clone());
+        valid_offset = next_offset;
     }
 
     Ok(SegmentScan {
         records,
         valid_offset,
     })
+}
+
+fn read_record_frame(
+    reader: &mut impl Read,
+    path: &Path,
+    frame_start: u64,
+) -> io::Result<Option<(WalRecord, u64)>> {
+    let mut header = [0_u8; 8];
+    match reader.read_exact(&mut header) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+
+    let len = u32::from_be_bytes(header[0..4].try_into().expect("length bytes")) as usize;
+    let expected_crc = u32::from_be_bytes(header[4..8].try_into().expect("crc bytes"));
+    let mut payload = vec![0; len];
+    match reader.read_exact(&mut payload) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    let actual_crc = crc32fast::hash(&payload);
+    if actual_crc != expected_crc {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal frame crc mismatch: {}", path.display()),
+        ));
+    }
+
+    let record = bitcode::deserialize::<WalRecord>(&payload).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid wal record payload: {error}"),
+        )
+    })?;
+    Ok(Some((record, frame_start + 8 + len as u64)))
 }
 
 fn verify_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<()> {
@@ -503,6 +630,18 @@ fn last_segment_id(dir: &Path) -> io::Result<Option<u64>> {
 
 fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
     dir.join(format!("{segment_id:020}.{SEGMENT_EXTENSION}"))
+}
+
+fn segment_id_from_path(path: &Path) -> io::Result<u64> {
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid wal segment path: {}", path.display()),
+            )
+        })
 }
 
 fn now_ms() -> u64 {

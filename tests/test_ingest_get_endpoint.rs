@@ -209,10 +209,16 @@ ack = ["kafka_invalid"]
     assert!(body_text.contains("xcontext.installid"));
 
     let kafka_string = read_message_payload(&error_consumer).await;
-    assert_eq!(
-        parse_event_sink_line(kafka_string.as_str()),
-        invalid_payload
-    );
+    let mut emitted = parse_event_sink_line(kafka_string.as_str());
+    assert!(emitted["xcontext"]["process_info"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("xcontext.installid"));
+    emitted["xcontext"]
+        .as_object_mut()
+        .unwrap()
+        .remove("process_info");
+    assert_eq!(emitted, invalid_payload);
 }
 
 #[actix_rt::test]

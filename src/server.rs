@@ -13,13 +13,18 @@ use crate::rules::RuleRepository;
 use crate::settings::{default_database_refresh_interval_secs, Settings};
 use crate::utils::events::{init_event_sinks, EventSinkState};
 use crate::utils::prometheus::{init_private_prometheus, init_public_prometheus};
+#[cfg(feature = "ingest")]
 use crate::wal::WalWriter;
+#[cfg(feature = "ingest")]
+use crate::wal_replay::{replay_once, WalReplayContext};
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{web, App, HttpResponse, HttpServer};
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(feature = "ingest")]
+use tracing::error;
 use tracing::info;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -79,6 +84,8 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
         app_state.project_registry.clone(),
         project_registry_refresh_interval(&settings),
     );
+    #[cfg(feature = "ingest")]
+    spawn_wal_replay_loop(app_state.clone());
 
     let public_prometheus = init_public_prometheus(shared_registry.clone());
     let server_bind_address = settings.server.bind_address.clone();
@@ -180,6 +187,42 @@ pub fn configure_private_app(cfg: &mut ServiceConfig, state: AppState) {
 
 pub fn configure_app(cfg: &mut ServiceConfig, state: AppState) {
     configure_public_app(cfg, state);
+}
+
+#[cfg(feature = "ingest")]
+pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
+    let Some(wal) = state.settings.wal.as_ref() else {
+        return Ok(0);
+    };
+
+    replay_once(WalReplayContext {
+        dir: std::path::Path::new(&wal.dir),
+        event_sinks: &state.event_sinks,
+        project_registry: &state.project_registry,
+        rule_repository: &state.rule_repository,
+        processor: &state.processor,
+    })
+    .await
+}
+
+#[cfg(feature = "ingest")]
+fn spawn_wal_replay_loop(state: AppState) {
+    if state.settings.wal.is_none() {
+        return;
+    }
+
+    tokio::spawn(async move {
+        loop {
+            match replay_wal_once(&state).await {
+                Ok(0) => tokio::time::sleep(Duration::from_secs(1)).await,
+                Ok(_) => {}
+                Err(error) => {
+                    error!(error = %error, "wal replay worker stopped");
+                    break;
+                }
+            }
+        }
+    });
 }
 
 async fn init_project_state(

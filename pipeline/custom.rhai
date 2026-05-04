@@ -31,14 +31,40 @@ fn normalize_event(event, request) {
             }
         }
 
-        xcontext["process_info"] = #{
-            receive_host_ip: host_ip(),
-            receive_time: epoch_ms(),
-            ingest4x_version: ingest4x_version()
-        };
+        xcontext["process_info"] = process_info(request, ());
 
         event["xcontext"] = xcontext;
     }
 
     return event;
+}
+
+fn attach_reject_process_info(event, request, reason) {
+    if !event.contains("xcontext") || event["xcontext"] == () {
+        event["xcontext"] = #{};
+    }
+
+    let xcontext = event["xcontext"];
+    xcontext["process_info"] = process_info(request, reason);
+    event["xcontext"] = xcontext;
+    return event;
+}
+
+fn process_info(request, reason) {
+    let info = #{
+        receive_host_ip: host_ip(),
+        receive_time: epoch_ms(),
+        ingest4x_version: ingest4x_version()
+    };
+
+    let request_id = request.request_id();
+    if request_id != () {
+        info["request_id"] = request_id;
+    }
+
+    if reason != () {
+        info["reason"] = reason;
+    }
+
+    return info;
 }

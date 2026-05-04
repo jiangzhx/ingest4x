@@ -98,10 +98,16 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
     assert!(body_text.contains("xcontext.installid"));
 
     let kafka_string = read_message_payload(&error_consumer).await;
-    assert_json_eq!(
-        serde_json::from_str::<Value>(kafka_string.as_str()).unwrap(),
-        invalid_payload
-    );
+    let mut emitted = serde_json::from_str::<Value>(kafka_string.as_str()).unwrap();
+    assert!(emitted["xcontext"]["process_info"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("xcontext.installid"));
+    emitted["xcontext"]
+        .as_object_mut()
+        .unwrap()
+        .remove("process_info");
+    assert_json_eq!(emitted, invalid_payload);
 }
 
 #[actix_rt::test]
