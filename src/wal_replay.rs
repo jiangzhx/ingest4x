@@ -108,10 +108,18 @@ const fn checkpoint_version() -> u16 {
 
 pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     let checkpoint = read_checkpoint(context.dir)?;
+    let mut expected_lsn = checkpoint.map(|position| position.lsn + 1).unwrap_or(1);
     let entries = read_entries_after_limit(context.dir, checkpoint, Some(REPLAY_BATCH_SIZE))?;
     let mut replayed = 0;
 
     for entry in entries {
+        if entry.position.lsn != expected_lsn {
+            return Err(anyhow!(
+                "non-contiguous wal lsn: expected {}, got {}",
+                expected_lsn,
+                entry.position.lsn
+            ));
+        }
         replay_record(&context, &entry.record).await?;
         write_checkpoint(context.dir, entry.next_position)?;
         remove_segments_covered_by_checkpoint(
@@ -119,6 +127,7 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
             entry.next_position.lsn,
             entry.next_position.segment,
         )?;
+        expected_lsn = entry.position.lsn + 1;
         replayed += 1;
     }
 

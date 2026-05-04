@@ -11,7 +11,7 @@ use ingest4x::settings::{
     EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, Settings,
 };
 use ingest4x::utils::events::init_event_sinks;
-use ingest4x::wal::{new_record, WalRecord, WalWriter};
+use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
 use ingest4x::wal_replay::{replay_once, WalReplayContext};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
@@ -19,7 +19,9 @@ use rdkafka::producer::DefaultProducerContext;
 use rdkafka::{ClientConfig, Message};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -784,6 +786,98 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
     assert!(error.to_string().contains("checkpoint node_id mismatch"));
 }
 
+#[actix_rt::test]
+async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        valid: EventRouteSet {
+            routes: vec![EventRouteSettings {
+                sinks: vec!["stdout".to_string()],
+                ack: vec!["stdout".to_string()],
+                ..Default::default()
+            }],
+        },
+        invalid: EventRouteSet::default(),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn main(event, request) {
+                return accept(event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        wal_flush_interval: "1s".to_string(),
+        wal_max_write_buffer_size: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-lsn-1",
+                "os": "ios"
+            }
+        })))
+        .expect("append first record");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-lsn-3",
+                "os": "ios"
+            }
+        })))
+        .expect("append second record");
+    drop(writer);
+    rewrite_wal_entry_lsn(&wal_dir, 1, 3);
+
+    let error = replay_once(WalReplayContext {
+        dir: &wal_dir,
+        event_sinks: &event_sinks,
+        project_registry: &project_registry,
+        rule_repository: &rule_repository,
+        processor: &processor,
+    })
+    .await
+    .expect_err("LSN gap should stop WAL replay");
+
+    assert!(error.to_string().contains("non-contiguous wal lsn"));
+    let checkpoint: Value =
+        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
+            .expect("checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
+}
+
 struct TestKafkaConfig {
     bootstrap_servers: String,
     topic: String,
@@ -843,6 +937,42 @@ fn test_wal_record(payload: Value) -> WalRecord {
         BTreeMap::new(),
         serde_json::to_vec(&payload).expect("serialize payload"),
     )
+}
+
+fn rewrite_wal_entry_lsn(wal_dir: &Path, entry_index: usize, new_lsn: u64) {
+    let entries = read_entries_after_limit(wal_dir, None, None).expect("read wal entries");
+    let entry = entries.get(entry_index).expect("entry to rewrite");
+    let path = wal_dir.join(format!("{:020}.wal", entry.position.segment));
+    let frame_len = usize::try_from(entry.next_position.offset - entry.position.offset)
+        .expect("frame length should fit usize");
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open wal segment");
+    file.seek(SeekFrom::Start(entry.position.offset))
+        .expect("seek frame");
+    let mut frame = vec![0_u8; frame_len];
+    file.read_exact(&mut frame).expect("read frame");
+
+    let header_len = u16::from_be_bytes(frame[10..12].try_into().expect("header len")) as usize;
+    let payload_len = u32::from_be_bytes(frame[34..38].try_into().expect("payload len")) as usize;
+    let payload_start = header_len;
+    let payload_end = payload_start + payload_len;
+    let mut record: WalRecord =
+        bitcode::deserialize(&frame[payload_start..payload_end]).expect("deserialize record");
+    record.lsn = new_lsn;
+    let payload = bitcode::serialize(&record).expect("serialize record");
+    assert_eq!(payload.len(), payload_len);
+
+    frame[16..24].copy_from_slice(&new_lsn.to_be_bytes());
+    frame[38..42].copy_from_slice(&crc32fast::hash(&payload).to_be_bytes());
+    frame[payload_start..payload_end].copy_from_slice(&payload);
+
+    file.seek(SeekFrom::Start(entry.position.offset))
+        .expect("seek frame for rewrite");
+    file.write_all(&frame).expect("rewrite frame");
+    file.sync_data().expect("sync rewritten frame");
 }
 
 async fn read_message_payload_with_timeout(consumer: &StreamConsumer) -> String {
