@@ -565,18 +565,35 @@ ack = ["kafka_valid"]
     assert_eq!(resp.status(), StatusCode::OK);
 
     let bytes = fs::read(wal_segment_path(&wal_dir)).expect("read wal segment");
-    let identifier = b"i4x.001";
+    let identifier = b"i4x.seg\0";
     assert!(bytes.starts_with(identifier));
 
-    let header_crc_offset = identifier.len();
-    let expected_header_crc = u32::from_be_bytes(
-        bytes[header_crc_offset..header_crc_offset + 4]
-            .try_into()
-            .unwrap(),
+    let segment_header_len =
+        u16::from_be_bytes(bytes[10..12].try_into().expect("segment header len")) as usize;
+    assert_eq!(segment_header_len, 512);
+    assert_eq!(
+        u16::from_be_bytes(bytes[8..10].try_into().expect("segment version")),
+        1
     );
-    assert_eq!(crc32fast::hash(identifier), expected_header_crc);
+    assert_eq!(
+        u64::from_be_bytes(bytes[12..20].try_into().expect("segment id")),
+        1
+    );
+    assert!(u64::from_be_bytes(bytes[20..28].try_into().expect("segment created_at")) > 0);
+    assert_eq!(
+        u64::from_be_bytes(bytes[28..36].try_into().expect("segment start_lsn")),
+        1
+    );
+    let segment_node_id_len =
+        u16::from_be_bytes(bytes[36..38].try_into().expect("segment node id len")) as usize;
+    assert!(segment_node_id_len > 0);
+    let segment_node_id = std::str::from_utf8(&bytes[38..38 + segment_node_id_len]).unwrap();
+    assert_eq!(segment_node_id, wal_node_id(&wal_dir));
+    let expected_segment_header_crc =
+        u32::from_be_bytes(bytes[508..512].try_into().expect("segment header crc"));
+    assert_eq!(crc32fast::hash(&bytes[..508]), expected_segment_header_crc);
 
-    let frame_offset = identifier.len() + 4;
+    let frame_offset = segment_header_len;
     assert_eq!(&bytes[frame_offset..frame_offset + 8], b"i4x.rec\0");
     assert_eq!(
         u16::from_be_bytes(

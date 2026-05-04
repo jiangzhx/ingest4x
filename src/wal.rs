@@ -13,8 +13,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::error;
 use uuid::Uuid;
 
-const FILE_TYPE_IDENTIFIER: &[u8] = b"i4x.001";
-const SEGMENT_HEADER_LEN: u64 = FILE_TYPE_IDENTIFIER.len() as u64 + 4;
+const SEGMENT_MAGIC: &[u8; 8] = b"i4x.seg\0";
+const SEGMENT_VERSION: u16 = 1;
+const SEGMENT_HEADER_LEN: u64 = 512;
+const SEGMENT_HEADER_CRC_OFFSET: usize = SEGMENT_HEADER_LEN as usize - 4;
+const SEGMENT_NODE_ID_OFFSET: usize = 38;
 const RECORD_MAGIC: &[u8; 8] = b"i4x.rec\0";
 const RECORD_VERSION: u16 = 1;
 const RECORD_TYPE_DATA: u8 = 1;
@@ -94,7 +97,7 @@ impl WalWriter {
         let lock_file = acquire_wal_lock(&dir)?;
         let node_id = resolve_node_id(settings.node_id.as_deref(), &dir)?;
         let segment_id = last_segment_id(&dir)?.unwrap_or(FIRST_SEGMENT_ID);
-        ensure_segment_file(&dir, segment_id)?;
+        ensure_segment_file(&dir, segment_id, &node_id, 1)?;
         let offset = repair_segment_tail(&segment_path(&dir, segment_id))?;
         let next_lsn = recover_next_lsn(&dir)?;
         let wal_flush_interval =
@@ -247,7 +250,7 @@ impl WalWriterInner {
         {
             state.segment_id += 1;
             state.offset = SEGMENT_HEADER_LEN;
-            ensure_segment_file(&self.dir, state.segment_id)?;
+            ensure_segment_file(&self.dir, state.segment_id, &self.node_id, lsn)?;
         }
         self.ensure_disk_space(bytes.len() as u64)?;
 
@@ -582,31 +585,34 @@ fn maybe_fail_test_write() -> io::Result<()> {
     Ok(())
 }
 
-fn ensure_segment_file(dir: &Path, segment_id: u64) -> io::Result<File> {
+fn ensure_segment_file(
+    dir: &Path,
+    segment_id: u64,
+    node_id: &str,
+    start_lsn: u64,
+) -> io::Result<File> {
     let path = segment_path(dir, segment_id);
     if !path.exists() {
-        return create_segment_file(dir, segment_id);
+        return create_segment_file(dir, segment_id, node_id, start_lsn);
     }
 
     let mut file = OpenOptions::new().read(true).append(true).open(&path)?;
-
-    let mut identifier = vec![0; FILE_TYPE_IDENTIFIER.len()];
     file.seek(SeekFrom::Start(0))?;
-    file.read_exact(&mut identifier)?;
-    if identifier != FILE_TYPE_IDENTIFIER {
+    let header = read_segment_header(&mut file, &path)?;
+    if header.segment_id != segment_id {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("invalid wal segment identifier: {}", path.display()),
+            format!(
+                "wal segment id mismatch: expected {segment_id}, got {}: {}",
+                header.segment_id,
+                path.display()
+            ),
         ));
     }
-    let mut header_crc = [0_u8; 4];
-    file.read_exact(&mut header_crc)?;
-    let expected_header_crc = u32::from_be_bytes(header_crc);
-    let actual_header_crc = compute_header_crc();
-    if actual_header_crc != expected_header_crc {
+    if header.node_id != node_id {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("wal segment header crc mismatch: {}", path.display()),
+            format!("wal segment node_id mismatch: {}", path.display()),
         ));
     }
     file.seek(SeekFrom::End(0))?;
@@ -614,7 +620,12 @@ fn ensure_segment_file(dir: &Path, segment_id: u64) -> io::Result<File> {
     Ok(file)
 }
 
-fn create_segment_file(dir: &Path, segment_id: u64) -> io::Result<File> {
+fn create_segment_file(
+    dir: &Path,
+    segment_id: u64,
+    node_id: &str,
+    start_lsn: u64,
+) -> io::Result<File> {
     let path = segment_path(dir, segment_id);
     let tmp_path = segment_tmp_path(dir, segment_id);
     match fs::remove_file(&tmp_path) {
@@ -628,8 +639,7 @@ fn create_segment_file(dir: &Path, segment_id: u64) -> io::Result<File> {
         .read(true)
         .write(true)
         .open(&tmp_path)?;
-    file.write_all(FILE_TYPE_IDENTIFIER)?;
-    file.write_all(&compute_header_crc().to_be_bytes())?;
+    file.write_all(&serialize_segment_header(segment_id, node_id, start_lsn)?)?;
     file.sync_data()?;
     drop(file);
     fs::rename(&tmp_path, &path)?;
@@ -832,30 +842,109 @@ fn read_record_frame(
     )))
 }
 
+#[derive(Debug)]
+struct SegmentHeader {
+    segment_id: u64,
+    node_id: String,
+}
+
 fn verify_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<()> {
-    let mut identifier = vec![0; FILE_TYPE_IDENTIFIER.len()];
-    reader.read_exact(&mut identifier)?;
-    if identifier != FILE_TYPE_IDENTIFIER {
+    read_segment_header(reader, path).map(|_| ())
+}
+
+fn read_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<SegmentHeader> {
+    let mut header = [0_u8; SEGMENT_HEADER_LEN as usize];
+    reader.read_exact(&mut header)?;
+    if &header[0..8] != SEGMENT_MAGIC {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("invalid wal segment identifier: {}", path.display()),
         ));
     }
-    let mut header_crc = [0_u8; 4];
-    reader.read_exact(&mut header_crc)?;
-    let expected_header_crc = u32::from_be_bytes(header_crc);
-    let actual_header_crc = compute_header_crc();
+    let version = u16::from_be_bytes(header[8..10].try_into().expect("segment version bytes"));
+    if version != SEGMENT_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported wal segment version {version}: {}",
+                path.display()
+            ),
+        ));
+    }
+    let header_len =
+        u16::from_be_bytes(header[10..12].try_into().expect("segment header len bytes")) as u64;
+    if header_len != SEGMENT_HEADER_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid wal segment header length: {}", path.display()),
+        ));
+    }
+    let expected_header_crc = u32::from_be_bytes(
+        header[SEGMENT_HEADER_CRC_OFFSET..SEGMENT_HEADER_CRC_OFFSET + 4]
+            .try_into()
+            .expect("segment header crc bytes"),
+    );
+    let actual_header_crc = compute_segment_header_crc(&header);
     if actual_header_crc != expected_header_crc {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("wal segment header crc mismatch: {}", path.display()),
         ));
     }
-    Ok(())
+    let segment_id = u64::from_be_bytes(header[12..20].try_into().expect("segment id bytes"));
+    let node_id_len = u16::from_be_bytes(
+        header[36..38]
+            .try_into()
+            .expect("segment node_id len bytes"),
+    ) as usize;
+    let node_id_end = SEGMENT_NODE_ID_OFFSET + node_id_len;
+    if node_id_end > SEGMENT_HEADER_CRC_OFFSET {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid wal segment node_id length: {}", path.display()),
+        ));
+    }
+    let node_id = String::from_utf8(header[SEGMENT_NODE_ID_OFFSET..node_id_end].to_vec()).map_err(
+        |error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid wal segment node_id: {error}"),
+            )
+        },
+    )?;
+    Ok(SegmentHeader {
+        segment_id,
+        node_id,
+    })
 }
 
-fn compute_header_crc() -> u32 {
-    crc32fast::hash(FILE_TYPE_IDENTIFIER)
+fn serialize_segment_header(segment_id: u64, node_id: &str, start_lsn: u64) -> io::Result<Vec<u8>> {
+    let node_id = node_id.as_bytes();
+    let max_node_id_len = SEGMENT_HEADER_CRC_OFFSET - SEGMENT_NODE_ID_OFFSET;
+    if node_id.len() > max_node_id_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("wal segment node_id is longer than {max_node_id_len} bytes"),
+        ));
+    }
+    let node_id_len = u16::try_from(node_id.len()).expect("bounded segment node_id length");
+    let mut header = vec![0_u8; SEGMENT_HEADER_LEN as usize];
+    header[0..8].copy_from_slice(SEGMENT_MAGIC);
+    header[8..10].copy_from_slice(&SEGMENT_VERSION.to_be_bytes());
+    header[10..12].copy_from_slice(&(SEGMENT_HEADER_LEN as u16).to_be_bytes());
+    header[12..20].copy_from_slice(&segment_id.to_be_bytes());
+    header[20..28].copy_from_slice(&now_ms().to_be_bytes());
+    header[28..36].copy_from_slice(&start_lsn.to_be_bytes());
+    header[36..38].copy_from_slice(&node_id_len.to_be_bytes());
+    header[SEGMENT_NODE_ID_OFFSET..SEGMENT_NODE_ID_OFFSET + node_id.len()].copy_from_slice(node_id);
+    let crc = compute_segment_header_crc(&header);
+    header[SEGMENT_HEADER_CRC_OFFSET..SEGMENT_HEADER_CRC_OFFSET + 4]
+        .copy_from_slice(&crc.to_be_bytes());
+    Ok(header)
+}
+
+fn compute_segment_header_crc(header: &[u8]) -> u32 {
+    crc32fast::hash(&header[..SEGMENT_HEADER_CRC_OFFSET])
 }
 
 fn assign_wal_metadata(record: &mut WalRecord, lsn: u64, node_id: &str) {
