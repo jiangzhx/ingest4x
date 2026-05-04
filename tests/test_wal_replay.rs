@@ -137,6 +137,14 @@ ack = ["kafka_invalid"]
     assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
     assert_eq!(checkpoint["checkpoint_segment_id"], json!(1));
     assert!(checkpoint["checkpoint_segment_offset"].is_number());
+    assert_eq!(
+        checkpoint["node_id"],
+        json!(fs::read_to_string(wal_dir.join("node_id"))
+            .expect("read node id")
+            .trim())
+    );
+    assert!(checkpoint["updated_at"].is_number());
+    assert!(checkpoint["checksum"].as_u64().unwrap_or(0) > 0);
 }
 
 #[actix_rt::test]
@@ -567,6 +575,114 @@ ack = ["kafka_invalid"]
 
     assert!(!wal_dir.join("00000000000000000001.wal").exists());
     assert!(wal_dir.join("00000000000000000002.wal").exists());
+}
+
+#[actix_rt::test]
+async fn wal_replay_rejects_checkpoint_with_invalid_checksum() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let kafka = create_kafka_config("wal-replay-checkpoint-checksum");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([(
+            "kafka_valid".to_string(),
+            EventSinkConfig::Kafka {
+                bootstrap_servers: kafka.bootstrap_servers.clone(),
+                topic: kafka.topic.clone(),
+                delivery_timeout_ms: "5000".to_string(),
+                queue_buffering_max_ms: "0".to_string(),
+                batch_num_messages: "1".to_string(),
+                queue_buffering_max_messages: "300".to_string(),
+                linger_ms: "0".to_string(),
+            },
+        )]),
+        valid: EventRouteSet {
+            routes: vec![EventRouteSettings {
+                sinks: vec!["kafka_valid".to_string()],
+                ack: vec!["kafka_valid".to_string()],
+                ..Default::default()
+            }],
+        },
+        invalid: EventRouteSet::default(),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn main(event, request) {
+                return accept(event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        wal_flush_interval: "1s".to_string(),
+        wal_max_write_buffer_size: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-checkpoint-checksum",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    let context = WalReplayContext {
+        dir: &wal_dir,
+        event_sinks: &event_sinks,
+        project_registry: &project_registry,
+        rule_repository: &rule_repository,
+        processor: &processor,
+    };
+    assert_eq!(replay_once(context).await.expect("initial replay"), 1);
+
+    let checkpoint_path = wal_dir.join("checkpoint.json");
+    let mut checkpoint: Value =
+        serde_json::from_slice(&fs::read(&checkpoint_path).expect("read checkpoint"))
+            .expect("checkpoint json");
+    checkpoint["checkpoint_lsn"] = json!(0);
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_vec(&checkpoint).expect("serialize checkpoint"),
+    )
+    .expect("tamper checkpoint");
+
+    let error = replay_once(WalReplayContext {
+        dir: &wal_dir,
+        event_sinks: &event_sinks,
+        project_registry: &project_registry,
+        rule_repository: &rule_repository,
+        processor: &processor,
+    })
+    .await
+    .expect_err("tampered checkpoint should fail checksum validation");
+
+    assert!(error.to_string().contains("checkpoint checksum mismatch"));
 }
 
 struct TestKafkaConfig {

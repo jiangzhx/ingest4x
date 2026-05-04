@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use tracing::warn;
 
 const CHECKPOINT_FILE: &str = "checkpoint.json";
+const NODE_ID_FILE: &str = "node_id";
 const REPLAY_BATCH_SIZE: usize = 1024;
 
 pub struct WalReplayContext<'a> {
@@ -25,36 +26,79 @@ pub struct WalReplayContext<'a> {
     pub processor: &'a ProcessorState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct WalCheckpoint {
     #[serde(default = "checkpoint_version")]
     version: u16,
+    #[serde(default)]
+    node_id: String,
     #[serde(default)]
     checkpoint_lsn: u64,
     #[serde(default, alias = "segment")]
     checkpoint_segment_id: u64,
     #[serde(default, alias = "offset")]
     checkpoint_segment_offset: u64,
+    #[serde(default)]
+    updated_at: u64,
+    #[serde(default)]
+    checksum: u32,
 }
 
-impl From<WalPosition> for WalCheckpoint {
-    fn from(position: WalPosition) -> Self {
-        Self {
+#[derive(Serialize)]
+struct WalCheckpointChecksum<'a> {
+    version: u16,
+    node_id: &'a str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+}
+
+impl WalCheckpoint {
+    fn new(position: WalPosition, node_id: String) -> io::Result<Self> {
+        let mut checkpoint = Self {
             version: checkpoint_version(),
+            node_id,
             checkpoint_lsn: position.lsn,
             checkpoint_segment_id: position.segment,
             checkpoint_segment_offset: position.offset,
+            updated_at: crate::current_timestamp_as_u64(),
+            checksum: 0,
+        };
+        checkpoint.checksum = checkpoint.compute_checksum()?;
+        Ok(checkpoint)
+    }
+
+    fn position(&self) -> WalPosition {
+        WalPosition {
+            lsn: self.checkpoint_lsn,
+            segment: self.checkpoint_segment_id,
+            offset: self.checkpoint_segment_offset,
         }
     }
-}
 
-impl From<WalCheckpoint> for WalPosition {
-    fn from(checkpoint: WalCheckpoint) -> Self {
-        Self {
-            lsn: checkpoint.checkpoint_lsn,
-            segment: checkpoint.checkpoint_segment_id,
-            offset: checkpoint.checkpoint_segment_offset,
+    fn validate_checksum(&self, path: &Path) -> io::Result<()> {
+        let expected = self.compute_checksum()?;
+        if self.checksum != expected {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("checkpoint checksum mismatch: {}", path.display()),
+            ));
         }
+        Ok(())
+    }
+
+    fn compute_checksum(&self) -> io::Result<u32> {
+        let bytes = serde_json::to_vec(&WalCheckpointChecksum {
+            version: self.version,
+            node_id: self.node_id.as_str(),
+            checkpoint_lsn: self.checkpoint_lsn,
+            checkpoint_segment_id: self.checkpoint_segment_id,
+            checkpoint_segment_offset: self.checkpoint_segment_offset,
+            updated_at: self.updated_at,
+        })
+        .map_err(io::Error::other)?;
+        Ok(crc32fast::hash(&bytes))
     }
 }
 
@@ -165,14 +209,15 @@ fn read_checkpoint(dir: &Path) -> io::Result<Option<WalPosition>> {
     let bytes = fs::read(path)?;
     let checkpoint = serde_json::from_slice::<WalCheckpoint>(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    Ok(Some(checkpoint.into()))
+    checkpoint.validate_checksum(&checkpoint_path(dir))?;
+    Ok(Some(checkpoint.position()))
 }
 
 fn write_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let path = checkpoint_path(dir);
     let temp_path = dir.join(format!("{CHECKPOINT_FILE}.tmp"));
-    let checkpoint = WalCheckpoint::from(position);
+    let checkpoint = WalCheckpoint::new(position, read_node_id(dir)?)?;
     let bytes = serde_json::to_vec(&checkpoint).map_err(io::Error::other)?;
     let mut temp_file = OpenOptions::new()
         .create(true)
@@ -184,4 +229,9 @@ fn write_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
     drop(temp_file);
     fs::rename(&temp_path, &path)?;
     File::open(dir)?.sync_all()
+}
+
+fn read_node_id(dir: &Path) -> io::Result<String> {
+    let node_id = fs::read_to_string(dir.join(NODE_ID_FILE))?;
+    Ok(node_id.trim().to_string())
 }
