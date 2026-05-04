@@ -6,18 +6,21 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ingest4x::server;
 use ingest4x::settings::Settings;
+use rdkafka::consumer::{Consumer, StreamConsumer};
+use rdkafka::mocking::MockCluster;
+use rdkafka::producer::DefaultProducerContext;
+use rdkafka::{ClientConfig, Message};
 use serde_json::{json, Value};
 use std::fs;
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 #[actix_rt::test]
-async fn get_ingest_decodes_base64_json_and_sends_it_to_file_sink() {
+async fn get_ingest_decodes_base64_json_and_sends_it_to_kafka_sink() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("mock-config.toml");
-    let sink_path = temp.path().join("mock-events.jsonl");
+    let kafka = create_kafka_config("get-ingest-valid");
+    let consumer = create_consumer(&kafka, "get-ingest-main-topic", &kafka.topic);
 
     fs::write(
         &config_path,
@@ -29,24 +32,35 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.file_valid]
-type = "file"
-path = "{}"
-format = "jsonl"
-rotation = "never"
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
 
 [[events.valid.routes]]
-sinks = ["file_valid"]
-ack = ["file_valid"]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
 
-[events.sink.stdout_invalid]
-type = "stdout"
+[events.sink.kafka_invalid]
+type = "kafka"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
 
 [[events.invalid.routes]]
-sinks = ["stdout_invalid"]
-ack = ["stdout_invalid"]
+sinks = ["kafka_invalid"]
+ack = ["kafka_invalid"]
 "#,
-            sink_path.display()
+            kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
     )
     .expect("write config");
@@ -87,9 +101,8 @@ ack = ["stdout_invalid"]
     assert_eq!(status_code, StatusCode::OK);
     assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
 
-    let output = fs::read_to_string(&sink_path).expect("read event sink");
-    let line = output.lines().next().expect("missing emitted event");
-    let emitted = parse_event_sink_line(line);
+    let kafka_string = read_message_payload(&consumer).await;
+    let emitted = parse_event_sink_line(kafka_string.as_str());
 
     assert_eq!(emitted["appid"], input_payload["appid"]);
     assert_eq!(emitted["xwhat"], input_payload["xwhat"]);
@@ -111,30 +124,12 @@ fn parse_event_sink_line(line: &str) -> Value {
     serde_json::from_str(line).expect("event sink line should be valid json")
 }
 
-fn read_first_line_with_retry(path: &std::path::Path) -> String {
-    let deadline = Instant::now() + Duration::from_secs(2);
-
-    loop {
-        if let Ok(output) = fs::read_to_string(path) {
-            if let Some(line) = output.lines().next() {
-                return line.to_string();
-            }
-        }
-
-        if Instant::now() >= deadline {
-            panic!("missing event sink line at {}", path.display());
-        }
-
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
 #[actix_rt::test]
 async fn get_ingest_default_rhai_processor_uses_existing_validator() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("mock-config.toml");
-    let valid_sink_path = temp.path().join("valid.jsonl");
-    let invalid_sink_path = temp.path().join("invalid.jsonl");
+    let kafka = create_kafka_config("get-ingest-invalid");
+    let error_consumer = create_consumer(&kafka, "get-ingest-error-topic", &kafka.error_topic);
 
     fs::write(
         &config_path,
@@ -146,28 +141,35 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.file_valid]
-type = "file"
-path = "{}"
-format = "jsonl"
-rotation = "never"
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
 
 [[events.valid.routes]]
-sinks = ["file_valid"]
-ack = ["file_valid"]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
 
-[events.sink.file_invalid]
-type = "file"
-path = "{}"
-format = "jsonl"
-rotation = "never"
+[events.sink.kafka_invalid]
+type = "kafka"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
 
 [[events.invalid.routes]]
-sinks = ["file_invalid"]
-ack = ["file_invalid"]
+sinks = ["kafka_invalid"]
+ack = ["kafka_invalid"]
 "#,
-            valid_sink_path.display(),
-            invalid_sink_path.display()
+            kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
     )
     .expect("write config");
@@ -206,21 +208,18 @@ ack = ["file_invalid"]
     assert_eq!(status_code, StatusCode::BAD_REQUEST);
     assert!(body_text.contains("xcontext.installid"));
 
-    assert!(
-        fs::read_to_string(&valid_sink_path)
-            .map(|content| content.trim().is_empty())
-            .unwrap_or(true),
-        "invalid payload should not emit valid sink events"
+    let kafka_string = read_message_payload(&error_consumer).await;
+    assert_eq!(
+        parse_event_sink_line(kafka_string.as_str()),
+        invalid_payload
     );
-    let line = read_first_line_with_retry(&invalid_sink_path);
-    assert_eq!(parse_event_sink_line(&line), invalid_payload);
 }
 
 #[actix_rt::test]
 async fn get_ingest_returns_not_found_for_unknown_project_via_real_server_wiring() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("mock-config.toml");
-    let sink_path = temp.path().join("mock-events.jsonl");
+    let kafka = create_kafka_config("get-ingest-unknown-project");
 
     fs::write(
         &config_path,
@@ -232,24 +231,35 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.file_valid]
-type = "file"
-path = "{}"
-format = "jsonl"
-rotation = "never"
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
 
 [[events.valid.routes]]
-sinks = ["file_valid"]
-ack = ["file_valid"]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
 
-[events.sink.stdout_invalid]
-type = "stdout"
+[events.sink.kafka_invalid]
+type = "kafka"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
 
 [[events.invalid.routes]]
-sinks = ["stdout_invalid"]
-ack = ["stdout_invalid"]
+sinks = ["kafka_invalid"]
+ack = ["kafka_invalid"]
 "#,
-            sink_path.display()
+            kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
     )
     .expect("write config");
@@ -291,10 +301,50 @@ ack = ["stdout_invalid"]
         std::str::from_utf8(body.as_ref()).unwrap(),
         "Project not found"
     );
-    assert!(
-        fs::read_to_string(&sink_path)
-            .map(|content| content.trim().is_empty())
-            .unwrap_or(true),
-        "unknown project should not emit event sink events"
-    );
+}
+
+struct TestKafkaConfig {
+    bootstrap_servers: String,
+    topic: String,
+    error_topic: String,
+    _kafka_cluster: MockCluster<'static, DefaultProducerContext>,
+}
+
+fn create_kafka_config(prefix: &str) -> TestKafkaConfig {
+    let topic = format!("{prefix}-events");
+    let error_topic = format!("{prefix}-events-error");
+    let kafka_cluster = MockCluster::new(3).expect("create kafka mock cluster");
+    kafka_cluster
+        .create_topic(topic.as_str(), 1, 1)
+        .expect("create kafka mock topic");
+    kafka_cluster
+        .create_topic(error_topic.as_str(), 1, 1)
+        .expect("create kafka mock error topic");
+
+    TestKafkaConfig {
+        bootstrap_servers: kafka_cluster.bootstrap_servers(),
+        topic,
+        error_topic,
+        _kafka_cluster: kafka_cluster,
+    }
+}
+
+fn create_consumer(kafka: &TestKafkaConfig, group_id: &str, topic: &str) -> StreamConsumer {
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("bootstrap.servers", &kafka.bootstrap_servers)
+        .set("group.id", group_id)
+        .set("auto.offset.reset", "earliest")
+        .set("session.timeout.ms", "6000")
+        .set("heartbeat.interval.ms", "2000")
+        .create()
+        .expect("consumer creation error");
+    consumer.subscribe(&[topic]).expect("subscribe topic");
+    consumer
+}
+
+async fn read_message_payload(consumer: &StreamConsumer) -> String {
+    let message = consumer.recv().await.expect("read kafka message");
+    std::str::from_utf8(message.payload().expect("payload"))
+        .expect("utf8 payload")
+        .to_string()
 }

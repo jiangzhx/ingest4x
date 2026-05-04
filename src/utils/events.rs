@@ -1,6 +1,4 @@
-use crate::settings::{
-    EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, FileSinkRotation,
-};
+use crate::settings::{EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings};
 use crate::utils::kafka::KafkaProducer;
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
@@ -9,11 +7,7 @@ use rdkafka::config::ClientConfig;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tracing_appender::non_blocking::{NonBlocking, NonBlockingBuilder, WorkerGuard};
-use tracing_appender::rolling::{self, RollingFileAppender, Rotation};
 
 #[derive(Clone, Copy)]
 pub enum EventStatus {
@@ -128,13 +122,6 @@ enum EventSink {
         producer: KafkaProducer,
         topic: String,
     },
-    File {
-        path: PathBuf,
-        rotation: FileSinkRotation,
-        retention_files: usize,
-        writer: NonBlocking,
-        _guard: WorkerGuard,
-    },
     Stdout,
 }
 
@@ -166,30 +153,6 @@ impl EventSink {
                     topic: topic.clone(),
                 })
             }
-            EventSinkConfig::File {
-                path,
-                rotation,
-                retention_files,
-                lossy,
-                buffered_lines_limit,
-                ..
-            } => {
-                let path = PathBuf::from(path);
-                let (writer, guard) = build_file_event_writer(
-                    &path,
-                    *rotation,
-                    *retention_files,
-                    *lossy,
-                    *buffered_lines_limit,
-                )?;
-                Ok(Self::File {
-                    path,
-                    rotation: *rotation,
-                    retention_files: *retention_files,
-                    writer,
-                    _guard: guard,
-                })
-            }
             EventSinkConfig::Stdout => Ok(Self::Stdout),
         }
     }
@@ -197,15 +160,6 @@ impl EventSink {
     async fn send(&self, payload: &[u8]) -> Result<()> {
         match self {
             Self::Kafka { producer, topic } => producer.send_value(topic, payload.to_vec()).await,
-            Self::File { writer, .. } => {
-                let mut line = Vec::with_capacity(payload.len() + 1);
-                line.extend_from_slice(payload);
-                line.push(b'\n');
-
-                let mut writer = writer.clone();
-                writer.write_all(&line)?;
-                Ok(())
-            }
             Self::Stdout => {
                 let payload = serde_json::from_slice::<Value>(payload)
                     .map(|value| value.to_string())
@@ -222,73 +176,8 @@ impl EventSink {
                 .check_alive()
                 .await
                 .map_err(|error| anyhow::Error::from(error)),
-            Self::File {
-                path,
-                rotation,
-                retention_files,
-                ..
-            } => {
-                let _ = build_rolling_file_appender(path, *rotation, *retention_files)?;
-                Ok(())
-            }
             Self::Stdout => Ok(()),
         }
-    }
-}
-
-fn build_file_event_writer(
-    path: &Path,
-    rotation: FileSinkRotation,
-    retention_files: usize,
-    lossy: bool,
-    buffered_lines_limit: usize,
-) -> Result<(NonBlocking, WorkerGuard)> {
-    let appender = build_rolling_file_appender(path, rotation, retention_files)?;
-    Ok(NonBlockingBuilder::default()
-        .lossy(lossy)
-        .buffered_lines_limit(buffered_lines_limit)
-        .thread_name("ingest4x-file-event-sink")
-        .finish(appender))
-}
-
-fn build_rolling_file_appender(
-    path: &Path,
-    rotation: FileSinkRotation,
-    retention_files: usize,
-) -> Result<RollingFileAppender> {
-    let directory = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .filter(|file_name| !file_name.is_empty())
-        .ok_or_else(|| {
-            anyhow!(
-                "file event sink path must include a file name: {}",
-                path.display()
-            )
-        })?;
-
-    std::fs::create_dir_all(directory)?;
-    if rotation == FileSinkRotation::Never {
-        return Ok(rolling::never(directory, file_name));
-    }
-
-    Ok(RollingFileAppender::builder()
-        .rotation(to_tracing_rotation(rotation))
-        .filename_prefix(file_name.to_string_lossy())
-        .max_log_files(retention_files)
-        .build(directory)?)
-}
-
-const fn to_tracing_rotation(rotation: FileSinkRotation) -> Rotation {
-    match rotation {
-        FileSinkRotation::Never => Rotation::NEVER,
-        FileSinkRotation::Minutely => Rotation::MINUTELY,
-        FileSinkRotation::Hourly => Rotation::HOURLY,
-        FileSinkRotation::Daily => Rotation::DAILY,
-        FileSinkRotation::Weekly => Rotation::WEEKLY,
     }
 }
 
@@ -345,43 +234,43 @@ impl EventRouteMatch for EventRouteSettings {
 #[cfg(test)]
 mod tests {
     use super::{init_event_sinks, EventStatus};
-    use crate::settings::{
-        default_file_sink_buffered_lines_limit, default_file_sink_retention_files, EventRouteSet,
-        EventRouteSettings, EventSinkConfig, EventsSettings, FileSinkRotation,
-    };
+    use crate::settings::{EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings};
+    use rdkafka::consumer::{Consumer, StreamConsumer};
+    use rdkafka::mocking::MockCluster;
+    use rdkafka::producer::DefaultProducerContext;
+    use rdkafka::{ClientConfig, Message};
     use serde_json::json;
     use std::collections::HashMap;
-    use std::thread;
-    use std::time::{Duration, Instant};
-    use tempfile::tempdir;
 
     #[tokio::test]
     async fn routes_valid_events_by_appid_and_xwhat_before_fallback() {
-        let temp = tempdir().expect("temp dir");
-        let payment_path = temp.path().join("payment.jsonl");
-        let default_path = temp.path().join("default.jsonl");
+        let kafka = create_kafka_cluster(&["payment-events", "default-events"]);
+        let payment_consumer = create_consumer(&kafka, "payment-route", "payment-events");
+        let default_consumer = create_consumer(&kafka, "default-route", "default-events");
         let settings = EventsSettings {
             sink: HashMap::from([
                 (
-                    "file_payment".to_string(),
-                    EventSinkConfig::File {
-                        path: payment_path.display().to_string(),
-                        format: Default::default(),
-                        rotation: FileSinkRotation::Never,
-                        retention_files: default_file_sink_retention_files(),
-                        lossy: false,
-                        buffered_lines_limit: default_file_sink_buffered_lines_limit(),
+                    "kafka_payment".to_string(),
+                    EventSinkConfig::Kafka {
+                        bootstrap_servers: kafka.bootstrap_servers.clone(),
+                        topic: "payment-events".to_string(),
+                        delivery_timeout_ms: "5000".to_string(),
+                        queue_buffering_max_ms: "0".to_string(),
+                        batch_num_messages: "1".to_string(),
+                        queue_buffering_max_messages: "300".to_string(),
+                        linger_ms: "0".to_string(),
                     },
                 ),
                 (
-                    "file_default".to_string(),
-                    EventSinkConfig::File {
-                        path: default_path.display().to_string(),
-                        format: Default::default(),
-                        rotation: FileSinkRotation::Never,
-                        retention_files: default_file_sink_retention_files(),
-                        lossy: false,
-                        buffered_lines_limit: default_file_sink_buffered_lines_limit(),
+                    "kafka_default".to_string(),
+                    EventSinkConfig::Kafka {
+                        bootstrap_servers: kafka.bootstrap_servers.clone(),
+                        topic: "default-events".to_string(),
+                        delivery_timeout_ms: "5000".to_string(),
+                        queue_buffering_max_ms: "0".to_string(),
+                        batch_num_messages: "1".to_string(),
+                        queue_buffering_max_messages: "300".to_string(),
+                        linger_ms: "0".to_string(),
                     },
                 ),
             ]),
@@ -390,12 +279,12 @@ mod tests {
                     EventRouteSettings {
                         appid: Some(vec!["game-a".to_string()]),
                         xwhat: Some(vec!["payment".to_string()]),
-                        sinks: vec!["file_payment".to_string()],
-                        ack: vec!["file_payment".to_string()],
+                        sinks: vec!["kafka_payment".to_string()],
+                        ack: vec!["kafka_payment".to_string()],
                     },
                     EventRouteSettings {
-                        sinks: vec!["file_default".to_string()],
-                        ack: vec!["file_default".to_string()],
+                        sinks: vec!["kafka_default".to_string()],
+                        ack: vec!["kafka_default".to_string()],
                         ..Default::default()
                     },
                 ],
@@ -424,29 +313,51 @@ mod tests {
             .expect("fallback event should route");
 
         assert_eq!(
-            read_file_eventually(&payment_path),
-            "{\"id\":\"payment\"}\n"
+            read_message_payload(&payment_consumer).await,
+            "{\"id\":\"payment\"}"
         );
         assert_eq!(
-            read_file_eventually(&default_path),
-            "{\"id\":\"startup\"}\n"
+            read_message_payload(&default_consumer).await,
+            "{\"id\":\"startup\"}"
         );
     }
 
-    fn read_file_eventually(path: &std::path::Path) -> String {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            if let Ok(content) = std::fs::read_to_string(path) {
-                if !content.is_empty() {
-                    return content;
-                }
-            }
+    struct TestKafkaCluster {
+        bootstrap_servers: String,
+        _kafka_cluster: MockCluster<'static, DefaultProducerContext>,
+    }
 
-            if Instant::now() >= deadline {
-                return std::fs::read_to_string(path).expect("event file");
-            }
-
-            thread::sleep(Duration::from_millis(20));
+    fn create_kafka_cluster(topics: &[&str]) -> TestKafkaCluster {
+        let kafka_cluster = MockCluster::new(3).expect("create kafka mock cluster");
+        for topic in topics {
+            kafka_cluster
+                .create_topic(topic, 1, 1)
+                .expect("create kafka mock topic");
         }
+
+        TestKafkaCluster {
+            bootstrap_servers: kafka_cluster.bootstrap_servers(),
+            _kafka_cluster: kafka_cluster,
+        }
+    }
+
+    fn create_consumer(kafka: &TestKafkaCluster, group_id: &str, topic: &str) -> StreamConsumer {
+        let consumer: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", &kafka.bootstrap_servers)
+            .set("group.id", group_id)
+            .set("auto.offset.reset", "earliest")
+            .set("session.timeout.ms", "6000")
+            .set("heartbeat.interval.ms", "2000")
+            .create()
+            .expect("consumer creation error");
+        consumer.subscribe(&[topic]).expect("subscribe topic");
+        consumer
+    }
+
+    async fn read_message_payload(consumer: &StreamConsumer) -> String {
+        let message = consumer.recv().await.expect("read kafka message");
+        std::str::from_utf8(message.payload().expect("payload"))
+            .expect("utf8 payload")
+            .to_string()
     }
 }

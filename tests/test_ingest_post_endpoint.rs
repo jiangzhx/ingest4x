@@ -3,8 +3,7 @@
 mod mock_services;
 
 use crate::mock_services::{
-    create_app, create_app_with_processor_script, create_app_with_project,
-    create_app_with_valid_file_sink, TestService,
+    create_app, create_app_with_processor_script, create_app_with_project, TestService,
 };
 use actix_http::StatusCode;
 use actix_web::test;
@@ -13,9 +12,7 @@ use ingest4x::event::Event;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::{ClientConfig, Message};
 use serde_json::{json, Value};
-use std::fs;
 use std::net::SocketAddr;
-use tempfile::tempdir;
 
 #[actix_rt::test]
 async fn post_ingest_normalizes_and_sends_event() {
@@ -108,52 +105,7 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
 }
 
 #[actix_rt::test]
-async fn post_ingest_can_write_valid_events_to_kafka_and_file_sinks() {
-    let temp = tempdir().expect("temp dir");
-    let event_file = temp.path().join("events.jsonl");
-    let (app, testservice) = create_app_with_valid_file_sink(&event_file).await;
-    let consumer = create_consumer(
-        &testservice,
-        "ingest-post-fanout-main-topic",
-        &testservice.topic,
-    );
-
-    let req = test::TestRequest::post()
-        .peer_addr("8.8.8.8:8080".parse::<SocketAddr>().unwrap())
-        .uri("/ingest")
-        .set_json(json!({
-            "appid": "APPID",
-            "xwhat": "custom_event",
-            "xcontext": {
-                "installid": "iid-1",
-                "os": "iOS",
-                "idfa": "idfa-1",
-                "currencytype": "cny"
-            }
-        }))
-        .to_request();
-
-    let resp = test::call_service(&app, req).await;
-    let status_code = resp.status();
-    let body = test::read_body(resp).await;
-
-    assert_eq!(status_code, StatusCode::OK);
-    assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
-
-    let kafka_string = read_message_payload(&consumer).await;
-    let file_output = fs::read_to_string(&event_file).expect("read event file");
-    let file_line = file_output.lines().next().expect("missing file event");
-
-    assert_json_eq!(
-        serde_json::from_str::<Value>(file_line).unwrap(),
-        serde_json::from_str::<Value>(kafka_string.as_str()).unwrap()
-    );
-}
-
-#[actix_rt::test]
-async fn post_ingest_runs_rhai_processor_before_file_sink() {
-    let temp = tempdir().expect("temp dir");
-    let event_file = temp.path().join("events.jsonl");
+async fn post_ingest_runs_rhai_processor_before_kafka_sink() {
     let script = r#"
 fn main(event, ctx) {
     let validation = validate(event);
@@ -165,7 +117,12 @@ fn main(event, ctx) {
     return accept(event);
 }
 "#;
-    let (app, _testservice) = create_app_with_processor_script(&event_file, script).await;
+    let (app, testservice) = create_app_with_processor_script(script).await;
+    let consumer = create_consumer(
+        &testservice,
+        "ingest-post-processor-main-topic",
+        &testservice.topic,
+    );
 
     let req = test::TestRequest::post()
         .uri("/ingest")
@@ -184,9 +141,8 @@ fn main(event, ctx) {
 
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let file_output = fs::read_to_string(&event_file).expect("read event file");
-    let file_line = file_output.lines().next().expect("missing file event");
-    let emitted: Value = serde_json::from_str(file_line).expect("event json");
+    let kafka_string = read_message_payload(&consumer).await;
+    let emitted: Value = serde_json::from_str(kafka_string.as_str()).expect("event json");
 
     assert_eq!(emitted["xcontext"]["processor_marker"], json!("rhai"));
 }

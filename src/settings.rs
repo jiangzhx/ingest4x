@@ -62,38 +62,7 @@ pub enum EventSinkConfig {
         #[serde(default = "default_kafka_linger_ms")]
         linger_ms: String,
     },
-    File {
-        path: String,
-        #[serde(default = "default_file_sink_format")]
-        format: FileSinkFormat,
-        #[serde(default = "default_file_sink_rotation")]
-        rotation: FileSinkRotation,
-        #[serde(default = "default_file_sink_retention_files")]
-        retention_files: usize,
-        #[serde(default = "default_file_sink_lossy")]
-        lossy: bool,
-        #[serde(default = "default_file_sink_buffered_lines_limit")]
-        buffered_lines_limit: usize,
-    },
     Stdout,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FileSinkFormat {
-    #[default]
-    Jsonl,
-}
-
-#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FileSinkRotation {
-    Never,
-    Minutely,
-    #[default]
-    Hourly,
-    Daily,
-    Weekly,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -148,26 +117,6 @@ pub fn default_kafka_queue_buffering_max_messages() -> String {
 
 pub fn default_kafka_linger_ms() -> String {
     "100".to_string()
-}
-
-pub const fn default_file_sink_format() -> FileSinkFormat {
-    FileSinkFormat::Jsonl
-}
-
-pub const fn default_file_sink_rotation() -> FileSinkRotation {
-    FileSinkRotation::Hourly
-}
-
-pub const fn default_file_sink_retention_files() -> usize {
-    24
-}
-
-pub const fn default_file_sink_lossy() -> bool {
-    false
-}
-
-pub const fn default_file_sink_buffered_lines_limit() -> usize {
-    tracing_appender::non_blocking::DEFAULT_BUFFERED_LINES_LIMIT
 }
 
 pub const fn default_database_refresh_interval_secs() -> u64 {

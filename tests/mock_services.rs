@@ -18,15 +18,13 @@ use ingest4x::rules::{
 };
 use ingest4x::server;
 use ingest4x::settings::{
-    default_file_sink_buffered_lines_limit, default_file_sink_retention_files, EventRouteSet,
-    EventRouteSettings, EventSinkConfig, EventsSettings, FileSinkRotation, LogLevel,
+    EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, LogLevel,
     ManagementSettings, ServerSettings, Settings,
 };
 use ingest4x::utils::events::init_event_sinks;
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 pub struct TestService {
@@ -88,27 +86,10 @@ pub async fn create_app_with_project(
     impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
     TestService,
 ) {
-    create_app_with_project_and_event_settings(project, None).await
-}
-
-pub async fn create_app_with_valid_file_sink(
-    file_path: &Path,
-) -> (
-    impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
-    TestService,
-) {
-    create_app_with_project_and_event_settings(
-        HashMap::from([
-            ("re_attribution".to_string(), "300".to_string()),
-            ("os".to_string(), "android".to_string()),
-        ]),
-        Some(file_path),
-    )
-    .await
+    create_app_with_project_and_event_settings(project).await
 }
 
 pub async fn create_app_with_processor_script(
-    file_path: &Path,
     script: &str,
 ) -> (
     impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
@@ -119,7 +100,6 @@ pub async fn create_app_with_processor_script(
             ("re_attribution".to_string(), "300".to_string()),
             ("os".to_string(), "android".to_string()),
         ]),
-        Some(file_path),
         Some(script),
     )
     .await
@@ -127,17 +107,15 @@ pub async fn create_app_with_processor_script(
 
 async fn create_app_with_project_and_event_settings(
     project: HashMap<String, String>,
-    valid_file_path: Option<&Path>,
 ) -> (
     impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
     TestService,
 ) {
-    create_app_with_project_event_settings_and_processor(project, valid_file_path, None).await
+    create_app_with_project_event_settings_and_processor(project, None).await
 }
 
 async fn create_app_with_project_event_settings_and_processor(
     project: HashMap<String, String>,
-    valid_file_path: Option<&Path>,
     processor_script: Option<&str>,
 ) -> (
     impl Service<Request, Response = ServiceResponse, Error = actix_web::Error>,
@@ -153,7 +131,6 @@ async fn create_app_with_project_event_settings_and_processor(
         bootstrap_servers.as_str(),
         TOPIC,
         ERROR_TOPIC,
-        valid_file_path,
     ))
     .expect("event sinks should initialize");
     #[cfg(feature = "ingest")]
@@ -211,9 +188,8 @@ fn kafka_events_settings(
     bootstrap_servers: &str,
     topic: &str,
     error_topic: &str,
-    valid_file_path: Option<&Path>,
 ) -> EventsSettings {
-    let mut sink = HashMap::from([
+    let sink = HashMap::from([
         (
             "kafka_valid".to_string(),
             EventSinkConfig::Kafka {
@@ -239,28 +215,12 @@ fn kafka_events_settings(
             },
         ),
     ]);
-    let mut valid_sinks = vec!["kafka_valid".to_string()];
-
-    if let Some(path) = valid_file_path {
-        sink.insert(
-            "file_valid".to_string(),
-            EventSinkConfig::File {
-                path: path.display().to_string(),
-                format: Default::default(),
-                rotation: FileSinkRotation::Never,
-                retention_files: default_file_sink_retention_files(),
-                lossy: false,
-                buffered_lines_limit: default_file_sink_buffered_lines_limit(),
-            },
-        );
-        valid_sinks.push("file_valid".to_string());
-    }
 
     EventsSettings {
         sink,
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
-                sinks: valid_sinks,
+                sinks: vec!["kafka_valid".to_string()],
                 ack: vec!["kafka_valid".to_string()],
                 ..Default::default()
             }],
