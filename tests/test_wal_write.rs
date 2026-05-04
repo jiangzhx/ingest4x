@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::thread;
+use std::time::Duration;
 use tempfile::tempdir;
 
 #[actix_rt::test]
@@ -119,6 +121,7 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
+flush_max_records = 1
 
 [events.sink.kafka_valid]
 type = "kafka"
@@ -519,7 +522,6 @@ dir = "{}"
 no_sync = true
 flush_max_interval = "1h"
 flush_max_records = 2
-flush_max_bytes = 4194304
 
 [events.sink.kafka_valid]
 type = "kafka"
@@ -1036,6 +1038,117 @@ async fn read_entries_after_rejects_checkpoint_offset_beyond_segment_file() {
 }
 
 #[actix_rt::test]
+async fn durable_append_waits_for_interval_flush_when_record_threshold_not_reached() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.no_sync = false;
+    settings.flush_max_interval = "100ms".to_string();
+    settings.flush_max_records = 100_000;
+
+    let writer = Arc::new(WalWriter::new(&settings).expect("wal writer"));
+    let (tx, rx) = mpsc::channel();
+    let append_writer = Arc::clone(&writer);
+    thread::spawn(move || {
+        tx.send(append_writer.append(&test_record("wait-for-flush")))
+            .expect("send append result");
+    });
+
+    assert!(
+        rx.recv_timeout(Duration::from_millis(20)).is_err(),
+        "durable append should wait for interval flush before returning"
+    );
+    let position = rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("append should finish after interval flush")
+        .expect("append result");
+    assert_eq!(position.lsn, 1);
+
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].lsn, 1);
+    assert_eq!(records[0].body, b"wait-for-flush");
+}
+
+#[actix_rt::test]
+async fn durable_append_flushes_when_record_threshold_is_reached() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.no_sync = false;
+    settings.flush_max_interval = "1h".to_string();
+    settings.flush_max_records = 2;
+
+    let writer = Arc::new(WalWriter::new(&settings).expect("wal writer"));
+    let (first_tx, first_rx) = mpsc::channel();
+    let first_writer = Arc::clone(&writer);
+    thread::spawn(move || {
+        first_tx
+            .send(first_writer.append(&test_record("first-threshold")))
+            .expect("send first append result");
+    });
+
+    assert!(
+        first_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+        "first append should wait until record threshold is reached"
+    );
+    let second_position = writer
+        .append(&test_record("second-threshold"))
+        .expect("second append should trigger threshold flush");
+    let first_position = first_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("first append should complete after threshold flush")
+        .expect("first append result");
+
+    assert_eq!(first_position.lsn, 1);
+    assert_eq!(second_position.lsn, 2);
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].body, b"first-threshold");
+    assert_eq!(records[1].body, b"second-threshold");
+}
+
+#[actix_rt::test]
+async fn durable_append_waiters_fail_when_group_flush_fails() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.no_sync = false;
+    settings.flush_max_interval = "1h".to_string();
+    settings.flush_max_records = 2;
+
+    let writer = Arc::new(WalWriter::new(&settings).expect("wal writer"));
+    ingest4x::wal::fail_after_test_writes(1);
+    let (first_tx, first_rx) = mpsc::channel();
+    let first_writer = Arc::clone(&writer);
+    thread::spawn(move || {
+        first_tx
+            .send(first_writer.append(&test_record("first-failure")))
+            .expect("send first append result");
+    });
+
+    assert!(
+        first_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+        "first append should wait for group flush"
+    );
+    let second_error = writer
+        .append(&test_record("second-failure"))
+        .expect_err("second append should observe group flush failure");
+    assert_eq!(second_error.kind(), std::io::ErrorKind::Other);
+
+    let first_error = first_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("first append should receive group flush result")
+        .expect_err("first append should fail with group flush");
+    assert_eq!(first_error.kind(), std::io::ErrorKind::Other);
+    assert!(read_all_records(&wal_dir)
+        .expect("read wal records")
+        .is_empty());
+
+    ingest4x::wal::fail_after_test_writes(usize::MAX);
+}
+
+#[actix_rt::test]
 async fn no_sync_flush_failure_rolls_back_written_batch() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -1110,7 +1223,6 @@ fn wal_settings(wal_dir: &Path) -> WalSettings {
         node_id: None,
         flush_max_interval: "1s".to_string(),
         flush_max_records: 100_000,
-        flush_max_bytes: 4 * 1024 * 1024,
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,

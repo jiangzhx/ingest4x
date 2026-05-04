@@ -232,7 +232,6 @@ LSN 应由 WAL writer 分配，不建议由多个请求线程各自分配。
 
 ```yaml
 wal_flush_max_interval: 10ms
-wal_flush_max_bytes: 4MB
 wal_flush_max_records: 1000
 ```
 
@@ -240,13 +239,12 @@ wal_flush_max_records: 1000
 
 - `flush_max_interval` 已作为配置字段接入。
 - `flush_max_records` 已作为配置字段接入。
-- `flush_max_bytes` 已作为保留配置字段接入，但字节数触发 group commit 的逻辑尚未实现。
+- `flush_max_bytes` 不纳入当前 InfluxDB 3 参考模型，已删除。
 
 允许配置范围：
 
 ```yaml
 wal_flush_max_interval: 1ms ~ 100ms
-wal_flush_max_bytes: 1MB ~ 16MB
 wal_flush_max_records: 100 ~ 10000
 ```
 
@@ -667,7 +665,6 @@ wal:
   segment_size_min: 64MB
   segment_size_max: 1GB
   flush_max_interval: 10ms
-  flush_max_bytes: 4MB
   flush_max_records: 1000
   min_free_bytes: <按部署环境配置>
 

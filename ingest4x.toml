@@ -21,8 +21,6 @@ refresh_interval_secs = 3
 dir = "./wal"
 flush_max_interval = "10ms"
 flush_max_records = 1000
-# TODO: field reserved; byte-based group commit trigger is not implemented yet.
-flush_max_bytes = 4194304
 no_sync = false
 wal_segment_max_bytes = 134217728
 

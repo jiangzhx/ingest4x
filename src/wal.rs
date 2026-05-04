@@ -7,7 +7,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::error;
@@ -78,9 +78,6 @@ struct WalWriterInner {
     segment_max_bytes: u64,
     flush_max_interval: Duration,
     flush_max_records: usize,
-    #[allow(dead_code)]
-    // TODO: Use this as a strong WAL group-commit trigger after byte-based batching is implemented.
-    flush_max_bytes: u64,
     no_sync: bool,
     min_free_bytes: u64,
     state: Mutex<WalWriterState>,
@@ -91,7 +88,13 @@ struct WalWriterState {
     segment_id: u64,
     offset: u64,
     next_lsn: u64,
-    buffered: Vec<WalRecord>,
+    buffered: Vec<BufferedWalRecord>,
+}
+
+#[derive(Debug)]
+struct BufferedWalRecord {
+    record: WalRecord,
+    response: Option<mpsc::Sender<io::Result<WalPosition>>>,
 }
 
 impl WalWriter {
@@ -122,7 +125,6 @@ impl WalWriter {
             segment_max_bytes: settings.wal_segment_max_bytes.max(SEGMENT_HEADER_LEN + 1),
             flush_max_interval,
             flush_max_records: settings.flush_max_records.max(1),
-            flush_max_bytes: settings.flush_max_bytes,
             no_sync: settings.no_sync,
             min_free_bytes: settings.min_free_bytes,
             state: Mutex::new(WalWriterState {
@@ -133,9 +135,7 @@ impl WalWriter {
             }),
         });
 
-        if inner.no_sync {
-            spawn_flush_loop(Arc::downgrade(&inner));
-        }
+        spawn_flush_loop(Arc::downgrade(&inner));
 
         Ok(Self { inner })
     }
@@ -161,13 +161,20 @@ impl Drop for WalWriter {
 impl WalWriterInner {
     fn append(&self, record: &WalRecord) -> io::Result<WalPosition> {
         if self.no_sync {
-            self.append_buffered(record)
+            self.append_buffered(record, None)
         } else {
-            self.append_persisted(record)
+            let (tx, rx) = mpsc::channel();
+            self.append_buffered(record, Some(tx))?;
+            rx.recv()
+                .map_err(|_| io::Error::other("wal flush response channel closed"))?
         }
     }
 
-    fn append_buffered(&self, record: &WalRecord) -> io::Result<WalPosition> {
+    fn append_buffered(
+        &self,
+        record: &WalRecord,
+        response: Option<mpsc::Sender<io::Result<WalPosition>>>,
+    ) -> io::Result<WalPosition> {
         let mut state = self
             .state
             .lock()
@@ -180,27 +187,12 @@ impl WalWriterInner {
         let mut record = record.clone();
         assign_wal_metadata(&mut record, state.next_lsn, &self.node_id);
         state.next_lsn += 1;
-        state.buffered.push(record);
+        state.buffered.push(BufferedWalRecord { record, response });
 
         if state.buffered.len() >= self.flush_max_records {
             self.flush_buffer_locked(&mut state)?;
         }
 
-        Ok(position)
-    }
-
-    fn append_persisted(&self, record: &WalRecord) -> io::Result<WalPosition> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| io::Error::other("wal writer mutex poisoned"))?;
-        let lsn = state.next_lsn;
-        let mut record = record.clone();
-        assign_wal_metadata(&mut record, lsn, &self.node_id);
-        let bytes = serialize_frame(&record)?;
-
-        let position = self.append_frame_locked(&mut state, &bytes, lsn, true)?;
-        state.next_lsn += 1;
         Ok(position)
     }
 
@@ -221,12 +213,19 @@ impl WalWriterInner {
         let buffered = std::mem::take(&mut state.buffered);
         let rollback_segment = state.segment_id;
         let rollback_offset = state.offset;
-        let flush_result = (|| {
+        let rollback_next_lsn = buffered
+            .first()
+            .map(|entry| entry.record.lsn)
+            .unwrap_or(state.next_lsn);
+        let has_waiters = buffered.iter().any(|entry| entry.response.is_some());
+        let mut positions = Vec::with_capacity(buffered.len());
+        let flush_result: io::Result<()> = (|| {
             let mut touched_segments = BTreeSet::new();
-            for record in &buffered {
-                let bytes = serialize_frame(record)?;
-                let position = self.append_frame_locked(state, &bytes, record.lsn, false)?;
+            for entry in &buffered {
+                let bytes = serialize_frame(&entry.record)?;
+                let position = self.append_frame_locked(state, &bytes, entry.record.lsn, false)?;
                 touched_segments.insert(position.segment);
+                positions.push(position);
             }
             for segment_id in touched_segments {
                 self.sync_segment(segment_id)?;
@@ -238,10 +237,16 @@ impl WalWriterInner {
             self.truncate_after(rollback_segment, rollback_offset, state.segment_id)?;
             state.segment_id = rollback_segment;
             state.offset = rollback_offset;
-            state.buffered = buffered;
+            if has_waiters {
+                state.next_lsn = rollback_next_lsn;
+                notify_buffered_failure(buffered, error.to_string());
+            } else {
+                state.buffered = buffered;
+            }
             return Err(error);
         }
 
+        notify_buffered_success(buffered, positions);
         Ok(())
     }
 
@@ -308,6 +313,22 @@ impl WalWriterInner {
     }
 }
 
+fn notify_buffered_success(buffered: Vec<BufferedWalRecord>, positions: Vec<WalPosition>) {
+    for (entry, position) in buffered.into_iter().zip(positions) {
+        if let Some(response) = entry.response {
+            let _ = response.send(Ok(position));
+        }
+    }
+}
+
+fn notify_buffered_failure(buffered: Vec<BufferedWalRecord>, message: String) {
+    for entry in buffered {
+        if let Some(response) = entry.response {
+            let _ = response.send(Err(io::Error::other(message.clone())));
+        }
+    }
+}
+
 fn ensure_wal_disk_space(
     dir: &Path,
     min_free_bytes: u64,
@@ -328,12 +349,17 @@ fn ensure_wal_disk_space(
 fn spawn_flush_loop(inner: Weak<WalWriterInner>) {
     thread::Builder::new()
         .name("ingest4x-wal-flush".to_string())
-        .spawn(move || {
-            while let Some(inner) = inner.upgrade() {
-                thread::sleep(inner.flush_max_interval);
-                if let Err(error) = inner.flush_buffer() {
-                    error!(error = %error, "failed to flush wal buffer");
-                }
+        .spawn(move || loop {
+            let Some(flush_max_interval) = inner.upgrade().map(|inner| inner.flush_max_interval)
+            else {
+                break;
+            };
+            thread::sleep(flush_max_interval);
+            let Some(inner) = inner.upgrade() else {
+                break;
+            };
+            if let Err(error) = inner.flush_buffer() {
+                error!(error = %error, "failed to flush wal buffer");
             }
         })
         .expect("spawn wal flush thread");

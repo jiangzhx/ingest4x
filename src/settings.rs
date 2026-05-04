@@ -113,8 +113,6 @@ pub struct WalSettings {
     pub flush_max_interval: String,
     #[serde(default = "default_wal_flush_max_records")]
     pub flush_max_records: usize,
-    #[serde(default = "default_wal_flush_max_bytes")]
-    pub flush_max_bytes: u64,
     #[serde(default)]
     pub no_sync: bool,
     #[serde(default = "default_wal_segment_max_bytes")]
@@ -178,10 +176,6 @@ pub fn default_wal_flush_max_interval() -> String {
 
 pub const fn default_wal_flush_max_records() -> usize {
     1000
-}
-
-pub const fn default_wal_flush_max_bytes() -> u64 {
-    4 * 1024 * 1024
 }
 
 pub fn default_checkpoint_flush_interval() -> String {
