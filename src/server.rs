@@ -23,9 +23,9 @@ use prometheus::Registry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-#[cfg(feature = "ingest")]
-use tracing::error;
 use tracing::info;
+#[cfg(feature = "ingest")]
+use tracing::warn;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -212,17 +212,50 @@ fn spawn_wal_replay_loop(state: AppState) {
     }
 
     tokio::spawn(async move {
+        let mut consecutive_errors = 0_u32;
         loop {
             match replay_wal_once(&state).await {
-                Ok(0) => tokio::time::sleep(Duration::from_secs(1)).await,
-                Ok(_) => {}
+                Ok(0) => {
+                    consecutive_errors = 0;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                Ok(_) => {
+                    consecutive_errors = 0;
+                }
                 Err(error) => {
-                    error!(error = %error, "wal replay worker stopped");
-                    break;
+                    let retry_delay = wal_replay_retry_delay(consecutive_errors);
+                    consecutive_errors = consecutive_errors.saturating_add(1);
+                    warn!(
+                        error = %error,
+                        retry_delay_ms = retry_delay.as_millis(),
+                        "wal replay failed; retrying"
+                    );
+                    tokio::time::sleep(retry_delay).await;
                 }
             }
         }
     });
+}
+
+#[cfg(feature = "ingest")]
+fn wal_replay_retry_delay(consecutive_errors: u32) -> Duration {
+    let capped_shift = consecutive_errors.min(9);
+    let delay_ms = 100_u64.saturating_mul(1_u64 << capped_shift).min(30_000);
+    Duration::from_millis(delay_ms)
+}
+
+#[cfg(all(test, feature = "ingest"))]
+mod tests {
+    use super::wal_replay_retry_delay;
+    use std::time::Duration;
+
+    #[test]
+    fn wal_replay_retry_delay_uses_exponential_backoff_with_cap() {
+        assert_eq!(wal_replay_retry_delay(0), Duration::from_millis(100));
+        assert_eq!(wal_replay_retry_delay(1), Duration::from_millis(200));
+        assert_eq!(wal_replay_retry_delay(2), Duration::from_millis(400));
+        assert_eq!(wal_replay_retry_delay(20), Duration::from_secs(30));
+    }
 }
 
 async fn init_project_state(
