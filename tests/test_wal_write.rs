@@ -1,0 +1,463 @@
+#![cfg(feature = "ingest")]
+
+use actix_http::StatusCode;
+use actix_web::{test, App};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use ingest4x::server;
+use ingest4x::settings::{Settings, WalSettings};
+use ingest4x::wal::{new_record, read_all_records, WalWriter};
+use serde_json::json;
+use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
+use tempfile::tempdir;
+
+#[actix_rt::test]
+async fn post_ingest_writes_raw_request_to_wal_when_configured() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:65535"
+topic = "unused-valid"
+
+[[events.valid.routes]]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
+"#,
+            wal_dir.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+    let payload = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-1",
+            "os": "ios"
+        }
+    });
+
+    let req = test::TestRequest::post()
+        .uri("/ingest")
+        .insert_header(("x-test-header", "kept"))
+        .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
+        .insert_header(("content-type", "application/json"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = test::read_body(resp).await;
+    assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
+
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.method, "POST");
+    assert_eq!(record.path, "/ingest");
+    assert_eq!(
+        record.headers.get("x-test-header").map(String::as_str),
+        Some("kept")
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
+        payload
+    );
+    assert!(record.record_id.starts_with("wal-"));
+    assert!(record.received_at_ms > 0);
+}
+
+#[actix_rt::test]
+async fn get_ingest_writes_decoded_payload_to_wal_when_configured() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:65535"
+topic = "unused-valid"
+
+[[events.valid.routes]]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
+"#,
+            wal_dir.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+    let payload = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-2",
+            "os": "android"
+        }
+    });
+    let encoded = STANDARD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
+    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+
+    let req = test::TestRequest::get()
+        .uri(format!("/ingest?{query}").as_str())
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records.len(), 1);
+    let record = &records[0];
+    assert_eq!(record.method, "GET");
+    assert_eq!(record.path, "/ingest");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
+        payload
+    );
+}
+
+#[actix_rt::test]
+async fn no_sync_buffers_until_wal_max_write_buffer_size_is_reached() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+no_sync = true
+wal_flush_interval = "1h"
+wal_max_write_buffer_size = 2
+
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:65535"
+topic = "unused-valid"
+
+[[events.valid.routes]]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
+"#,
+            wal_dir.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+
+    for index in 1..=2 {
+        let payload = json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": format!("iid-{index}"),
+                "os": "ios"
+            }
+        });
+        let req = test::TestRequest::post()
+            .uri("/ingest")
+            .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
+            .insert_header(("content-type", "application/json"))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let records = read_all_records(&wal_dir).expect("read wal records");
+        if index == 1 {
+            assert!(records.is_empty());
+        } else {
+            assert_eq!(records.len(), 2);
+        }
+    }
+}
+
+#[actix_rt::test]
+async fn wal_segment_uses_binary_header_and_binary_record_payload() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[server]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+
+[events.sink.kafka_valid]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:65535"
+topic = "unused-valid"
+
+[[events.valid.routes]]
+sinks = ["kafka_valid"]
+ack = ["kafka_valid"]
+"#,
+            wal_dir.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+    let payload = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-format",
+            "os": "ios"
+        }
+    });
+
+    let req = test::TestRequest::post()
+        .uri("/ingest")
+        .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
+        .insert_header(("content-type", "application/json"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = fs::read(wal_segment_path(&wal_dir)).expect("read wal segment");
+    let identifier = b"i4x.001";
+    assert!(bytes.starts_with(identifier));
+
+    let header_crc_offset = identifier.len();
+    let expected_header_crc = u32::from_be_bytes(
+        bytes[header_crc_offset..header_crc_offset + 4]
+            .try_into()
+            .unwrap(),
+    );
+    assert_eq!(crc32fast::hash(identifier), expected_header_crc);
+
+    let frame_offset = identifier.len() + 4;
+    let payload_len =
+        u32::from_be_bytes(bytes[frame_offset..frame_offset + 4].try_into().unwrap()) as usize;
+    let payload_crc = u32::from_be_bytes(
+        bytes[frame_offset + 4..frame_offset + 8]
+            .try_into()
+            .unwrap(),
+    );
+    let payload_bytes = &bytes[frame_offset + 8..frame_offset + 8 + payload_len];
+    assert_eq!(crc32fast::hash(payload_bytes), payload_crc);
+    assert_ne!(payload_bytes.first(), Some(&b'{'));
+    assert!(!payload_bytes
+        .windows(STANDARD.encode(serde_json::to_vec(&payload).unwrap()).len())
+        .any(|window| window
+            == STANDARD
+                .encode(serde_json::to_vec(&payload).unwrap())
+                .as_bytes()));
+}
+
+fn wal_segment_path(wal_dir: &Path) -> std::path::PathBuf {
+    wal_dir.join("00000000000000000001.wal")
+}
+
+#[actix_rt::test]
+async fn read_all_records_ignores_trailing_partial_frame() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let record = test_record("complete");
+    writer.append(&record).expect("append record");
+    drop(writer);
+
+    append_bytes(
+        &wal_segment_path(&wal_dir),
+        &[0, 0, 0, 10, 0, 0, 0, 0, 1, 2],
+    );
+
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records, vec![record]);
+}
+
+#[actix_rt::test]
+async fn wal_writer_truncates_trailing_partial_frame_before_append() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let first = test_record("first");
+    writer.append(&first).expect("append first");
+    drop(writer);
+
+    append_bytes(
+        &wal_segment_path(&wal_dir),
+        &[0, 0, 0, 10, 0, 0, 0, 0, 1, 2],
+    );
+
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let second = test_record("second");
+    writer.append(&second).expect("append second");
+    drop(writer);
+
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records, vec![first, second]);
+}
+
+#[actix_rt::test]
+async fn no_sync_flush_failure_rolls_back_written_batch() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.no_sync = true;
+    settings.wal_max_write_buffer_size = 2;
+    settings.wal_flush_interval = "1h".to_string();
+
+    let writer = WalWriter::new(&settings).expect("wal writer");
+    ingest4x::wal::fail_after_test_writes(1);
+    let first = test_record("first");
+    writer.append(&first).expect("buffer first");
+    let second = test_record("second");
+    let err = writer.append(&second).expect_err("flush should fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+
+    ingest4x::wal::fail_after_test_writes(usize::MAX);
+    writer.flush().expect("flush retry");
+
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records, vec![first, second]);
+}
+
+#[actix_rt::test]
+async fn no_sync_flush_failure_removes_segments_created_by_batch() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.no_sync = true;
+    settings.wal_max_write_buffer_size = 3;
+    settings.wal_flush_interval = "1h".to_string();
+    settings.wal_segment_max_bytes = 16;
+
+    let writer = WalWriter::new(&settings).expect("wal writer");
+    ingest4x::wal::fail_after_test_writes(2);
+    let first = test_record("first");
+    writer.append(&first).expect("buffer first");
+    let second = test_record("second");
+    writer.append(&second).expect("buffer second");
+    let third = test_record("third");
+    let err = writer.append(&third).expect_err("flush should fail");
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+
+    assert!(!wal_dir.join("00000000000000000002.wal").exists());
+
+    ingest4x::wal::fail_after_test_writes(usize::MAX);
+    writer.flush().expect("flush retry");
+
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records, vec![first, second, third]);
+}
+
+fn wal_settings(wal_dir: &Path) -> WalSettings {
+    ingest4x::wal::fail_after_test_writes(usize::MAX);
+    WalSettings {
+        dir: wal_dir.display().to_string(),
+        wal_flush_interval: "1s".to_string(),
+        wal_max_write_buffer_size: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+    }
+}
+
+fn test_record(body: &str) -> ingest4x::wal::WalRecord {
+    new_record(
+        "POST",
+        "/ingest",
+        None,
+        None,
+        BTreeMap::new(),
+        body.as_bytes().to_vec(),
+    )
+}
+
+fn append_bytes(path: &Path, bytes: &[u8]) {
+    OpenOptions::new()
+        .append(true)
+        .open(path)
+        .expect("open wal segment")
+        .write_all(bytes)
+        .expect("append bytes");
+}

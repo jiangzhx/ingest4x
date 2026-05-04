@@ -11,6 +11,8 @@ pub struct Settings {
     #[serde(default)]
     pub database: Option<DatabaseSettings>,
     #[serde(default)]
+    pub wal: Option<WalSettings>,
+    #[serde(default)]
     pub events: EventsSettings,
     pub redis: Option<RedisSettings>,
 }
@@ -99,6 +101,20 @@ pub struct DatabaseSettings {
     pub refresh_interval_secs: u64,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct WalSettings {
+    pub dir: String,
+    #[serde(default = "default_wal_flush_interval")]
+    pub wal_flush_interval: String,
+    #[serde(default = "default_wal_max_write_buffer_size")]
+    pub wal_max_write_buffer_size: usize,
+    #[serde(default)]
+    pub no_sync: bool,
+    #[serde(default = "default_wal_segment_max_bytes")]
+    pub wal_segment_max_bytes: u64,
+}
+
 pub fn default_kafka_delivery_timeout_ms() -> String {
     "3000".to_string()
 }
@@ -121,6 +137,18 @@ pub fn default_kafka_linger_ms() -> String {
 
 pub const fn default_database_refresh_interval_secs() -> u64 {
     3
+}
+
+pub const fn default_wal_segment_max_bytes() -> u64 {
+    128 * 1024 * 1024
+}
+
+pub fn default_wal_flush_interval() -> String {
+    "1s".to_string()
+}
+
+pub const fn default_wal_max_write_buffer_size() -> usize {
+    100_000
 }
 
 pub const fn default_processor_max_operations() -> u64 {

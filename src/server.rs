@@ -13,6 +13,7 @@ use crate::rules::RuleRepository;
 use crate::settings::{default_database_refresh_interval_secs, Settings};
 use crate::utils::events::{init_event_sinks, EventSinkState};
 use crate::utils::prometheus::{init_private_prometheus, init_public_prometheus};
+use crate::wal::WalWriter;
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{web, App, HttpResponse, HttpServer};
 use prometheus::Registry;
@@ -67,6 +68,8 @@ pub struct AppState {
     project_registry: Data<ProjectRegistryState>,
     #[cfg(feature = "ingest")]
     processor: Data<ProcessorState>,
+    #[cfg(feature = "ingest")]
+    wal: Option<Data<WalWriter>>,
 }
 
 pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
@@ -118,6 +121,14 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
     let processor = Data::new(ProcessorState::from_default_entry().map_err(|error| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
     })?);
+    #[cfg(feature = "ingest")]
+    let wal = settings
+        .wal
+        .as_ref()
+        .map(WalWriter::new)
+        .transpose()
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .map(Data::new);
 
     Ok(AppState {
         settings,
@@ -127,6 +138,8 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
         project_registry,
         #[cfg(feature = "ingest")]
         processor,
+        #[cfg(feature = "ingest")]
+        wal,
     })
 }
 
@@ -137,6 +150,9 @@ pub fn configure_public_app(cfg: &mut ServiceConfig, state: AppState) {
 
     #[cfg(feature = "ingest")]
     {
+        if let Some(wal) = state.wal {
+            cfg.app_data(wal);
+        }
         cfg.service(
             web::resource("/ingest")
                 .app_data(state.rule_repository.clone())

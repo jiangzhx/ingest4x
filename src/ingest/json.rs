@@ -11,26 +11,36 @@ use crate::utils::events::{EventSinkState, EventStatus};
 #[cfg(feature = "ingest")]
 use crate::utils::get_ip;
 #[cfg(feature = "ingest")]
+use crate::wal::{new_record, WalWriter};
+#[cfg(feature = "ingest")]
 use actix_web::web::Data;
 #[cfg(feature = "ingest")]
 use actix_web::{web, HttpRequest, HttpResponse};
 #[cfg(feature = "ingest")]
 use serde_json::Value;
 #[cfg(feature = "ingest")]
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 #[cfg(feature = "ingest")]
 use tracing::{error, warn};
 
 #[cfg(feature = "ingest")]
 pub async fn post_ingest(
     req: HttpRequest,
-    data: web::Json<Value>,
+    body: web::Bytes,
     project_registry: Data<ProjectRegistryState>,
     event_sinks: Data<EventSinkState>,
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
+    wal: Option<Data<WalWriter>>,
 ) -> HttpResponse {
-    let json = data.into_inner();
+    if let Some(wal) = wal {
+        return append_wal_record(&req, body.to_vec(), &wal).await;
+    }
+
+    let json = match serde_json::from_slice::<Value>(&body) {
+        Ok(json) => json,
+        Err(err) => return HttpResponse::BadRequest().body(format!("invalid json payload: {err}")),
+    };
     let event_name = json["xwhat"].as_str().unwrap_or("default").to_string();
     let original_json = json.clone();
     let mut event = match Event::from_value(json) {
@@ -273,4 +283,44 @@ pub(crate) fn processor_request_context(req: &HttpRequest) -> ProcessorRequestCo
         req.path().to_string(),
         headers,
     )
+}
+
+#[cfg(feature = "ingest")]
+pub(crate) async fn append_wal_record(
+    req: &HttpRequest,
+    body: Vec<u8>,
+    wal: &WalWriter,
+) -> HttpResponse {
+    let record = new_record(
+        req.method().as_str(),
+        req.path(),
+        req.uri().query().map(ToString::to_string),
+        req.peer_addr().map(|addr| addr.to_string()),
+        request_headers(req),
+        body,
+    );
+
+    match wal.append(&record) {
+        Ok(_) => HttpResponse::Ok().body("200"),
+        Err(err) => {
+            error!(
+                error = %err,
+                "failed to append ingest payload to wal"
+            );
+            HttpResponse::ServiceUnavailable().body("Failed to persist event")
+        }
+    }
+}
+
+#[cfg(feature = "ingest")]
+fn request_headers(req: &HttpRequest) -> BTreeMap<String, String> {
+    req.headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect()
 }

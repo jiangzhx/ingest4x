@@ -1,5 +1,5 @@
 #[cfg(feature = "ingest")]
-use crate::ingest::json::{process_ingest_payload, processor_request_context};
+use crate::ingest::json::{append_wal_record, process_ingest_payload, processor_request_context};
 #[cfg(feature = "ingest")]
 use crate::ingest::processor::ProcessorState;
 #[cfg(feature = "ingest")]
@@ -8,6 +8,8 @@ use crate::projects::ProjectRegistryState;
 use crate::rules::RuleRepository;
 #[cfg(feature = "ingest")]
 use crate::utils::events::EventSinkState;
+#[cfg(feature = "ingest")]
+use crate::wal::WalWriter;
 #[cfg(feature = "ingest")]
 use actix_web::web::{Data, Query};
 #[cfg(feature = "ingest")]
@@ -29,6 +31,7 @@ pub async fn get_ingest(
     event_sinks: Data<EventSinkState>,
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
+    wal: Option<Data<WalWriter>>,
 ) -> HttpResponse {
     let query_params = query_params.into_inner();
 
@@ -40,6 +43,10 @@ pub async fn get_ingest(
         Ok(decoded) => decoded,
         Err(err) => return HttpResponse::BadRequest().body(format!("invalid base64 data: {err}")),
     };
+
+    if let Some(wal) = wal {
+        return append_wal_record(&req, decoded, &wal).await;
+    }
 
     let json = match serde_json::from_slice::<Value>(&decoded) {
         Ok(json) => json,

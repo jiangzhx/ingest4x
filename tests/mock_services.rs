@@ -56,6 +56,7 @@ pub async fn create_configured_app(
             admin_password: None,
         },
         database: None,
+        wal: None,
         events: stdout_events_settings(),
         redis: None,
     });

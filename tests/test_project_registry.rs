@@ -141,6 +141,7 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
             admin_password: None,
         },
         database: None,
+        wal: None,
         events: test_events_settings(),
         redis: None,
     });
@@ -196,6 +197,7 @@ async fn build_app_state_allows_database_config_without_redis_for_registry_backe
             url: "sqlite::memory:".to_string(),
             refresh_interval_secs: 3,
         }),
+        wal: None,
         events: test_events_settings(),
         redis: None,
     });
@@ -221,6 +223,7 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
             url: "sqlite::memory:".to_string(),
             refresh_interval_secs: 3,
         }),
+        wal: None,
         events: test_events_settings(),
         redis: None,
     });

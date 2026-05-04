@@ -131,6 +131,7 @@ mod tests {
                 admin_password: admin_password.map(str::to_string),
             },
             database: None,
+            wal: None,
             events: crate::settings::EventsSettings::default(),
             redis: None,
         }

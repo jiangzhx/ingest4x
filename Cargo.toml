@@ -40,6 +40,8 @@ anyhow = "1.0.94"
 base64 = "0.22.1"
 serde_urlencoded = "0.7.1"
 bytes = "1.10.1"
+crc32fast = "1.4.2"
+bitcode = { version = "0.6.7", features = ["serde"] }
 walkdir = "2.5.0"
 humantime = "2.1.0"
 sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio", "sqlx-mysql", "sqlx-sqlite"] }
