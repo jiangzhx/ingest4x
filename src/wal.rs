@@ -1156,11 +1156,11 @@ fn last_segment_id(dir: &Path) -> io::Result<Option<u64>> {
 }
 
 fn segment_path(dir: &Path, segment_id: u64) -> PathBuf {
-    dir.join(format!("{segment_id:020}.{SEGMENT_EXTENSION}"))
+    dir.join(format!("{segment_id:016}.{SEGMENT_EXTENSION}"))
 }
 
 fn segment_tmp_path(dir: &Path, segment_id: u64) -> PathBuf {
-    dir.join(format!("{segment_id:020}.{SEGMENT_EXTENSION}.tmp"))
+    dir.join(format!("{segment_id:016}.{SEGMENT_EXTENSION}.tmp"))
 }
 
 fn segment_id_from_path(path: &Path) -> io::Result<u64> {

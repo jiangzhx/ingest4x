@@ -82,6 +82,9 @@ sinks = ["kafka_valid"]
     let body = test::read_body(resp).await;
     assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
 
+    let segment_names = wal_segment_names(&wal_dir);
+    assert_eq!(segment_names, vec!["0000000000000001.wal"]);
+
     let records = read_all_records(&wal_dir).expect("read wal records");
     assert_eq!(records.len(), 1);
     let record = &records[0];
@@ -653,7 +656,23 @@ sinks = ["kafka_valid"]
 }
 
 fn wal_segment_path(wal_dir: &Path) -> std::path::PathBuf {
-    wal_dir.join("00000000000000000001.wal")
+    wal_dir.join("0000000000000001.wal")
+}
+
+fn wal_segment_names(wal_dir: &Path) -> Vec<String> {
+    let mut names = fs::read_dir(wal_dir)
+        .expect("read wal dir")
+        .map(|entry| {
+            entry
+                .expect("wal dir entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|name| name.ends_with(".wal"))
+        .collect::<Vec<_>>();
+    names.sort();
+    names
 }
 
 #[actix_rt::test]
@@ -749,8 +768,8 @@ async fn wal_writer_creates_segment_after_checkpoint_when_segments_are_deleted()
     drop(writer);
 
     assert_eq!(position.segment, 4);
-    assert!(wal_dir.join("00000000000000000004.wal").exists());
-    assert!(!wal_dir.join("00000000000000000001.wal").exists());
+    assert!(wal_dir.join("0000000000000004.wal").exists());
+    assert!(!wal_dir.join("0000000000000001.wal").exists());
 }
 
 #[actix_rt::test]
@@ -856,7 +875,7 @@ async fn wal_segment_creation_removes_stale_tmp_before_rename() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     fs::create_dir_all(&wal_dir).expect("create wal dir");
-    let stale_tmp = wal_dir.join("00000000000000000002.wal.tmp");
+    let stale_tmp = wal_dir.join("0000000000000002.wal.tmp");
     fs::write(&stale_tmp, b"stale tmp").expect("write stale tmp");
 
     let mut settings = wal_settings(&wal_dir);
@@ -868,7 +887,7 @@ async fn wal_segment_creation_removes_stale_tmp_before_rename() {
         .expect("append second");
     drop(writer);
 
-    assert!(wal_dir.join("00000000000000000002.wal").exists());
+    assert!(wal_dir.join("0000000000000002.wal").exists());
     assert!(!stale_tmp.exists());
 }
 
@@ -997,7 +1016,7 @@ async fn no_sync_flush_failure_removes_segments_created_by_batch() {
     let err = writer.append(&third).expect_err("flush should fail");
     assert_eq!(err.kind(), std::io::ErrorKind::Other);
 
-    assert!(!wal_dir.join("00000000000000000002.wal").exists());
+    assert!(!wal_dir.join("0000000000000002.wal").exists());
 
     ingest4x::wal::fail_after_test_writes(usize::MAX);
     writer.flush().expect("flush retry");
@@ -1142,5 +1161,5 @@ fn write_empty_segment(wal_dir: &Path, segment_id: u64, node_id: &str, start_lsn
     header[38..38 + node_id.len()].copy_from_slice(node_id);
     let crc = crc32fast::hash(&header[..508]);
     header[508..512].copy_from_slice(&crc.to_be_bytes());
-    fs::write(wal_dir.join(format!("{segment_id:020}.wal")), header).expect("write empty segment");
+    fs::write(wal_dir.join(format!("{segment_id:016}.wal")), header).expect("write empty segment");
 }

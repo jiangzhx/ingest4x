@@ -557,8 +557,8 @@ sinks = ["kafka_invalid"]
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
     }
-    assert!(wal_dir.join("00000000000000000001.wal").exists());
-    assert!(wal_dir.join("00000000000000000002.wal").exists());
+    assert!(wal_dir.join("0000000000000001.wal").exists());
+    assert!(wal_dir.join("0000000000000002.wal").exists());
 
     assert_eq!(
         server::replay_wal_once(&app_state)
@@ -567,8 +567,8 @@ sinks = ["kafka_invalid"]
         2
     );
 
-    assert!(!wal_dir.join("00000000000000000001.wal").exists());
-    assert!(wal_dir.join("00000000000000000002.wal").exists());
+    assert!(!wal_dir.join("0000000000000001.wal").exists());
+    assert!(wal_dir.join("0000000000000002.wal").exists());
 }
 
 #[actix_rt::test]
@@ -935,7 +935,7 @@ fn test_wal_record(payload: Value) -> WalRecord {
 fn rewrite_wal_entry_lsn(wal_dir: &Path, entry_index: usize, new_lsn: u64) {
     let entries = read_entries_after_limit(wal_dir, None, None).expect("read wal entries");
     let entry = entries.get(entry_index).expect("entry to rewrite");
-    let path = wal_dir.join(format!("{:020}.wal", entry.position.segment));
+    let path = wal_dir.join(format!("{:016}.wal", entry.position.segment));
     let frame_len = usize::try_from(entry.next_position.offset - entry.position.offset)
         .expect("frame length should fit usize");
     let mut file = OpenOptions::new()
