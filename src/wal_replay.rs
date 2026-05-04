@@ -214,6 +214,16 @@ fn read_checkpoint(dir: &Path) -> io::Result<Option<WalPosition>> {
     let checkpoint = serde_json::from_slice::<WalCheckpoint>(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     checkpoint.validate_checksum(&checkpoint_path(dir))?;
+    let node_id = read_node_id(dir)?;
+    if checkpoint.node_id != node_id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "checkpoint node_id mismatch: checkpoint={} current={}",
+                checkpoint.node_id, node_id
+            ),
+        ));
+    }
     Ok(Some(checkpoint.position()))
 }
 
