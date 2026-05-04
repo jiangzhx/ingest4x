@@ -83,8 +83,6 @@ pub struct EventRouteSettings {
     pub xwhat: Option<Vec<String>>,
     #[serde(default)]
     pub sinks: Vec<String>,
-    #[serde(default)]
-    pub ack: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

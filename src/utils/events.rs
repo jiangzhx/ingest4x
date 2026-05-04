@@ -2,11 +2,10 @@ use crate::settings::{EventRouteSet, EventRouteSettings, EventSinkConfig, Events
 use crate::utils::kafka::KafkaProducer;
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
-use log::warn;
 use rdkafka::config::ClientConfig;
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -83,28 +82,15 @@ impl EventRouter {
             .iter()
             .find(|route| route.matches(appid, xwhat))
             .ok_or_else(|| anyhow!("no event route matched appid={appid} xwhat={xwhat}"))?;
-        let ack: HashSet<&str> = route.ack.iter().map(String::as_str).collect();
-        let mut ack_errors = Vec::new();
+        let sink_name = route.sinks[0].as_str();
+        let sink = self
+            .sinks
+            .get(sink_name)
+            .ok_or_else(|| anyhow!("event route references unknown sink `{sink_name}`"))?;
 
-        for sink_name in &route.sinks {
-            let Some(sink) = self.sinks.get(sink_name) else {
-                continue;
-            };
-
-            if let Err(err) = sink.send(payload).await {
-                if ack.contains(sink_name.as_str()) {
-                    ack_errors.push(format!("{sink_name}: {err}"));
-                } else {
-                    warn!("non-ack event sink `{sink_name}` failed: {err}");
-                }
-            }
-        }
-
-        if ack_errors.is_empty() {
-            Ok(())
-        } else {
-            Err(anyhow!("ack event sinks failed: {}", ack_errors.join("; ")))
-        }
+        sink.send(payload)
+            .await
+            .with_context(|| format!("event sink `{sink_name}` failed"))
     }
 
     async fn check_alive(&self) -> Result<()> {
@@ -187,24 +173,16 @@ fn validate_routes(
     sinks: &HashMap<String, EventSink>,
 ) -> Result<()> {
     for (index, route) in route_set.routes.iter().enumerate() {
-        if route.sinks.is_empty() {
+        if route.sinks.len() != 1 {
             return Err(anyhow!(
-                "{name}.routes[{index}] must declare at least one sink"
+                "{name}.routes[{index}] must declare exactly one sink"
             ));
         }
 
-        for sink_name in route.sinks.iter().chain(route.ack.iter()) {
+        for sink_name in &route.sinks {
             if !sinks.contains_key(sink_name) {
                 return Err(anyhow!(
                     "{name}.routes[{index}] references unknown sink `{sink_name}`"
-                ));
-            }
-        }
-
-        for ack_name in &route.ack {
-            if !route.sinks.contains(ack_name) {
-                return Err(anyhow!(
-                    "{name}.routes[{index}] ack sink `{ack_name}` must also be listed in sinks"
                 ));
             }
         }
@@ -280,11 +258,9 @@ mod tests {
                         appid: Some(vec!["game-a".to_string()]),
                         xwhat: Some(vec!["payment".to_string()]),
                         sinks: vec!["kafka_payment".to_string()],
-                        ack: vec!["kafka_payment".to_string()],
                     },
                     EventRouteSettings {
                         sinks: vec!["kafka_default".to_string()],
-                        ack: vec!["kafka_default".to_string()],
                         ..Default::default()
                     },
                 ],
@@ -320,6 +296,30 @@ mod tests {
             read_message_payload(&default_consumer).await,
             "{\"id\":\"startup\"}"
         );
+    }
+
+    #[test]
+    fn route_must_declare_exactly_one_sink() {
+        let settings = EventsSettings {
+            sink: HashMap::from([
+                ("stdout_a".to_string(), EventSinkConfig::Stdout),
+                ("stdout_b".to_string(), EventSinkConfig::Stdout),
+            ]),
+            valid: EventRouteSet {
+                routes: vec![EventRouteSettings {
+                    sinks: vec!["stdout_a".to_string(), "stdout_b".to_string()],
+                    ..Default::default()
+                }],
+            },
+            invalid: EventRouteSet::default(),
+        };
+
+        let error = match init_event_sinks(&settings) {
+            Ok(_) => panic!("route with multiple sinks should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("must declare exactly one sink"));
     }
 
     struct TestKafkaCluster {

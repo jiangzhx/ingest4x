@@ -28,11 +28,9 @@ type = "stdout"
 
 [[events.valid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 
 [[events.invalid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 
 [redis]
 address = "redis://localhost:6379"
@@ -68,11 +66,9 @@ type = "stdout"
 
 [[events.valid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 
 [[events.invalid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 "#,
     )
     .expect("write config");
@@ -106,11 +102,9 @@ type = "stdout"
 
 [[events.valid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 
 [[events.invalid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 "#,
     )
     .expect("write config");
@@ -152,15 +146,12 @@ type = "stdout"
 appid = ["game-a"]
 xwhat = ["payment"]
 sinks = ["kafka_payment"]
-ack = ["kafka_payment"]
 
 [[events.valid.routes]]
 sinks = ["kafka_payment"]
-ack = ["kafka_payment"]
 
 [[events.invalid.routes]]
 sinks = ["stdout_invalid"]
-ack = ["stdout_invalid"]
 "#,
     )
     .expect("write config");
@@ -188,10 +179,6 @@ ack = ["stdout_invalid"]
     );
     assert_eq!(
         settings.events.valid.routes[0].sinks,
-        vec!["kafka_payment".to_string()]
-    );
-    assert_eq!(
-        settings.events.valid.routes[0].ack,
         vec!["kafka_payment".to_string()]
     );
     assert_eq!(

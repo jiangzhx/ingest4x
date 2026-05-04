@@ -418,6 +418,12 @@ Parquet 本地文件推荐成功定义：
 DownstreamWriter.Write(event) success = event 已经被下游可靠接收 / 持久化
 ```
 
+第一版事件路由采用单 sink 模型：
+
+- 每条 route 必须且只能配置一个 `sinks` 目标。
+- 不再定义 `ack` 列表。
+- replay 只有在该 sink 写入返回成功后，才能推进 checkpoint。
+
 只有该接口返回成功后，才能推进 `applied_lsn`。
 
 ## 下游失败处理

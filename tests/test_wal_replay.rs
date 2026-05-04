@@ -58,7 +58,6 @@ linger_ms = "0"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 
 [events.sink.kafka_invalid]
 type = "kafka"
@@ -72,7 +71,6 @@ linger_ms = "0"
 
 [[events.invalid.routes]]
 sinks = ["kafka_invalid"]
-ack = ["kafka_invalid"]
 "#,
             wal_dir.display(),
             kafka.bootstrap_servers,
@@ -211,13 +209,11 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
                 EventRouteSettings {
                     xwhat: Some(vec!["custom_event".to_string()]),
                     sinks: vec!["kafka_original".to_string()],
-                    ack: vec!["kafka_original".to_string()],
                     ..Default::default()
                 },
                 EventRouteSettings {
                     xwhat: Some(vec!["mutated_event".to_string()]),
                     sinks: vec!["kafka_mutated".to_string()],
-                    ack: vec!["kafka_mutated".to_string()],
                     ..Default::default()
                 },
             ],
@@ -315,7 +311,6 @@ linger_ms = "0"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 
 [events.sink.kafka_invalid]
 type = "kafka"
@@ -329,7 +324,6 @@ linger_ms = "0"
 
 [[events.invalid.routes]]
 sinks = ["kafka_invalid"]
-ack = ["kafka_invalid"]
 "#,
             wal_dir.display(),
             kafka.bootstrap_servers,
@@ -416,7 +410,6 @@ async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write(
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["stdout".to_string()],
-                ack: vec!["stdout".to_string()],
                 ..Default::default()
             }],
         },
@@ -507,7 +500,6 @@ linger_ms = "0"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 
 [events.sink.kafka_invalid]
 type = "kafka"
@@ -521,7 +513,6 @@ linger_ms = "0"
 
 [[events.invalid.routes]]
 sinks = ["kafka_invalid"]
-ack = ["kafka_invalid"]
 "#,
             wal_dir.display(),
             kafka.bootstrap_servers,
@@ -615,7 +606,6 @@ async fn wal_replay_rejects_checkpoint_with_invalid_checksum() {
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["kafka_valid".to_string()],
-                ack: vec!["kafka_valid".to_string()],
                 ..Default::default()
             }],
         },
@@ -724,7 +714,6 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["kafka_valid".to_string()],
-                ack: vec!["kafka_valid".to_string()],
                 ..Default::default()
             }],
         },
@@ -811,7 +800,6 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["stdout".to_string()],
-                ack: vec!["stdout".to_string()],
                 ..Default::default()
             }],
         },

@@ -172,14 +172,12 @@ fn stdout_events_settings() -> EventsSettings {
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["stdout".to_string()],
-                ack: vec!["stdout".to_string()],
                 ..Default::default()
             }],
         },
         invalid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["stdout".to_string()],
-                ack: vec!["stdout".to_string()],
                 ..Default::default()
             }],
         },
@@ -223,14 +221,12 @@ fn kafka_events_settings(
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["kafka_valid".to_string()],
-                ack: vec!["kafka_valid".to_string()],
                 ..Default::default()
             }],
         },
         invalid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["kafka_invalid".to_string()],
-                ack: vec!["kafka_invalid".to_string()],
                 ..Default::default()
             }],
         },

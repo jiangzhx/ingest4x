@@ -275,14 +275,12 @@ fn test_events_settings() -> EventsSettings {
         valid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["stdout".to_string()],
-                ack: vec!["stdout".to_string()],
                 ..Default::default()
             }],
         },
         invalid: EventRouteSet {
             routes: vec![EventRouteSettings {
                 sinks: vec!["stdout".to_string()],
-                ack: vec!["stdout".to_string()],
                 ..Default::default()
             }],
         },

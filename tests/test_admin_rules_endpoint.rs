@@ -243,11 +243,9 @@ type = "stdout"
 
 [[events.valid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 
 [[events.invalid.routes]]
 sinks = ["stdout"]
-ack = ["stdout"]
 "#,
     )
     .expect("write config");

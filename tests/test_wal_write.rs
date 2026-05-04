@@ -40,7 +40,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -122,7 +121,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -194,7 +192,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -252,7 +249,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -320,7 +316,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -387,7 +382,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -455,7 +449,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -527,7 +520,6 @@ topic = "unused-valid"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),

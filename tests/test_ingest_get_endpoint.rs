@@ -44,7 +44,6 @@ linger_ms = "0"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 
 [events.sink.kafka_invalid]
 type = "kafka"
@@ -58,7 +57,6 @@ linger_ms = "0"
 
 [[events.invalid.routes]]
 sinks = ["kafka_invalid"]
-ack = ["kafka_invalid"]
 "#,
             kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
@@ -153,7 +151,6 @@ linger_ms = "0"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 
 [events.sink.kafka_invalid]
 type = "kafka"
@@ -167,7 +164,6 @@ linger_ms = "0"
 
 [[events.invalid.routes]]
 sinks = ["kafka_invalid"]
-ack = ["kafka_invalid"]
 "#,
             kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
@@ -249,7 +245,6 @@ linger_ms = "0"
 
 [[events.valid.routes]]
 sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
 
 [events.sink.kafka_invalid]
 type = "kafka"
@@ -263,7 +258,6 @@ linger_ms = "0"
 
 [[events.invalid.routes]]
 sinks = ["kafka_invalid"]
-ack = ["kafka_invalid"]
 "#,
             kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
