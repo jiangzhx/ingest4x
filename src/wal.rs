@@ -15,6 +15,11 @@ use uuid::Uuid;
 
 const FILE_TYPE_IDENTIFIER: &[u8] = b"i4x.001";
 const SEGMENT_HEADER_LEN: u64 = FILE_TYPE_IDENTIFIER.len() as u64 + 4;
+const RECORD_MAGIC: &[u8; 8] = b"i4x.rec\0";
+const RECORD_VERSION: u16 = 1;
+const RECORD_TYPE_DATA: u8 = 1;
+const RECORD_FLAGS_NONE: u8 = 0;
+const RECORD_HEADER_FIXED_LEN: usize = 42;
 const SEGMENT_EXTENSION: &str = "wal";
 const FIRST_SEGMENT_ID: u64 = 1;
 const NODE_ID_FILE: &str = "node_id";
@@ -498,16 +503,39 @@ fn read_segment_entries_after(
 fn serialize_frame(record: &WalRecord) -> io::Result<Vec<u8>> {
     maybe_fail_test_write()?;
     let payload = bitcode::serialize(record).map_err(io::Error::other)?;
-    let len = u32::try_from(payload.len()).map_err(|_| {
+    let payload_len = u32::try_from(payload.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "wal record payload is larger than u32::MAX",
         )
     })?;
-    let crc = crc32fast::hash(&payload);
-    let mut frame = Vec::with_capacity(8 + payload.len());
-    frame.extend_from_slice(&len.to_be_bytes());
-    frame.extend_from_slice(&crc.to_be_bytes());
+    let node_id = record.node_id.as_bytes();
+    let node_id_len = u16::try_from(node_id.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "wal record node_id is larger than u16::MAX",
+        )
+    })?;
+    let header_len = u16::try_from(RECORD_HEADER_FIXED_LEN + node_id.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "wal record header is larger than u16::MAX",
+        )
+    })?;
+    let payload_crc = crc32fast::hash(&payload);
+    let mut frame = Vec::with_capacity(header_len as usize + payload.len());
+    frame.extend_from_slice(RECORD_MAGIC);
+    frame.extend_from_slice(&RECORD_VERSION.to_be_bytes());
+    frame.extend_from_slice(&header_len.to_be_bytes());
+    frame.push(RECORD_TYPE_DATA);
+    frame.push(RECORD_FLAGS_NONE);
+    frame.extend_from_slice(&[0_u8; 2]);
+    frame.extend_from_slice(&record.lsn.to_be_bytes());
+    frame.extend_from_slice(&record.received_at_ms.to_be_bytes());
+    frame.extend_from_slice(&node_id_len.to_be_bytes());
+    frame.extend_from_slice(&payload_len.to_be_bytes());
+    frame.extend_from_slice(&payload_crc.to_be_bytes());
+    frame.extend_from_slice(node_id);
     frame.extend_from_slice(&payload);
     Ok(frame)
 }
@@ -645,16 +673,105 @@ fn read_record_frame(
     path: &Path,
     frame_start: u64,
 ) -> io::Result<Option<(WalRecord, u64)>> {
-    let mut header = [0_u8; 8];
-    match reader.read_exact(&mut header) {
+    let mut magic = [0_u8; 8];
+    match reader.read_exact(&mut magic) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
         Err(error) => return Err(error),
     }
 
-    let len = u32::from_be_bytes(header[0..4].try_into().expect("length bytes")) as usize;
-    let expected_crc = u32::from_be_bytes(header[4..8].try_into().expect("crc bytes"));
-    let mut payload = vec![0; len];
+    if &magic != RECORD_MAGIC {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid wal record magic: {}", path.display()),
+        ));
+    }
+
+    let mut fixed_header = [0_u8; RECORD_HEADER_FIXED_LEN - 8];
+    match reader.read_exact(&mut fixed_header) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+
+    let version = u16::from_be_bytes(fixed_header[0..2].try_into().expect("version bytes"));
+    if version != RECORD_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported wal record version {version}: {}",
+                path.display()
+            ),
+        ));
+    }
+    let header_len = u16::from_be_bytes(
+        fixed_header[2..4]
+            .try_into()
+            .expect("record header length bytes"),
+    ) as usize;
+    if header_len < RECORD_HEADER_FIXED_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid wal record header length: {}", path.display()),
+        ));
+    }
+    let record_type = fixed_header[4];
+    if record_type != RECORD_TYPE_DATA {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "unsupported wal record type {record_type}: {}",
+                path.display()
+            ),
+        ));
+    }
+    let flags = fixed_header[5];
+    if flags != RECORD_FLAGS_NONE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unsupported wal record flags {flags}: {}", path.display()),
+        ));
+    }
+    let lsn = u64::from_be_bytes(fixed_header[8..16].try_into().expect("lsn bytes"));
+    let received_at_ms = u64::from_be_bytes(
+        fixed_header[16..24]
+            .try_into()
+            .expect("received_at_ms bytes"),
+    );
+    let node_id_len = u16::from_be_bytes(
+        fixed_header[24..26]
+            .try_into()
+            .expect("node_id length bytes"),
+    ) as usize;
+    let expected_header_len = RECORD_HEADER_FIXED_LEN + node_id_len;
+    if header_len != expected_header_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal record header length mismatch: {}", path.display()),
+        ));
+    }
+    let payload_len = u32::from_be_bytes(
+        fixed_header[26..30]
+            .try_into()
+            .expect("payload length bytes"),
+    ) as usize;
+    let expected_crc =
+        u32::from_be_bytes(fixed_header[30..34].try_into().expect("payload crc bytes"));
+
+    let mut node_id_bytes = vec![0; node_id_len];
+    match reader.read_exact(&mut node_id_bytes) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    let node_id = String::from_utf8(node_id_bytes).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid wal record node_id: {error}"),
+        )
+    })?;
+
+    let mut payload = vec![0; payload_len];
     match reader.read_exact(&mut payload) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -674,7 +791,28 @@ fn read_record_frame(
             format!("invalid wal record payload: {error}"),
         )
     })?;
-    Ok(Some((record, frame_start + 8 + len as u64)))
+    if record.lsn != lsn {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal record lsn mismatch: {}", path.display()),
+        ));
+    }
+    if record.received_at_ms != received_at_ms {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal record timestamp mismatch: {}", path.display()),
+        ));
+    }
+    if record.node_id != node_id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("wal record node_id mismatch: {}", path.display()),
+        ));
+    }
+    Ok(Some((
+        record,
+        frame_start + header_len as u64 + payload_len as u64,
+    )))
 }
 
 fn verify_segment_header(reader: &mut impl Read, path: &Path) -> io::Result<()> {

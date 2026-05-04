@@ -503,7 +503,7 @@ ack = ["kafka_valid"]
 }
 
 #[actix_rt::test]
-async fn wal_segment_uses_binary_header_and_binary_record_payload() {
+async fn wal_segment_uses_explicit_record_header_and_binary_record_payload() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -577,14 +577,58 @@ ack = ["kafka_valid"]
     assert_eq!(crc32fast::hash(identifier), expected_header_crc);
 
     let frame_offset = identifier.len() + 4;
-    let payload_len =
-        u32::from_be_bytes(bytes[frame_offset..frame_offset + 4].try_into().unwrap()) as usize;
-    let payload_crc = u32::from_be_bytes(
-        bytes[frame_offset + 4..frame_offset + 8]
+    assert_eq!(&bytes[frame_offset..frame_offset + 8], b"i4x.rec\0");
+    assert_eq!(
+        u16::from_be_bytes(
+            bytes[frame_offset + 8..frame_offset + 10]
+                .try_into()
+                .unwrap()
+        ),
+        1
+    );
+    let record_header_len = u16::from_be_bytes(
+        bytes[frame_offset + 10..frame_offset + 12]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    assert!(record_header_len > 42);
+    assert_eq!(bytes[frame_offset + 12], 1);
+    assert_eq!(bytes[frame_offset + 13], 0);
+    let lsn = u64::from_be_bytes(
+        bytes[frame_offset + 16..frame_offset + 24]
             .try_into()
             .unwrap(),
     );
-    let payload_bytes = &bytes[frame_offset + 8..frame_offset + 8 + payload_len];
+    assert_eq!(lsn, 1);
+    let received_at_ms = u64::from_be_bytes(
+        bytes[frame_offset + 24..frame_offset + 32]
+            .try_into()
+            .unwrap(),
+    );
+    assert!(received_at_ms > 0);
+    let node_id_len = u16::from_be_bytes(
+        bytes[frame_offset + 32..frame_offset + 34]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    assert!(node_id_len > 0);
+    assert_eq!(record_header_len, 42 + node_id_len);
+    let payload_len = u32::from_be_bytes(
+        bytes[frame_offset + 34..frame_offset + 38]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let payload_crc = u32::from_be_bytes(
+        bytes[frame_offset + 38..frame_offset + 42]
+            .try_into()
+            .unwrap(),
+    );
+    let node_id =
+        std::str::from_utf8(&bytes[frame_offset + 42..frame_offset + record_header_len]).unwrap();
+    assert_eq!(node_id, wal_node_id(&wal_dir));
+
+    let payload_start = frame_offset + record_header_len;
+    let payload_bytes = &bytes[payload_start..payload_start + payload_len];
     assert_eq!(crc32fast::hash(payload_bytes), payload_crc);
     assert_ne!(payload_bytes.first(), Some(&b'{'));
     assert!(!payload_bytes
@@ -608,10 +652,7 @@ async fn read_all_records_ignores_trailing_partial_frame() {
     writer.append(&record).expect("append record");
     drop(writer);
 
-    append_bytes(
-        &wal_segment_path(&wal_dir),
-        &[0, 0, 0, 10, 0, 0, 0, 0, 1, 2],
-    );
+    append_bytes(&wal_segment_path(&wal_dir), b"i4x.rec\0\x00\x01");
 
     let records = read_all_records(&wal_dir).expect("read wal records");
     let node_id = wal_node_id(&wal_dir);
@@ -736,10 +777,7 @@ async fn wal_writer_truncates_trailing_partial_frame_before_append() {
     writer.append(&first).expect("append first");
     drop(writer);
 
-    append_bytes(
-        &wal_segment_path(&wal_dir),
-        &[0, 0, 0, 10, 0, 0, 0, 0, 1, 2],
-    );
+    append_bytes(&wal_segment_path(&wal_dir), b"i4x.rec\0\x00\x01");
 
     let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
     let second = test_record("second");
