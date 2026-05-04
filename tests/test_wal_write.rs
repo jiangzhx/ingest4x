@@ -7,6 +7,7 @@ use base64::Engine;
 use ingest4x::server;
 use ingest4x::settings::{Settings, WalSettings};
 use ingest4x::wal::{new_record, read_all_records, read_entries_after_limit, WalWriter};
+use serde::Serialize;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -712,6 +713,25 @@ async fn wal_writer_assigns_lsn_and_recovers_next_lsn_after_restart() {
 }
 
 #[actix_rt::test]
+async fn wal_writer_recovers_next_lsn_from_checkpoint_when_segments_are_deleted() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    fs::create_dir_all(&wal_dir).expect("create wal dir");
+    fs::write(wal_dir.join("node_id"), "checkpoint-node\n").expect("write node id");
+    write_checkpoint(&wal_dir, "checkpoint-node", 7, 1, 512);
+
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    let position = writer
+        .append(&test_record("after-checkpoint"))
+        .expect("append record after checkpoint");
+    drop(writer);
+
+    assert_eq!(position.lsn, 8);
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records[0].lsn, 8);
+}
+
+#[actix_rt::test]
 async fn wal_writer_rejects_second_writer_for_same_directory() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -982,4 +1002,60 @@ fn rewrite_segment_start_lsn(path: &Path, start_lsn: u64) {
     let crc = crc32fast::hash(&bytes[..508]);
     bytes[508..512].copy_from_slice(&crc.to_be_bytes());
     fs::write(path, bytes).expect("rewrite wal segment");
+}
+
+#[derive(Serialize)]
+struct TestCheckpoint<'a> {
+    version: u16,
+    node_id: &'a str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+    checksum: u32,
+}
+
+#[derive(Serialize)]
+struct TestCheckpointChecksum<'a> {
+    version: u16,
+    node_id: &'a str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+}
+
+fn write_checkpoint(
+    wal_dir: &Path,
+    node_id: &str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+) {
+    let updated_at = 1_777_877_000_000;
+    let checksum = crc32fast::hash(
+        &serde_json::to_vec(&TestCheckpointChecksum {
+            version: 1,
+            node_id,
+            checkpoint_lsn,
+            checkpoint_segment_id,
+            checkpoint_segment_offset,
+            updated_at,
+        })
+        .expect("serialize checkpoint checksum"),
+    );
+    fs::write(
+        wal_dir.join("checkpoint.json"),
+        serde_json::to_vec(&TestCheckpoint {
+            version: 1,
+            node_id,
+            checkpoint_lsn,
+            checkpoint_segment_id,
+            checkpoint_segment_offset,
+            updated_at,
+            checksum,
+        })
+        .expect("serialize checkpoint"),
+    )
+    .expect("write checkpoint");
 }

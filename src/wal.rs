@@ -27,6 +27,7 @@ const SEGMENT_EXTENSION: &str = "wal";
 const FIRST_SEGMENT_ID: u64 = 1;
 const NODE_ID_FILE: &str = "node_id";
 const WAL_LOCK_FILE: &str = "wal.lock";
+const CHECKPOINT_FILE: &str = "checkpoint.json";
 
 static RECORD_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[cfg(debug_assertions)]
@@ -97,9 +98,9 @@ impl WalWriter {
         let lock_file = acquire_wal_lock(&dir)?;
         let node_id = resolve_node_id(settings.node_id.as_deref(), &dir)?;
         let segment_id = last_segment_id(&dir)?.unwrap_or(FIRST_SEGMENT_ID);
-        ensure_segment_file(&dir, segment_id, &node_id, 1)?;
+        let next_lsn = recover_next_lsn(&dir, &node_id)?;
+        ensure_segment_file(&dir, segment_id, &node_id, next_lsn)?;
         let offset = repair_segment_tail(&segment_path(&dir, segment_id))?;
-        let next_lsn = recover_next_lsn(&dir)?;
         let wal_flush_interval =
             humantime::parse_duration(&settings.wal_flush_interval).map_err(|error| {
                 io::Error::new(
@@ -970,14 +971,75 @@ fn assign_wal_metadata(record: &mut WalRecord, lsn: u64, node_id: &str) {
     record.node_id = node_id.to_string();
 }
 
-fn recover_next_lsn(dir: &Path) -> io::Result<u64> {
+fn recover_next_lsn(dir: &Path, node_id: &str) -> io::Result<u64> {
     let mut max_lsn = 0;
     for segment_id in segment_ids(dir)? {
         for record in read_segment_records(&segment_path(dir, segment_id))? {
             max_lsn = max_lsn.max(record.lsn);
         }
     }
+    if let Some(checkpoint_lsn) = read_checkpoint_lsn(dir, node_id)? {
+        max_lsn = max_lsn.max(checkpoint_lsn);
+    }
     Ok(max_lsn + 1)
+}
+
+#[derive(Serialize, Deserialize)]
+struct WalCheckpoint {
+    version: u16,
+    node_id: String,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+    checksum: u32,
+}
+
+#[derive(Serialize)]
+struct WalCheckpointChecksum<'a> {
+    version: u16,
+    node_id: &'a str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+}
+
+fn read_checkpoint_lsn(dir: &Path, node_id: &str) -> io::Result<Option<u64>> {
+    let path = dir.join(CHECKPOINT_FILE);
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let checkpoint = serde_json::from_slice::<WalCheckpoint>(&fs::read(&path)?)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if checkpoint.node_id != node_id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "checkpoint node_id mismatch: checkpoint={} current={}",
+                checkpoint.node_id, node_id
+            ),
+        ));
+    }
+    let bytes = serde_json::to_vec(&WalCheckpointChecksum {
+        version: checkpoint.version,
+        node_id: checkpoint.node_id.as_str(),
+        checkpoint_lsn: checkpoint.checkpoint_lsn,
+        checkpoint_segment_id: checkpoint.checkpoint_segment_id,
+        checkpoint_segment_offset: checkpoint.checkpoint_segment_offset,
+        updated_at: checkpoint.updated_at,
+    })
+    .map_err(io::Error::other)?;
+    let expected_checksum = crc32fast::hash(&bytes);
+    if checkpoint.checksum != expected_checksum {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("checkpoint checksum mismatch: {}", path.display()),
+        ));
+    }
+
+    Ok(Some(checkpoint.checkpoint_lsn))
 }
 
 fn sync_directory(dir: &Path) -> io::Result<()> {
