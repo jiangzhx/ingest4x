@@ -31,10 +31,6 @@ fn normalize_event(event, request) {
             }
         }
 
-        if !xcontext.contains("event_id") || xcontext["event_id"] == () || xcontext["event_id"] == "" {
-            xcontext["event_id"] = uuid_v4();
-        }
-
         xcontext["process_info"] = process_info(request, ());
 
         event["xcontext"] = xcontext;

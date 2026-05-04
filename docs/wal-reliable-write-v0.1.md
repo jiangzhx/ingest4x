@@ -45,7 +45,7 @@
 
 1. 客户端请求。
 2. 服务端读取完整事件。
-3. 基础接入层处理，并执行 WAL 前置 Rhai processor。
+3. 基础接入层处理。
 4. 写入 WAL。
 5. `fdatasync` 或 `fsync` 成功。
 6. 返回成功。
@@ -120,25 +120,19 @@ max_event_bytes_max: 1MB
 
 下游只基于 `xcontext.event_id` 排重，不基于 timestamp、appid、xwhat、xwho、payload hash 或业务自然键排重。
 
-`xcontext.event_id` 来源：
-
-1. 客户端提供 `xcontext.event_id` 时，使用客户端值。
-2. 客户端没有提供 `xcontext.event_id` 时，默认 Rhai processor 必须生成唯一值，并写入 `xcontext.event_id`。
-
-`xcontext.event_id` 的补齐策略属于 Rhai 业务处理逻辑，不应隐藏在 Rust WAL append 逻辑里。Rust 可以向 Rhai 暴露基础能力，例如 `uuid_v4()`，但是否生成、写入哪个字段、是否保留客户端值，应由 Rhai 脚本显式表达。
-
-默认 Rhai processor 生成的 `xcontext.event_id` 必须在写 WAL 前确定，并随处理后的事件 payload 一起持久化。
+`xcontext.event_id` 是业务 ID，属于事件 payload / 业务语义，不属于 WAL 或收数服务基础设施语义。
 
 要求：
 
-- 同一条 WAL 数据无论 replay 多少次，`xcontext.event_id` 都必须一致。
-- replay 时禁止重新随机生成 `xcontext.event_id`。
-- WAL 中必须保存 Rhai 处理后已经确定的 `xcontext.event_id`。
-- 如果默认 Rhai processor 生成 `xcontext.event_id`，该值必须在 ACK 前进入 WAL 持久化结果。
+- 如果客户端提供 `xcontext.event_id`，WAL 只按原始 payload 保存该值。
+- WAL 不生成 `xcontext.event_id`。
+- WAL replay 不得把 `node_id + lsn` 写成 `xcontext.event_id`。
+- 如果业务需要补齐 `xcontext.event_id`，应由 replay 阶段的业务 rules / processor 显式完成。
+- `node_id + lsn` 是 WAL record 标识，只用于 WAL 恢复、checkpoint、定位和排障，不作为业务排重 ID。
 
 ## WAL record 内容
 
-WAL 保存前置 Rhai processor 处理后的事件 payload 和必要 metadata。默认实现中，`xcontext.event_id`、`xcontext.process_info`、大小写归一化等业务字段变化都应来自 Rhai 脚本，而不是 WAL append 里的隐藏 Rust 逻辑。
+WAL 保存客户端原始事件 payload 和必要 metadata。`xcontext.event_id`、`xcontext.process_info`、大小写归一化、二次加工和分流等业务字段变化不应发生在 WAL append 路径。
 
 每条 WAL record 至少包含：
 
@@ -154,7 +148,7 @@ WAL 保存前置 Rhai processor 处理后的事件 payload 和必要 metadata。
 | `payload_len` | payload 字节长度 |
 | `payload_crc` | payload 校验和 |
 | `created_at` | 服务端接收或写入时间 |
-| `payload` | 前置 Rhai processor 处理后的事件内容 |
+| `raw_payload` | 客户端原始事件内容 |
 
 replay 时必须校验：
 
@@ -315,8 +309,7 @@ segment 创建失败时必须拒绝新请求，不得 ACK。
 
 ```text
 读取 WAL
-  -> 解析 payload
-  -> 读取 xcontext.event_id
+  -> 解析 raw_payload
   -> 执行 RULES
   -> 写入 RULES 指定下游
   -> 下游确认成功
@@ -608,8 +601,6 @@ WAL 容量不足或无法写入时建议返回：
 ```text
 客户端上报事件
   -> 接入层完成已有基础处理
-  -> 执行 WAL 前置 Rhai processor
-  -> 默认 Rhai processor 补齐 / 保留 xcontext.event_id
   -> 检查事件大小 <= max_event_bytes
   -> 检查 WAL 磁盘空间
   -> 请求进入 WAL append queue
@@ -620,7 +611,6 @@ WAL 容量不足或无法写入时建议返回：
   -> fdatasync / fsync 成功
   -> 返回 ACK
   -> 后台 replay 读取该 WAL
-  -> 读取 xcontext.event_id
   -> 执行 RULES
   -> 写入 RULES 指定下游
   -> 下游确认成功
@@ -687,8 +677,8 @@ node:
 4. WAL record 必须包含 header、LSN、payload_len、checksum。
 5. 每个 WAL 目录同一时刻只有一个 writer。
 6. 允许 group commit，但 ACK 必须等 fsync 成功。
-7. `xcontext.event_id` 由客户端提供；缺失时由默认 Rhai processor 生成并写入 `xcontext.event_id`。
-8. 下游只基于 `xcontext.event_id` 排重。
+7. `xcontext.event_id` 是业务 ID，WAL 不生成、不改写、不用 `node_id + lsn` 替代。
+8. 下游如果采用 `xcontext.event_id` 排重，该字段必须来自客户端或业务 rules。
 9. replay 采用 `at-least-once`。
 10. replay 第一版串行处理。
 11. RULES 决定写入哪个下游。

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 #[actix_rt::test]
-async fn post_ingest_writes_processed_request_to_wal_when_configured() {
+async fn post_ingest_writes_raw_request_to_wal_when_configured() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -89,21 +89,16 @@ ack = ["kafka_valid"]
         record.headers.get("x-test-header").map(String::as_str),
         Some("kept")
     );
-    let persisted =
-        serde_json::from_slice::<serde_json::Value>(&record.body).expect("processed json body");
-    assert_eq!(persisted["appid"], payload["appid"]);
-    assert_eq!(persisted["xwhat"], payload["xwhat"]);
-    assert_eq!(persisted["xcontext"]["installid"], json!("iid-1"));
-    assert_eq!(persisted["xcontext"]["os"], json!("ios"));
-    assert_eq!(persisted["xcontext"]["idfa"], json!("idfa-1"));
-    assert!(persisted["xcontext"]["event_id"].as_str().is_some());
-    assert!(persisted["xcontext"]["process_info"].is_object());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
+        payload
+    );
     assert!(record.record_id.starts_with("wal-"));
     assert!(record.received_at_ms > 0);
 }
 
 #[actix_rt::test]
-async fn get_ingest_writes_processed_payload_to_wal_when_configured() {
+async fn get_ingest_writes_decoded_payload_to_wal_when_configured() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -168,14 +163,10 @@ ack = ["kafka_valid"]
     let record = &records[0];
     assert_eq!(record.method, "GET");
     assert_eq!(record.path, "/ingest");
-    let persisted =
-        serde_json::from_slice::<serde_json::Value>(&record.body).expect("processed json body");
-    assert_eq!(persisted["appid"], payload["appid"]);
-    assert_eq!(persisted["xwhat"], payload["xwhat"]);
-    assert_eq!(persisted["xcontext"]["installid"], json!("iid-2"));
-    assert_eq!(persisted["xcontext"]["os"], json!("android"));
-    assert_eq!(persisted["xcontext"]["oaid"], json!("oaid-1"));
-    assert!(persisted["xcontext"]["event_id"].as_str().is_some());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
+        payload
+    );
 }
 
 #[actix_rt::test]

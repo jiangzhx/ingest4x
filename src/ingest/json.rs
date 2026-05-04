@@ -48,15 +48,7 @@ pub async fn post_ingest(
     }
 
     if let Some(wal) = wal {
-        return append_wal_record(
-            &req,
-            body.to_vec(),
-            &project_registry,
-            &rule_repository,
-            &processor,
-            &wal,
-        )
-        .await;
+        return append_wal_record(&req, body.to_vec(), &project_registry, &wal).await;
     }
 
     let json = match serde_json::from_slice::<Value>(&body) {
@@ -326,8 +318,6 @@ pub(crate) async fn append_wal_record(
     req: &HttpRequest,
     body: Vec<u8>,
     project_registry: &ProjectRegistryState,
-    rule_repository: &RuleRepository,
-    processor: &ProcessorState,
     wal: &WalWriter,
 ) -> HttpResponse {
     let json = match serde_json::from_slice::<Value>(&body) {
@@ -346,68 +336,6 @@ pub(crate) async fn append_wal_record(
     if !project_registry.contains(&appid) {
         return HttpResponse::NotFound().body("Project not found");
     }
-
-    let event_name = json["xwhat"].as_str().unwrap_or("default").to_string();
-    let rules = match rule_repository.compile_project_rules(&appid).await {
-        Ok(rules) => rules,
-        Err(err) => {
-            error!(
-                appid,
-                xwhat = event_name.as_str(),
-                error = %err,
-                "failed to compile project rules before wal append"
-            );
-            return HttpResponse::InternalServerError().body(err.to_string());
-        }
-    };
-
-    let processed = match processor.process(json, rules, processor_request_context(req)) {
-        Ok(output) => output,
-        Err(err) => {
-            error!(
-                appid,
-                xwhat = event_name.as_str(),
-                error = %err,
-                "failed to process ingest payload before wal append"
-            );
-            return HttpResponse::InternalServerError().body("Failed to process event");
-        }
-    };
-
-    let json = match processed {
-        ProcessorOutput::Accepted(value) => value,
-        ProcessorOutput::Rejected { error, .. } => {
-            warn!(
-                appid,
-                xwhat = event_name.as_str(),
-                error = %error,
-                "ingest payload rejected by processor before wal append"
-            );
-            return HttpResponse::BadRequest().body(error);
-        }
-        ProcessorOutput::Dropped { reason } => {
-            warn!(
-                appid,
-                xwhat = event_name.as_str(),
-                reason = %reason,
-                "ingest payload dropped by processor before wal append"
-            );
-            return HttpResponse::Ok().body("200");
-        }
-    };
-
-    let body = match serde_json::to_vec(&json) {
-        Ok(body) => body,
-        Err(err) => {
-            error!(
-                appid,
-                xwhat = event_name.as_str(),
-                error = %err,
-                "failed to serialize processor output before wal append"
-            );
-            return HttpResponse::InternalServerError().body("Processor returned invalid event");
-        }
-    };
 
     let record = new_record(
         req.method().as_str(),
