@@ -133,6 +133,7 @@ mod tests {
             },
             database: None,
             wal: None,
+            checkpoint: Default::default(),
             events: crate::settings::EventsSettings::default(),
             redis: None,
         }

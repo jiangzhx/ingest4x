@@ -26,6 +26,11 @@ flush_max_bytes = 4194304
 no_sync = false
 wal_segment_max_bytes = 134217728
 
+[checkpoint]
+flush_interval = "1s"
+flush_records = 1000
+flush_bytes = 67108864
+
 [events.sink.stdout_all]
 type = "stdout"
 

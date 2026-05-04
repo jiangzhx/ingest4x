@@ -13,6 +13,8 @@ pub struct Settings {
     #[serde(default)]
     pub wal: Option<WalSettings>,
     #[serde(default)]
+    pub checkpoint: CheckpointSettings,
+    #[serde(default)]
     pub events: EventsSettings,
     pub redis: Option<RedisSettings>,
 }
@@ -121,6 +123,27 @@ pub struct WalSettings {
     pub min_free_bytes: u64,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct CheckpointSettings {
+    #[serde(default = "default_checkpoint_flush_interval")]
+    pub flush_interval: String,
+    #[serde(default = "default_checkpoint_flush_records")]
+    pub flush_records: usize,
+    #[serde(default = "default_checkpoint_flush_bytes")]
+    pub flush_bytes: u64,
+}
+
+impl Default for CheckpointSettings {
+    fn default() -> Self {
+        Self {
+            flush_interval: default_checkpoint_flush_interval(),
+            flush_records: default_checkpoint_flush_records(),
+            flush_bytes: default_checkpoint_flush_bytes(),
+        }
+    }
+}
+
 pub fn default_kafka_delivery_timeout_ms() -> String {
     "3000".to_string()
 }
@@ -159,6 +182,18 @@ pub const fn default_wal_flush_max_records() -> usize {
 
 pub const fn default_wal_flush_max_bytes() -> u64 {
     4 * 1024 * 1024
+}
+
+pub fn default_checkpoint_flush_interval() -> String {
+    "1s".to_string()
+}
+
+pub const fn default_checkpoint_flush_records() -> usize {
+    1000
+}
+
+pub const fn default_checkpoint_flush_bytes() -> u64 {
+    64 * 1024 * 1024
 }
 
 pub const fn default_processor_max_operations() -> u64 {

@@ -8,7 +8,8 @@ use ingest4x::projects::{CreateProjectInput, ProjectRegistryState, ProjectReposi
 use ingest4x::rules::RuleRepository;
 use ingest4x::server;
 use ingest4x::settings::{
-    EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, Settings,
+    CheckpointSettings, EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings,
+    Settings,
 };
 use ingest4x::utils::events::init_event_sinks;
 use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
@@ -262,6 +263,7 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
             project_registry: &project_registry,
             rule_repository: &rule_repository,
             processor: &processor,
+            checkpoint: CheckpointSettings::default(),
         })
         .await
         .expect("replay wal"),
@@ -387,6 +389,99 @@ sinks = ["kafka_invalid"]
 }
 
 #[actix_rt::test]
+async fn wal_replay_does_not_checkpoint_each_successful_record_before_batch_flush() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        valid: EventRouteSet {
+            routes: vec![EventRouteSettings {
+                sinks: vec!["stdout".to_string()],
+                ..Default::default()
+            }],
+        },
+        invalid: EventRouteSet::default(),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn main(event, request) {
+                return #{ status: "accepted", event: event };
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        flush_max_bytes: 4 * 1024 * 1024,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-before-invalid-json",
+                "os": "ios"
+            }
+        })))
+        .expect("append valid record");
+    writer
+        .append(&new_record(
+            "POST",
+            "/ingest",
+            None,
+            None,
+            BTreeMap::new(),
+            b"{not-json".to_vec(),
+        ))
+        .expect("append invalid json record");
+    drop(writer);
+
+    let error = replay_once(WalReplayContext {
+        dir: &wal_dir,
+        event_sinks: &event_sinks,
+        project_registry: &project_registry,
+        rule_repository: &rule_repository,
+        processor: &processor,
+        checkpoint: CheckpointSettings {
+            flush_interval: "1h".to_string(),
+            flush_records: 1000,
+            flush_bytes: 64 * 1024 * 1024,
+        },
+    })
+    .await
+    .expect_err("invalid WAL json should stop replay before checkpoint flush");
+
+    assert!(error.to_string().contains("invalid wal record json body"));
+    assert!(!wal_dir.join("checkpoint.json").exists());
+}
+
+#[actix_rt::test]
 async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -459,6 +554,7 @@ async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write(
         project_registry: &project_registry,
         rule_repository: &rule_repository,
         processor: &processor,
+        checkpoint: CheckpointSettings::default(),
     })
     .await
     .expect_err("processor drop should stop WAL replay");
@@ -653,6 +749,7 @@ async fn wal_replay_rejects_checkpoint_with_invalid_checksum() {
         project_registry: &project_registry,
         rule_repository: &rule_repository,
         processor: &processor,
+        checkpoint: CheckpointSettings::default(),
     };
     assert_eq!(replay_once(context).await.expect("initial replay"), 1);
 
@@ -673,6 +770,7 @@ async fn wal_replay_rejects_checkpoint_with_invalid_checksum() {
         project_registry: &project_registry,
         rule_repository: &rule_repository,
         processor: &processor,
+        checkpoint: CheckpointSettings::default(),
     })
     .await
     .expect_err("tampered checkpoint should fail checksum validation");
@@ -762,6 +860,7 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         project_registry: &project_registry,
         rule_repository: &rule_repository,
         processor: &processor,
+        checkpoint: CheckpointSettings::default(),
     };
     assert_eq!(replay_once(context).await.expect("initial replay"), 1);
     fs::write(wal_dir.join("node_id"), "different-node\n").expect("change node id");
@@ -772,6 +871,7 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         project_registry: &project_registry,
         rule_repository: &rule_repository,
         processor: &processor,
+        checkpoint: CheckpointSettings::default(),
     })
     .await
     .expect_err("checkpoint node_id mismatch should fail");
@@ -860,6 +960,11 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         project_registry: &project_registry,
         rule_repository: &rule_repository,
         processor: &processor,
+        checkpoint: CheckpointSettings {
+            flush_interval: "1h".to_string(),
+            flush_records: 1,
+            flush_bytes: 64 * 1024 * 1024,
+        },
     })
     .await
     .expect_err("LSN gap should stop WAL replay");

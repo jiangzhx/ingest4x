@@ -1,6 +1,7 @@
 use crate::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
 use crate::projects::ProjectRegistryState;
 use crate::rules::RuleRepository;
+use crate::settings::CheckpointSettings;
 use crate::utils::events::{EventSinkState, EventStatus};
 use crate::wal::{
     read_entries_after_limit, remove_segments_covered_by_checkpoint, WalPosition, WalRecord,
@@ -12,6 +13,7 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tracing::warn;
 
 const CHECKPOINT_FILE: &str = "checkpoint.json";
@@ -24,6 +26,13 @@ pub struct WalReplayContext<'a> {
     pub project_registry: &'a ProjectRegistryState,
     pub rule_repository: &'a RuleRepository,
     pub processor: &'a ProcessorState,
+    pub checkpoint: CheckpointSettings,
+}
+
+struct CheckpointFlushPolicy {
+    flush_interval: Duration,
+    flush_records: usize,
+    flush_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,10 +116,15 @@ const fn checkpoint_version() -> u16 {
 }
 
 pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
+    let checkpoint_policy = checkpoint_flush_policy(&context.checkpoint)?;
     let checkpoint = read_checkpoint(context.dir)?;
     let mut expected_lsn = checkpoint.map(|position| position.lsn + 1).unwrap_or(1);
     let entries = read_entries_after_limit(context.dir, checkpoint, Some(REPLAY_BATCH_SIZE))?;
     let mut replayed = 0;
+    let mut pending_checkpoint = None;
+    let mut pending_checkpoint_records = 0_usize;
+    let mut pending_checkpoint_bytes = 0_u64;
+    let mut last_checkpoint_flush = Instant::now();
 
     for entry in entries {
         if entry.position.lsn != expected_lsn {
@@ -121,17 +135,59 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
             ));
         }
         replay_record(&context, &entry.record).await?;
-        write_checkpoint(context.dir, entry.next_position)?;
-        remove_segments_covered_by_checkpoint(
-            context.dir,
-            entry.next_position.lsn,
-            entry.next_position.segment,
-        )?;
+        pending_checkpoint = Some(entry.next_position);
+        pending_checkpoint_records += 1;
+        pending_checkpoint_bytes += entry
+            .next_position
+            .offset
+            .saturating_sub(entry.position.offset);
+        if should_flush_checkpoint(
+            &checkpoint_policy,
+            pending_checkpoint_records,
+            pending_checkpoint_bytes,
+            last_checkpoint_flush,
+        ) {
+            flush_checkpoint(context.dir, entry.next_position)?;
+            pending_checkpoint = None;
+            pending_checkpoint_records = 0;
+            pending_checkpoint_bytes = 0;
+            last_checkpoint_flush = Instant::now();
+        }
         expected_lsn = entry.position.lsn + 1;
         replayed += 1;
     }
 
+    if let Some(position) = pending_checkpoint {
+        flush_checkpoint(context.dir, position)?;
+    }
+
     Ok(replayed)
+}
+
+fn checkpoint_flush_policy(settings: &CheckpointSettings) -> Result<CheckpointFlushPolicy> {
+    let flush_interval = humantime::parse_duration(&settings.flush_interval)
+        .map_err(|error| anyhow!("invalid checkpoint.flush_interval: {error}"))?;
+    Ok(CheckpointFlushPolicy {
+        flush_interval: flush_interval.max(Duration::from_millis(1)),
+        flush_records: settings.flush_records.max(1),
+        flush_bytes: settings.flush_bytes.max(1),
+    })
+}
+
+fn should_flush_checkpoint(
+    policy: &CheckpointFlushPolicy,
+    records: usize,
+    bytes: u64,
+    last_flush: Instant,
+) -> bool {
+    records >= policy.flush_records
+        || bytes >= policy.flush_bytes
+        || last_flush.elapsed() >= policy.flush_interval
+}
+
+fn flush_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
+    write_checkpoint(dir, position)?;
+    remove_segments_covered_by_checkpoint(dir, position.lsn, position.segment)
 }
 
 async fn replay_record(context: &WalReplayContext<'_>, record: &WalRecord) -> Result<()> {

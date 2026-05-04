@@ -71,6 +71,22 @@ flush_max_bytes = 4194304
     assert_eq!(wal.flush_max_bytes, 4 * 1024 * 1024);
 }
 
+#[test]
+fn settings_reads_checkpoint_flush_fields() {
+    let settings = load_settings(
+        r#"
+[checkpoint]
+flush_interval = "1s"
+flush_records = 1000
+flush_bytes = 67108864
+"#,
+    );
+
+    assert_eq!(settings.checkpoint.flush_interval, "1s");
+    assert_eq!(settings.checkpoint.flush_records, 1000);
+    assert_eq!(settings.checkpoint.flush_bytes, 64 * 1024 * 1024);
+}
+
 fn load_settings(database_section: &str) -> Settings {
     load_settings_with_management_section(&format!(
         r#"

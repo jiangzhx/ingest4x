@@ -201,6 +201,7 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
         project_registry: &state.project_registry,
         rule_repository: &state.rule_repository,
         processor: &state.processor,
+        checkpoint: state.settings.checkpoint.clone(),
     })
     .await
 }

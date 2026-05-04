@@ -143,6 +143,7 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
         },
         database: None,
         wal: None,
+        checkpoint: Default::default(),
         events: test_events_settings(),
         redis: None,
     });
@@ -200,6 +201,7 @@ async fn build_app_state_allows_database_config_without_redis_for_registry_backe
             refresh_interval_secs: 3,
         }),
         wal: None,
+        checkpoint: Default::default(),
         events: test_events_settings(),
         redis: None,
     });
@@ -227,6 +229,7 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
             refresh_interval_secs: 3,
         }),
         wal: None,
+        checkpoint: Default::default(),
         events: test_events_settings(),
         redis: None,
     });

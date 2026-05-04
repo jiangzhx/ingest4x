@@ -357,6 +357,14 @@ checkpoint_flush_records: 1000
 checkpoint_flush_bytes: 64MB
 ```
 
+当前实现使用 `[checkpoint]` 配置：
+
+- `flush_interval`
+- `flush_records`
+- `flush_bytes`
+
+replay 成功处理记录后，达到任一阈值或本轮 replay 结束时，才持久化 checkpoint。
+
 只有 durable checkpoint 覆盖到的 segment 才允许删除：
 
 ```text

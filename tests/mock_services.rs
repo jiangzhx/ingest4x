@@ -58,6 +58,7 @@ pub async fn create_configured_app(
         },
         database: None,
         wal: None,
+        checkpoint: Default::default(),
         events: stdout_events_settings(),
         redis: None,
     });
