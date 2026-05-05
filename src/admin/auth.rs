@@ -9,7 +9,6 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 pub const ADMIN_PASSWORD_HEADER: &str = "x-admin-password";
-const LOGIN_PATH: &str = "/api/admin/auth/login";
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct LoginRequest {
@@ -45,13 +44,6 @@ pub async fn require_admin_password<B>(
 where
     B: MessageBody + 'static,
 {
-    if req.path() == LOGIN_PATH {
-        return next
-            .call(req)
-            .await
-            .map(ServiceResponse::map_into_left_body);
-    }
-
     let settings = req
         .app_data::<Data<Arc<Settings>>>()
         .map(|value| value.as_ref().clone());

@@ -1,27 +1,23 @@
-use crate::admin;
-use crate::admin_ui;
 use crate::db::{init_database, seed};
-use crate::ingest;
 use crate::ingest::processor::ProcessorState;
 use crate::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
+use crate::routes;
 use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
 use crate::settings::{default_database_refresh_interval_secs, Settings};
 use crate::utils::events::{init_event_sinks, EventSinkState};
 use crate::utils::prometheus::{
     init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
 };
+use crate::wal::replay::{replay_once, WalReplayContext};
 use crate::wal::WalWriter;
-use crate::wal_replay::{replay_once, WalReplayContext};
 use actix_web::web::{Data, ServiceConfig};
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_web::{App, HttpResponse, HttpServer};
 use prometheus::Registry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
 use tracing::warn;
-use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
 
 pub async fn index() -> HttpResponse {
     HttpResponse::Ok().json(serde_json::json!({
@@ -54,15 +50,15 @@ pub async fn healthz(settings: Data<Arc<Settings>>, wal: Option<Data<WalWriter>>
 
 #[derive(Clone)]
 pub struct AppState {
-    settings: Arc<Settings>,
-    event_sinks: Data<EventSinkState>,
-    project_repository: Data<ProjectRepository>,
-    rule_repository: Data<RuleRepository>,
-    project_registry: Data<ProjectRegistryState>,
-    processor: Data<ProcessorState>,
-    wal: Option<Data<WalWriter>>,
-    wal_metrics: Option<Data<WalPrometheusMetrics>>,
-    ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
+    pub(crate) settings: Arc<Settings>,
+    pub(crate) event_sinks: Data<EventSinkState>,
+    pub(crate) project_repository: Data<ProjectRepository>,
+    pub(crate) rule_repository: Data<RuleRepository>,
+    pub(crate) project_registry: Data<ProjectRegistryState>,
+    pub(crate) processor: Data<ProcessorState>,
+    pub(crate) wal: Option<Data<WalWriter>>,
+    pub(crate) wal_metrics: Option<Data<WalPrometheusMetrics>>,
+    pub(crate) ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
 }
 
 pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
@@ -155,47 +151,11 @@ pub fn register_wal_prometheus_metrics(
 }
 
 pub fn configure_public_app(cfg: &mut ServiceConfig, state: AppState) {
-    cfg.app_data(Data::new(state.settings.clone()))
-        .app_data(state.project_registry.clone())
-        .service(web::scope("/").route("", web::get().to(index)));
-    if let Some(wal) = state.wal {
-        cfg.app_data(wal);
-    }
-    if let Some(wal_metrics) = state.wal_metrics {
-        cfg.app_data(wal_metrics);
-    }
-    if let Some(ingest_metrics) = state.ingest_metrics {
-        cfg.app_data(ingest_metrics);
-    }
-    cfg.service(
-        web::resource("/ingest")
-            .app_data(state.rule_repository.clone())
-            .app_data(state.event_sinks.clone())
-            .app_data(state.project_registry.clone())
-            .app_data(state.processor.clone())
-            .route(web::post().to(ingest::ingest))
-            .route(web::get().to(ingest::ingest)),
-    );
+    routes::configure_public_surface(cfg, state);
 }
 
 pub fn configure_private_app(cfg: &mut ServiceConfig, state: AppState) {
-    cfg.app_data(Data::new(state.settings.clone()))
-        .app_data(state.project_repository.clone())
-        .app_data(state.rule_repository.clone())
-        .app_data(state.project_registry.clone())
-        .service(web::resource("/healthz").route(web::get().to(healthz)))
-        .configure(admin::configure)
-        .configure(admin_ui::configure)
-        .service(
-            SwaggerUi::new("/swagger-ui/{_:.*}")
-                .url("/api-docs/openapi.json", admin::AdminApiDoc::openapi()),
-        );
-    if let Some(wal) = state.wal {
-        cfg.app_data(wal);
-    }
-    if let Some(wal_metrics) = state.wal_metrics {
-        cfg.app_data(wal_metrics);
-    }
+    routes::configure_management_surface(cfg, state);
 }
 
 pub fn configure_app(cfg: &mut ServiceConfig, state: AppState) {

@@ -10,7 +10,7 @@ async fn admin_ui_serves_index_html_for_root_and_spa_routes() {
     prepare_admin_ui_fixture(temp.path());
 
     let app = test::init_service(
-        App::new().configure(|cfg| ingest4x::admin_ui::configure_with_dist_dir(cfg, temp.path())),
+        App::new().configure(|cfg| ingest4x::admin::ui::configure_with_dist_dir(cfg, temp.path())),
     )
     .await;
 
@@ -43,7 +43,7 @@ async fn admin_ui_serves_existing_static_assets() {
     prepare_admin_ui_fixture(temp.path());
 
     let app = test::init_service(
-        App::new().configure(|cfg| ingest4x::admin_ui::configure_with_dist_dir(cfg, temp.path())),
+        App::new().configure(|cfg| ingest4x::admin::ui::configure_with_dist_dir(cfg, temp.path())),
     )
     .await;
 
@@ -68,7 +68,7 @@ async fn admin_ui_returns_not_found_for_missing_static_assets() {
     prepare_admin_ui_fixture(temp.path());
 
     let app = test::init_service(
-        App::new().configure(|cfg| ingest4x::admin_ui::configure_with_dist_dir(cfg, temp.path())),
+        App::new().configure(|cfg| ingest4x::admin::ui::configure_with_dist_dir(cfg, temp.path())),
     )
     .await;
 
@@ -89,7 +89,7 @@ async fn admin_ui_returns_not_found_when_dist_assets_are_missing() {
     let temp = tempdir().expect("temp dir");
 
     let app = test::init_service(
-        App::new().configure(|cfg| ingest4x::admin_ui::configure_with_dist_dir(cfg, temp.path())),
+        App::new().configure(|cfg| ingest4x::admin::ui::configure_with_dist_dir(cfg, temp.path())),
     )
     .await;
 

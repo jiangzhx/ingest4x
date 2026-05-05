@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod projects;
 pub mod rules;
+pub mod ui;
 
 use actix_web::middleware::from_fn;
 use actix_web::web::{self, ServiceConfig};
@@ -38,10 +39,11 @@ impl OpenApi for AdminApiDoc {
 
 pub fn configure(cfg: &mut ServiceConfig) {
     cfg.service(
-        web::scope("/api/admin")
-            .wrap(from_fn(auth::require_admin_password))
-            .configure(auth::configure)
-            .configure(rules::configure)
-            .configure(projects::configure),
+        web::scope("/api/admin").configure(auth::configure).service(
+            web::scope("")
+                .wrap(from_fn(auth::require_admin_password))
+                .configure(rules::configure)
+                .configure(projects::configure),
+        ),
     );
 }

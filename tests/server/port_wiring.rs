@@ -48,6 +48,18 @@ async fn public_app_only_registers_ingest_surface() {
         .status(),
         StatusCode::NOT_FOUND
     );
+    assert_eq!(
+        test::call_service(&app, test::TestRequest::get().uri("/healthz").to_request())
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        test::call_service(&app, test::TestRequest::get().uri("/metrics").to_request())
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[actix_rt::test]
@@ -64,6 +76,12 @@ async fn private_app_registers_management_surface() {
 
     assert_eq!(
         test::call_service(&app, test::TestRequest::get().uri("/metrics").to_request())
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        test::call_service(&app, test::TestRequest::get().uri("/healthz").to_request())
             .await
             .status(),
         StatusCode::OK

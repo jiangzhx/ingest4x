@@ -1,5 +1,8 @@
 use crate::settings::WalSettings;
 use serde::{Deserialize, Serialize};
+
+pub mod replay;
+
 #[cfg(debug_assertions)]
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};

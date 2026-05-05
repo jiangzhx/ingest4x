@@ -10,8 +10,8 @@ use ingest4x::settings::{
     Settings,
 };
 use ingest4x::utils::events::init_event_sinks;
+use ingest4x::wal::replay::{replay_once, WalReplayContext};
 use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
-use ingest4x::wal_replay::{replay_once, WalReplayContext};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;

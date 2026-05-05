@@ -13,3 +13,6 @@ web/admin/dist/
 docs/features
 docs/superpowers
 wal/
+.graphify_*
+/graphify-out/
+/AGENTS.md
