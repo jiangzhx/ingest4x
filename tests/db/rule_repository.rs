@@ -1,7 +1,7 @@
 use ingest4x::db::init_sqlite_database;
 use ingest4x::repositories::{
     CreateProjectInput, CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput,
-    ProjectRepository, RuleRepository, UpdateRuleSetInput,
+    ProjectRepository, RuleRepository, UpdateRuleInput, UpdateRuleSetInput,
 };
 use serde_json::json;
 
@@ -657,4 +657,190 @@ async fn assigning_second_rule_set_replaces_project_rule_set() {
 
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].rule_set_id, second_rule_set.id);
+}
+
+#[tokio::test]
+async fn rule_repository_lists_gets_updates_and_deletes_rule_sets_and_rules() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let rules = RuleRepository::new(db);
+
+    let rule_set = rules
+        .create_rule_set(CreateRuleSetInput {
+            name: "CRUD".to_string(),
+            description: None,
+            enabled: true,
+        })
+        .await
+        .expect("rule set should be created");
+
+    let listed_rule_sets = rules.list_rule_sets().await.expect("rule sets should list");
+    assert!(listed_rule_sets.iter().any(|item| item.id == rule_set.id));
+
+    let fetched_rule_set = rules
+        .get_rule_set(rule_set.id)
+        .await
+        .expect("rule set lookup should succeed")
+        .expect("rule set should exist");
+    assert_eq!(fetched_rule_set.name, "CRUD");
+
+    let updated_rule_set = rules
+        .update_rule_set(
+            rule_set.id,
+            UpdateRuleSetInput {
+                name: Some("CRUD Updated".to_string()),
+                description: Some("updated".to_string()),
+                enabled: Some(false),
+                wildcard_rule_id: None,
+            },
+        )
+        .await
+        .expect("rule set should update");
+    assert_eq!(updated_rule_set.name, "CRUD Updated");
+    assert!(!updated_rule_set.enabled);
+
+    let rule = rules
+        .create_rule(CreateRuleInput {
+            rule_set_id: rule_set.id,
+            parent_id: None,
+            name: "Install".to_string(),
+            xwhat: Some("install".to_string()),
+            content: "fields: {}\n".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("rule should be created");
+
+    let listed_rules = rules
+        .list_rules(rule_set.id)
+        .await
+        .expect("rules should list");
+    assert_eq!(listed_rules.len(), 1);
+    assert_eq!(listed_rules[0].id, rule.id);
+
+    let fetched_rule = rules
+        .get_rule(rule_set.id, rule.id)
+        .await
+        .expect("rule lookup should succeed")
+        .expect("rule should exist");
+    assert_eq!(fetched_rule.name, "Install");
+
+    let updated_rule = rules
+        .update_rule(
+            rule_set.id,
+            rule.id,
+            UpdateRuleInput {
+                parent_id: None,
+                name: Some("Install Updated".to_string()),
+                xwhat: Some(Some("install_updated".to_string())),
+                content: Some(
+                    "fields:\n  xcontext.installid:\n    required: true\n    type: string\n"
+                        .to_string(),
+                ),
+                enabled: Some(false),
+            },
+        )
+        .await
+        .expect("rule should update");
+    assert_eq!(updated_rule.name, "Install Updated");
+    assert_eq!(updated_rule.xwhat.as_deref(), Some("install_updated"));
+    assert!(!updated_rule.enabled);
+
+    rules
+        .delete_rule(rule_set.id, rule.id)
+        .await
+        .expect("rule should delete");
+    assert!(rules
+        .get_rule(rule_set.id, rule.id)
+        .await
+        .expect("rule lookup should succeed")
+        .is_none());
+
+    rules
+        .delete_rule_set(rule_set.id)
+        .await
+        .expect("rule set should delete");
+    assert!(rules
+        .get_rule_set(rule_set.id)
+        .await
+        .expect("rule set lookup should succeed")
+        .is_none());
+}
+
+#[tokio::test]
+async fn project_rule_set_assignment_delete_and_disabled_assignment_are_respected() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let projects = ProjectRepository::new(db.clone());
+    let rules = RuleRepository::new(db);
+
+    projects
+        .create_project(CreateProjectInput {
+            appid: "app-1".to_string(),
+            name: "App 1".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+
+    let rule_set = rules
+        .create_rule_set(CreateRuleSetInput {
+            name: "Assignment".to_string(),
+            description: None,
+            enabled: true,
+        })
+        .await
+        .expect("rule set should be created");
+    rules
+        .create_rule(CreateRuleInput {
+            rule_set_id: rule_set.id,
+            parent_id: None,
+            name: "Install".to_string(),
+            xwhat: Some("install".to_string()),
+            content: "fields: {}\n".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("rule should be created");
+
+    assert!(rules
+        .enabled_rule_exists_for_xwhat("install")
+        .await
+        .expect("xwhat lookup should succeed"));
+
+    rules
+        .assign_rule_set_to_project(
+            "app-1",
+            CreateProjectRuleSetInput {
+                rule_set_id: rule_set.id,
+                enabled: false,
+            },
+        )
+        .await
+        .expect("disabled assignment should be created");
+
+    let compiled = rules
+        .compile_project_rules("app-1")
+        .await
+        .expect("project rules should compile");
+    assert!(!compiled.can_validate("install"));
+
+    rules
+        .delete_project_rule_set("app-1", rule_set.id)
+        .await
+        .expect("assignment should delete");
+
+    let assignments = rules
+        .list_project_rule_sets("app-1")
+        .await
+        .expect("assignments should list");
+    assert!(assignments.is_empty());
+
+    let error = rules
+        .delete_project_rule_set("app-1", rule_set.id)
+        .await
+        .expect_err("missing assignment should fail");
+    assert!(error.to_string().contains("rule set"));
 }

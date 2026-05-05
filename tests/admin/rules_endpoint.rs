@@ -221,6 +221,264 @@ async fn openapi_json_includes_admin_rules_paths() {
     .await;
 }
 
+#[actix_rt::test]
+async fn admin_rule_sets_and_rules_support_crud_paths() {
+    with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
+        let app = create_app().await;
+
+        let rule_set = create_rule_set(&app, "Admin Rule CRUD").await;
+
+        let list_rule_sets = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri("/api/admin/rule-sets")
+                .to_request(),
+        )
+        .await;
+        let rule_sets: Value = test::read_body_json(list_rule_sets).await;
+        assert!(rule_sets
+            .as_array()
+            .expect("rule sets should be an array")
+            .iter()
+            .any(|item| item["id"] == rule_set["id"]));
+
+        let get_rule_set = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri(format!("/api/admin/rule-sets/{}", rule_set["id"]).as_str())
+                .to_request(),
+        )
+        .await;
+        let fetched_rule_set: Value = test::read_body_json(get_rule_set).await;
+        assert_eq!(fetched_rule_set["name"], "Admin Rule CRUD");
+
+        let update_rule_set = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::put())
+                .uri(format!("/api/admin/rule-sets/{}", rule_set["id"]).as_str())
+                .set_json(json!({
+                    "name": "Updated Admin Rule CRUD",
+                    "description": "updated",
+                    "enabled": false,
+                    "wildcard_rule_id": null
+                }))
+                .to_request(),
+        )
+        .await;
+        let updated_rule_set: Value = test::read_body_json(update_rule_set).await;
+        assert_eq!(updated_rule_set["name"], "Updated Admin Rule CRUD");
+        assert_eq!(updated_rule_set["enabled"], false);
+
+        let rule = create_rule(&app, rule_set["id"].as_i64().expect("rule set id")).await;
+
+        let list_rules = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri(format!("/api/admin/rule-sets/{}/rules", rule_set["id"]).as_str())
+                .to_request(),
+        )
+        .await;
+        let rules: Value = test::read_body_json(list_rules).await;
+        assert!(rules
+            .as_array()
+            .expect("rules should be an array")
+            .iter()
+            .any(|item| item["id"] == rule["id"]));
+
+        let get_rule = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri(
+                    format!(
+                        "/api/admin/rule-sets/{}/rules/{}",
+                        rule_set["id"], rule["id"]
+                    )
+                    .as_str(),
+                )
+                .to_request(),
+        )
+        .await;
+        let fetched_rule: Value = test::read_body_json(get_rule).await;
+        assert_eq!(fetched_rule["xwhat"], "levelup");
+
+        let update_rule = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::put())
+                .uri(
+                    format!(
+                        "/api/admin/rule-sets/{}/rules/{}",
+                        rule_set["id"], rule["id"]
+                    )
+                    .as_str(),
+                )
+                .set_json(json!({
+                    "parent_id": null,
+                    "name": "Updated Levelup",
+                    "xwhat": "levelup",
+                    "content": "fields:\n  xcontext.level:\n    required: true\n    type: integer\n",
+                    "enabled": false
+                }))
+                .to_request(),
+        )
+        .await;
+        let updated_rule: Value = test::read_body_json(update_rule).await;
+        assert_eq!(updated_rule["name"], "Updated Levelup");
+        assert_eq!(updated_rule["enabled"], false);
+
+        let delete_rule = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::delete())
+                .uri(
+                    format!(
+                        "/api/admin/rule-sets/{}/rules/{}",
+                        rule_set["id"], rule["id"]
+                    )
+                    .as_str(),
+                )
+                .to_request(),
+        )
+        .await;
+        assert_eq!(delete_rule.status(), StatusCode::NO_CONTENT);
+
+        let delete_rule_set = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::delete())
+                .uri(format!("/api/admin/rule-sets/{}", rule_set["id"]).as_str())
+                .to_request(),
+        )
+        .await;
+        assert_eq!(delete_rule_set.status(), StatusCode::NO_CONTENT);
+    })
+    .await;
+}
+
+#[actix_rt::test]
+async fn admin_rules_endpoints_map_repository_errors_to_http_status() {
+    with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
+        let app = create_app().await;
+
+        let missing_rule_set = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri("/api/admin/rule-sets/999999")
+                .to_request(),
+        )
+        .await;
+        assert_eq!(missing_rule_set.status(), StatusCode::NOT_FOUND);
+
+        let rule_set = create_rule_set(&app, "Admin Rule Error Mapping").await;
+
+        let duplicate_rule_set = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::post())
+                .uri("/api/admin/rule-sets")
+                .set_json(json!({
+                    "name": "Admin Rule Error Mapping",
+                    "description": null,
+                    "enabled": true
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(duplicate_rule_set.status(), StatusCode::CONFLICT);
+
+        let invalid_rule = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::post())
+                .uri(format!("/api/admin/rule-sets/{}/rules", rule_set["id"]).as_str())
+                .set_json(json!({
+                    "parent_id": null,
+                    "name": "Invalid YAML",
+                    "xwhat": "invalid_yaml",
+                    "content": "fields: [",
+                    "enabled": true
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(invalid_rule.status(), StatusCode::BAD_REQUEST);
+
+        let missing_project_assignment = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::put())
+                .uri("/api/admin/projects/missing-app/rule-sets")
+                .set_json(json!({
+                    "rule_set_id": rule_set["id"],
+                    "enabled": true
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(missing_project_assignment.status(), StatusCode::NOT_FOUND);
+
+        let missing_assignment_delete = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::delete())
+                .uri(
+                    format!(
+                        "/api/admin/projects/missing-app/rule-sets/{}",
+                        rule_set["id"]
+                    )
+                    .as_str(),
+                )
+                .to_request(),
+        )
+        .await;
+        assert_eq!(missing_assignment_delete.status(), StatusCode::NOT_FOUND);
+    })
+    .await;
+}
+
+async fn create_rule_set(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+    name: &str,
+) -> Value {
+    let response = test::call_service(
+        app,
+        with_admin_password(test::TestRequest::post())
+            .uri("/api/admin/rule-sets")
+            .set_json(json!({
+                "name": name,
+                "description": null,
+                "enabled": true
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    test::read_body_json(response).await
+}
+
+async fn create_rule(
+    app: &impl actix_web::dev::Service<
+        actix_http::Request,
+        Response = actix_web::dev::ServiceResponse,
+        Error = actix_web::Error,
+    >,
+    rule_set_id: i64,
+) -> Value {
+    let response = test::call_service(
+        app,
+        with_admin_password(test::TestRequest::post())
+            .uri(format!("/api/admin/rule-sets/{rule_set_id}/rules").as_str())
+            .set_json(json!({
+                "parent_id": null,
+                "name": "Levelup",
+                "xwhat": "levelup",
+                "content": "fields: {}\n",
+                "enabled": true
+            }))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    test::read_body_json(response).await
+}
+
 async fn create_app() -> impl actix_web::dev::Service<
     actix_http::Request,
     Response = actix_web::dev::ServiceResponse,

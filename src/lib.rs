@@ -2,7 +2,6 @@ pub mod admin;
 pub mod admin_ui;
 pub mod db;
 pub mod entities;
-pub mod errors;
 pub mod event;
 pub mod ingest;
 pub mod logging;
