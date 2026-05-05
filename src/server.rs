@@ -7,7 +7,9 @@ use crate::repositories::{CreateProjectInput, ProjectRepository, RuleRepository}
 use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
 use crate::settings::{default_database_refresh_interval_secs, Settings};
 use crate::utils::events::{init_event_sinks, EventSinkState};
-use crate::utils::prometheus::{init_private_prometheus, init_public_prometheus};
+use crate::utils::prometheus::{
+    init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
+};
 use crate::wal::WalWriter;
 use crate::wal_replay::{replay_once, WalReplayContext};
 use actix_web::web::{Data, ServiceConfig};
@@ -28,32 +30,26 @@ pub async fn index() -> HttpResponse {
     }))
 }
 
-pub async fn health(
-    event_sinks: Data<EventSinkState>,
-    redis_pool: Data<r2d2::Pool<redis::Client>>,
-) -> HttpResponse {
-    use redis::Commands;
-
-    let events_status = if event_sinks.check_alive().await.is_ok() {
-        "ok"
-    } else {
-        "error"
+pub async fn healthz(settings: Data<Arc<Settings>>, wal: Option<Data<WalWriter>>) -> HttpResponse {
+    let wal_enabled = settings.wal.is_some();
+    let wal_ready = match (wal_enabled, wal.as_ref()) {
+        (false, _) => true,
+        (true, Some(wal)) => wal.check_ready().is_ok(),
+        (true, None) => false,
     };
 
-    let pong: String = redis_pool.get().unwrap().ping().unwrap();
-    let redis_status = if pong == "PONG" { "ok" } else { "error" };
+    let status = if wal_ready { "ok" } else { "error" };
+    let body = serde_json::json!({
+        "status": status,
+        "wal_enabled": wal_enabled,
+        "wal_ready": wal_ready,
+    });
 
-    let overall_status = if events_status == "ok" && redis_status == "ok" {
-        "ok"
+    if wal_ready {
+        HttpResponse::Ok().json(body)
     } else {
-        "error"
-    };
-
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": overall_status,
-        "events":events_status,
-        "redis":redis_status
-    }))
+        HttpResponse::ServiceUnavailable().json(body)
+    }
 }
 
 #[derive(Clone)]
@@ -65,11 +61,14 @@ pub struct AppState {
     project_registry: Data<ProjectRegistryState>,
     processor: Data<ProcessorState>,
     wal: Option<Data<WalWriter>>,
+    wal_metrics: Option<Data<WalPrometheusMetrics>>,
+    ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
 }
 
 pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
     let shared_registry = Registry::new();
-    let app_state = build_app_state(settings.clone()).await?;
+    let mut app_state = build_app_state(settings.clone()).await?;
+    register_wal_prometheus_metrics(&shared_registry, &mut app_state)?;
     spawn_project_registry_refresh_loop(
         app_state.project_registry.clone(),
         project_registry_refresh_interval(&settings),
@@ -132,7 +131,27 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
         project_registry,
         processor,
         wal,
+        wal_metrics: None,
+        ingest_metrics: None,
     })
+}
+
+pub fn register_wal_prometheus_metrics(
+    registry: &Registry,
+    state: &mut AppState,
+) -> std::io::Result<()> {
+    let ingest_metrics = Data::new(
+        IngestPrometheusMetrics::register(registry)
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    );
+    let metrics = Data::new(
+        WalPrometheusMetrics::register(registry)
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    );
+    metrics.observe(&state.settings, state.wal.as_ref().map(Data::get_ref));
+    state.wal_metrics = Some(metrics);
+    state.ingest_metrics = Some(ingest_metrics);
+    Ok(())
 }
 
 pub fn configure_public_app(cfg: &mut ServiceConfig, state: AppState) {
@@ -141,6 +160,12 @@ pub fn configure_public_app(cfg: &mut ServiceConfig, state: AppState) {
         .service(web::scope("/").route("", web::get().to(index)));
     if let Some(wal) = state.wal {
         cfg.app_data(wal);
+    }
+    if let Some(wal_metrics) = state.wal_metrics {
+        cfg.app_data(wal_metrics);
+    }
+    if let Some(ingest_metrics) = state.ingest_metrics {
+        cfg.app_data(ingest_metrics);
     }
     cfg.service(
         web::resource("/ingest")
@@ -158,12 +183,19 @@ pub fn configure_private_app(cfg: &mut ServiceConfig, state: AppState) {
         .app_data(state.project_repository.clone())
         .app_data(state.rule_repository.clone())
         .app_data(state.project_registry.clone())
+        .service(web::resource("/healthz").route(web::get().to(healthz)))
         .configure(admin::configure)
         .configure(admin_ui::configure)
         .service(
             SwaggerUi::new("/swagger-ui/{_:.*}")
                 .url("/api-docs/openapi.json", admin::AdminApiDoc::openapi()),
         );
+    if let Some(wal) = state.wal {
+        cfg.app_data(wal);
+    }
+    if let Some(wal_metrics) = state.wal_metrics {
+        cfg.app_data(wal_metrics);
+    }
 }
 
 pub fn configure_app(cfg: &mut ServiceConfig, state: AppState) {
@@ -203,6 +235,10 @@ fn spawn_wal_replay_loop(state: AppState) {
                     consecutive_errors = 0;
                 }
                 Err(error) => {
+                    if let Some(metrics) = state.wal_metrics.as_ref() {
+                        metrics.inc_replay_errors();
+                        metrics.observe(&state.settings, state.wal.as_ref().map(Data::get_ref));
+                    }
                     let retry_delay = wal_replay_retry_delay(consecutive_errors);
                     consecutive_errors = consecutive_errors.saturating_add(1);
                     warn!(

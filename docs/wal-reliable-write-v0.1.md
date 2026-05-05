@@ -66,7 +66,7 @@
 
 - `no_sync = false` 时，ACK 才能表示 WAL 已持久化。
 - `no_sync = true` 时，ACK 不得声明为强持久 ACK。
-- `no_sync = true` 时，文档、启动日志、健康检查或 `/wal/status` 必须显式暴露当前节点处于弱可靠模式。
+- `no_sync = true` 时，文档、启动日志、健康检查或 Prometheus 指标必须显式暴露当前节点处于弱可靠模式。
 - `no_sync = true` 时，不得把当前节点标记为满足 WAL v0.1 可靠写入标准。
 
 ## 故障覆盖范围
@@ -389,7 +389,7 @@ WAL replay 采用 `at-least-once`：
 - 不得推进 checkpoint。
 - 不得处理后续 LSN。
 
-服务启动时不要求先 replay 完所有历史 WAL。只要满足以下条件即可 `readyz = true` 并接收新请求：
+服务启动时不要求先 replay 完所有历史 WAL。只要满足以下条件，节点即可通过内部 `/healthz` 探测并接收新请求：
 
 - WAL writer 恢复完成。
 - `max_lsn` 已恢复。
@@ -532,14 +532,13 @@ available_bytes - estimated_wal_bytes >= wal_min_free_bytes
 
 当节点 WAL 无法可靠写入时：
 
-- `readyz = false`
-- 前端负载均衡应停止向该节点分配新收数请求。
+- 内部 `/healthz` 返回 `503 Service Unavailable`。
+- 负载均衡应停止向该节点分配新收数请求。
 
-建议暴露：
+建议暴露面：
 
-- `/healthz`
-- `/readyz`
-- `/wal/status`
+- management/private `/healthz`：供 LVS、k8s、内网监控判断节点是否可接新写入。
+- Prometheus `/metrics`：承载 WAL、replay、下游写入等详细状态和告警指标。
 
 WAL 容量不足或无法写入时建议返回：
 
@@ -558,7 +557,7 @@ WAL 容量不足或无法写入时建议返回：
 
 ## 健康检查与监控指标
 
-`readyz = true` 表示当前节点可以可靠接收新事件，并将新事件写入 WAL 后 ACK。
+内部 `/healthz = 200` 表示当前节点可以可靠接收新事件，并将新事件写入 WAL 后 ACK。
 
 它不要求历史 WAL 已全部 replay 完成。
 
@@ -586,7 +585,7 @@ WAL 容量不足或无法写入时建议返回：
 关键告警：
 
 - WAL 可用空间低于阈值。
-- `readyz=false`。
+- 内部 `/healthz` 返回非 200。
 - WAL replay lag 持续增长。
 - 下游重试持续超过阈值。
 - fsync 延迟异常升高。
@@ -610,7 +609,7 @@ WAL 容量不足或无法写入时建议返回：
 10. 检查 WAL 目录可写。
 11. 检查 WAL 磁盘空间。
 12. 启动 WAL writer。
-13. `readyz=true`。
+13. 内部 `/healthz` 返回 200。
 14. 开始接收新请求。
 15. 后台从 `checkpoint_lsn + 1` 开始串行 replay。
 
@@ -649,7 +648,7 @@ replay LSN 102
   -> 指数退避重试
   -> 新收数请求继续进入 WAL
   -> WAL backlog 增长
-  -> 如果 WAL 磁盘不足，readyz=false，新请求返回失败
+  -> 如果 WAL 磁盘不足，内部 /healthz 返回 503，新请求返回失败
 ```
 
 ## 默认配置

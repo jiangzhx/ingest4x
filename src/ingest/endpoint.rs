@@ -4,6 +4,7 @@ use crate::services::ProjectRegistryState;
 use crate::settings::{default_max_event_bytes, Settings};
 use crate::utils::events::{EventSinkState, EventStatus};
 use crate::utils::get_ip;
+use crate::utils::prometheus::{IngestPrometheusMetrics, WalPrometheusMetrics};
 use crate::wal::{new_record, WalWriter};
 use actix_web::http::Method;
 use actix_web::web::{Data, Query};
@@ -13,6 +14,7 @@ use base64::Engine;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{error, warn};
 
 pub async fn ingest(
@@ -24,8 +26,11 @@ pub async fn ingest(
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
     wal: Option<Data<WalWriter>>,
+    wal_metrics: Option<Data<WalPrometheusMetrics>>,
+    ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
     settings: Option<Data<Arc<Settings>>>,
 ) -> HttpResponse {
+    let started = Instant::now();
     let body = match request_payload(&req, body, query_params.into_inner()) {
         Ok(body) => body,
         Err(response) => return response,
@@ -46,7 +51,20 @@ pub async fn ingest(
     };
 
     if let Some(wal) = wal {
-        return append_wal_record(&req, body, &wal).await;
+        let appid = payload.appid.clone();
+        let event_name = payload.event_name.clone();
+        return append_wal_record(
+            &req,
+            body,
+            appid.as_str(),
+            event_name.as_str(),
+            &wal,
+            settings.as_ref().map(Data::get_ref).map(Arc::as_ref),
+            wal_metrics.as_ref().map(Data::get_ref),
+            ingest_metrics.as_ref().map(Data::get_ref),
+            started,
+        )
+        .await;
     }
 
     process_ingest_payload(
@@ -55,6 +73,8 @@ pub async fn ingest(
         rule_repository,
         processor,
         processor_request_context(&req),
+        ingest_metrics.as_ref().map(Data::get_ref),
+        started,
     )
     .await
 }
@@ -144,6 +164,8 @@ async fn process_ingest_payload(
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
     request_context: ProcessorRequestContext,
+    ingest_metrics: Option<&IngestPrometheusMetrics>,
+    started: Instant,
 ) -> HttpResponse {
     let ValidatedIngestPayload {
         json,
@@ -160,6 +182,7 @@ async fn process_ingest_payload(
                 error = %err,
                 "failed to compile project rules"
             );
+            observe_ingest_event(ingest_metrics, &appid, &event_name, "rules_error", started);
             return HttpResponse::InternalServerError().body(err.to_string());
         }
     };
@@ -172,6 +195,13 @@ async fn process_ingest_payload(
                 xwhat = event_name.as_str(),
                 error = %err,
                 "failed to process ingest payload"
+            );
+            observe_ingest_event(
+                ingest_metrics,
+                &appid,
+                &event_name,
+                "processor_error",
+                started,
             );
             return HttpResponse::InternalServerError().body("Failed to process event");
         }
@@ -197,6 +227,7 @@ async fn process_ingest_payload(
                     "failed to send rejected ingest payload to event sinks"
                 );
             }
+            observe_ingest_event(ingest_metrics, &appid, &event_name, "rejected", started);
             return HttpResponse::BadRequest().body(error);
         }
     };
@@ -205,7 +236,10 @@ async fn process_ingest_payload(
         .send_json(EventStatus::Valid, &appid, event_name.as_str(), &json)
         .await
     {
-        Ok(_) => HttpResponse::Ok().body("200"),
+        Ok(_) => {
+            observe_ingest_event(ingest_metrics, &appid, &event_name, "accepted", started);
+            HttpResponse::Ok().body("200")
+        }
         Err(err) => {
             error!(
                 appid = appid.as_str(),
@@ -213,6 +247,7 @@ async fn process_ingest_payload(
                 error = %err,
                 "failed to send event to sinks"
             );
+            observe_ingest_event(ingest_metrics, &appid, &event_name, "sink_error", started);
             HttpResponse::InternalServerError().body(err.to_string())
         }
     }
@@ -238,7 +273,17 @@ fn processor_request_context(req: &HttpRequest) -> ProcessorRequestContext {
     )
 }
 
-async fn append_wal_record(req: &HttpRequest, body: Vec<u8>, wal: &WalWriter) -> HttpResponse {
+async fn append_wal_record(
+    req: &HttpRequest,
+    body: Vec<u8>,
+    appid: &str,
+    event_name: &str,
+    wal: &WalWriter,
+    settings: Option<&Settings>,
+    wal_metrics: Option<&WalPrometheusMetrics>,
+    ingest_metrics: Option<&IngestPrometheusMetrics>,
+    started: Instant,
+) -> HttpResponse {
     let record = new_record(
         req.method().as_str(),
         req.path(),
@@ -249,8 +294,27 @@ async fn append_wal_record(req: &HttpRequest, body: Vec<u8>, wal: &WalWriter) ->
     );
 
     match wal.append(&record) {
-        Ok(_) => HttpResponse::Ok().body("200"),
+        Ok(_) => {
+            if let (Some(metrics), Some(settings)) = (wal_metrics, settings) {
+                metrics.observe(settings, Some(wal));
+            }
+            observe_ingest_event(ingest_metrics, appid, event_name, "wal_appended", started);
+            HttpResponse::Ok().body("200")
+        }
         Err(err) => {
+            if let Some(metrics) = wal_metrics {
+                metrics.inc_append_errors();
+                if let Some(settings) = settings {
+                    metrics.observe(settings, Some(wal));
+                }
+            }
+            observe_ingest_event(
+                ingest_metrics,
+                appid,
+                event_name,
+                "wal_append_error",
+                started,
+            );
             error!(
                 error = %err,
                 "failed to append ingest payload to wal"
@@ -260,6 +324,18 @@ async fn append_wal_record(req: &HttpRequest, body: Vec<u8>, wal: &WalWriter) ->
                 "message": "WAL disk space is insufficient or unavailable"
             }))
         }
+    }
+}
+
+fn observe_ingest_event(
+    metrics: Option<&IngestPrometheusMetrics>,
+    appid: &str,
+    event_name: &str,
+    result: &str,
+    started: Instant,
+) {
+    if let Some(metrics) = metrics {
+        metrics.observe_event(appid, event_name, result, started.elapsed().as_secs_f64());
     }
 }
 

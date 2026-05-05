@@ -70,6 +70,19 @@ pub struct WalWriter {
     inner: Arc<WalWriterInner>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalSnapshot {
+    pub node_id: String,
+    pub ready: bool,
+    pub no_sync: bool,
+    pub available_bytes: u64,
+    pub min_free_bytes: u64,
+    pub active_segment_id: u64,
+    pub active_segment_bytes: u64,
+    pub max_lsn: u64,
+    pub checkpoint_lsn: u64,
+}
+
 #[derive(Debug)]
 struct WalWriterInner {
     dir: PathBuf,
@@ -142,6 +155,14 @@ impl WalWriter {
 
     pub fn append(&self, record: &WalRecord) -> io::Result<WalPosition> {
         self.inner.append(record)
+    }
+
+    pub fn check_ready(&self) -> io::Result<()> {
+        self.inner.ensure_disk_space(0)
+    }
+
+    pub fn snapshot(&self) -> io::Result<WalSnapshot> {
+        self.inner.snapshot()
     }
 
     #[allow(unused)]
@@ -283,6 +304,30 @@ impl WalWriterInner {
 
     fn ensure_disk_space(&self, estimated_wal_bytes: u64) -> io::Result<()> {
         ensure_wal_disk_space(&self.dir, self.min_free_bytes, estimated_wal_bytes)
+    }
+
+    fn snapshot(&self) -> io::Result<WalSnapshot> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| io::Error::other("wal writer mutex poisoned"))?;
+        let checkpoint_lsn = read_checkpoint(&self.dir, &self.node_id)?
+            .map(|checkpoint| checkpoint.checkpoint_lsn)
+            .unwrap_or(0);
+        let available_bytes = fs2::available_space(&self.dir)?;
+        let ready = available_bytes >= self.min_free_bytes;
+
+        Ok(WalSnapshot {
+            node_id: self.node_id.clone(),
+            ready,
+            no_sync: self.no_sync,
+            available_bytes,
+            min_free_bytes: self.min_free_bytes,
+            active_segment_id: state.segment_id,
+            active_segment_bytes: state.offset,
+            max_lsn: state.next_lsn.saturating_sub(1),
+            checkpoint_lsn,
+        })
     }
 
     fn sync_segment(&self, segment_id: u64) -> io::Result<()> {
