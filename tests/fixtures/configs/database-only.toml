@@ -1,4 +1,4 @@
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 max_event_bytes = 262144
 

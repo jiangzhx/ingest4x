@@ -73,16 +73,20 @@ flush_max_records = 1000
 fn settings_reads_checkpoint_flush_fields() {
     let settings = load_settings(
         r#"
-[checkpoint]
+[wal]
+dir = "wal"
+
+[wal.checkpoint]
 flush_interval = "1s"
 flush_records = 1000
 flush_bytes = 67108864
 "#,
     );
 
-    assert_eq!(settings.checkpoint.flush_interval, "1s");
-    assert_eq!(settings.checkpoint.flush_records, 1000);
-    assert_eq!(settings.checkpoint.flush_bytes, 64 * 1024 * 1024);
+    let checkpoint = &settings.wal.expect("wal settings").checkpoint;
+    assert_eq!(checkpoint.flush_interval, "1s");
+    assert_eq!(checkpoint.flush_records, 1000);
+    assert_eq!(checkpoint.flush_bytes, 64 * 1024 * 1024);
 }
 
 fn load_settings(database_section: &str) -> Settings {
@@ -104,7 +108,7 @@ fn load_settings_with_management_section(extra_sections: &str) -> Settings {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 {extra_sections}

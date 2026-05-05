@@ -17,7 +17,7 @@ fn loads_config_without_rules_section() {
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -31,11 +31,6 @@ sinks = ["stdout"]
 
 [[events.invalid.routes]]
 sinks = ["stdout"]
-
-[redis]
-address = "redis://localhost:6379"
-connections_max_size = 10
-connections_min_size = 1
 "#,
     )
     .expect("write config");
@@ -43,19 +38,19 @@ connections_min_size = 1
     let settings = Settings::init_with_file(config_path.to_str().expect("config path"))
         .expect("settings should load");
 
-    assert_eq!(settings.server.log_level, LogLevel::Info);
-    assert_eq!(settings.server.log_format, "json");
+    assert_eq!(settings.logging.level, LogLevel::Info);
+    assert_eq!(settings.logging.format, "json");
 }
 
 #[test]
-fn loads_config_without_redis_section() {
+fn loads_config_without_optional_sections() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("mock-config.toml");
 
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -76,22 +71,23 @@ sinks = ["stdout"]
     let settings = Settings::init_with_file(config_path.to_str().expect("config path"))
         .expect("settings should load");
 
-    assert!(settings.redis.is_none());
     assert!(settings.events.sink.contains_key("stdout"));
 }
 
 #[test]
-fn local_config_can_set_log_level_and_format() {
+fn local_config_can_set_logging_level_and_format() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("dev-config.toml");
 
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
-log_level = "debug"
-log_format = "json"
+
+[logging]
+level = "debug"
+format = "json"
 
 [management]
 bind_address = "127.0.0.1:18090"
@@ -112,8 +108,8 @@ sinks = ["stdout"]
     let settings = Settings::init_with_file(config_path.to_str().expect("config path"))
         .expect("settings should load");
 
-    assert_eq!(settings.server.log_level, LogLevel::Debug);
-    assert_eq!(settings.server.log_format, "json");
+    assert_eq!(settings.logging.level, LogLevel::Debug);
+    assert_eq!(settings.logging.format, "json");
     assert_eq!(
         settings.management.admin_password.as_deref(),
         Some("local-admin-password")
@@ -128,7 +124,7 @@ fn loads_event_sinks_and_status_routes_from_config_file() {
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]

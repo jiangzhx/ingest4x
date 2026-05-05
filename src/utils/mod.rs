@@ -8,7 +8,6 @@ use std::net::IpAddr;
 pub mod events;
 pub mod kafka;
 pub mod prometheus;
-pub mod redis;
 
 pub fn insert_ip(req: &HttpRequest, xcontext: &mut HashMap<String, Value>) {
     if let Some(addr) = req.peer_addr() {

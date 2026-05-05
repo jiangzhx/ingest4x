@@ -490,7 +490,7 @@ async fn create_app() -> impl actix_web::dev::Service<
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]

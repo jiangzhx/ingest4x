@@ -8,14 +8,14 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 #[actix_rt::test]
-async fn config_without_database_runs_ingest_without_kafka_or_redis_services() {
+async fn config_without_database_runs_ingest_without_external_services() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("mock-config.toml");
 
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -75,7 +75,7 @@ async fn config_uses_info_json_logging_by_default() {
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -96,11 +96,8 @@ sinks = ["stdout"]
     let settings = Settings::init_with_file(config_path.to_str().expect("config path"))
         .expect("settings should load");
 
-    assert_eq!(
-        settings.server.log_level,
-        ingest4x::settings::LogLevel::Info
-    );
-    assert_eq!(settings.server.log_format, "json");
+    assert_eq!(settings.logging.level, ingest4x::settings::LogLevel::Info);
+    assert_eq!(settings.logging.format, "json");
 }
 
 #[actix_rt::test]
@@ -111,7 +108,7 @@ async fn config_without_database_real_server_wiring_rejects_unknown_project_on_p
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]

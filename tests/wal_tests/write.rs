@@ -27,7 +27,7 @@ async fn post_ingest_writes_raw_request_to_wal_when_configured() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -111,7 +111,7 @@ async fn post_ingest_returns_wal_capacity_error_when_wal_append_fails() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -184,7 +184,7 @@ async fn get_ingest_writes_decoded_payload_to_wal_when_configured() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -255,7 +255,7 @@ async fn post_ingest_rejects_invalid_json_before_wal_append() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -303,7 +303,7 @@ sinks = ["kafka_valid"]
 }
 
 #[actix_rt::test]
-async fn post_ingest_rejects_payload_over_server_max_event_bytes_before_wal_append() {
+async fn post_ingest_rejects_payload_over_ingest_max_event_bytes_before_wal_append() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -311,7 +311,7 @@ async fn post_ingest_rejects_payload_over_server_max_event_bytes_before_wal_appe
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 max_event_bytes = 128
 
@@ -370,7 +370,7 @@ sinks = ["kafka_valid"]
 }
 
 #[actix_rt::test]
-async fn get_ingest_rejects_decoded_payload_over_server_max_event_bytes_before_wal_append() {
+async fn get_ingest_rejects_decoded_payload_over_ingest_max_event_bytes_before_wal_append() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -378,7 +378,7 @@ async fn get_ingest_rejects_decoded_payload_over_server_max_event_bytes_before_w
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 max_event_bytes = 128
 
@@ -445,7 +445,7 @@ async fn post_ingest_rejects_unknown_project_before_wal_append() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -509,7 +509,7 @@ async fn no_sync_buffers_until_flush_max_records_is_reached() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -583,7 +583,7 @@ async fn wal_segment_uses_explicit_record_header_and_binary_record_payload() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -1224,6 +1224,7 @@ fn wal_settings(wal_dir: &Path) -> WalSettings {
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
+        checkpoint: Default::default(),
     }
 }
 

@@ -20,7 +20,7 @@ async fn healthz_reports_ok_before_accepting_wal_ingest_requests() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -112,7 +112,7 @@ async fn private_metrics_include_wal_health_gauges() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -219,7 +219,7 @@ async fn private_metrics_include_disabled_wal_gauges_without_wal_config() {
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -275,7 +275,7 @@ async fn private_metrics_include_ingest_business_labels_without_wal() {
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -360,7 +360,7 @@ async fn build_app_state_rejects_wal_when_min_free_bytes_is_unavailable() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]

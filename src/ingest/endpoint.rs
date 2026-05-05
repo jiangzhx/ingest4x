@@ -150,7 +150,7 @@ fn reject_if_payload_too_large(
     settings: Option<&Settings>,
 ) -> Option<HttpResponse> {
     let max_event_bytes = settings
-        .map(|settings| settings.server.max_event_bytes)
+        .map(|settings| settings.ingest.max_event_bytes)
         .unwrap_or_else(default_max_event_bytes);
     if payload_len > max_event_bytes {
         return Some(HttpResponse::PayloadTooLarge().body("Payload Too Large"));

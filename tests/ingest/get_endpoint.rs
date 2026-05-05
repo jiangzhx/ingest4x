@@ -24,7 +24,7 @@ async fn get_ingest_decodes_base64_json_and_sends_it_to_kafka_sink() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -131,7 +131,7 @@ async fn get_ingest_default_rhai_processor_uses_existing_validator() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -225,7 +225,7 @@ async fn get_ingest_returns_not_found_for_unknown_project_via_real_server_wiring
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]

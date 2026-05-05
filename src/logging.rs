@@ -39,7 +39,7 @@ where
     ConsoleWriter: for<'writer> MakeWriter<'writer> + Send + Sync + Clone + 'static,
     AccessConsoleWriter: for<'writer> MakeWriter<'writer> + Send + Sync + Clone + 'static,
 {
-    let server = &settings.server;
+    let logging = &settings.logging;
 
     ensure_log_dir(LOG_DIR)?;
     let (file_writer, file_guard) = tracing_appender::non_blocking(build_rolling_appender(
@@ -48,11 +48,11 @@ where
         Rotation::DAILY,
         7,
     )?);
-    let log_level = server.log_level.as_tracing_level();
+    let log_level = logging.level.as_tracing_level();
     let console_filter = filter_fn(move |meta| should_emit_log(meta.level(), log_level));
     let file_filter = filter_fn(move |meta| should_emit_log(meta.level(), log_level));
 
-    match server.log_format.as_str() {
+    match logging.format.as_str() {
         "json" => Registry::default()
             .with(JsonLogLayer::new(console_writer).with_filter(console_filter))
             .with(JsonLogLayer::new(file_writer).with_filter(file_filter))

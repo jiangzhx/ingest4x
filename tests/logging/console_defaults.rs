@@ -53,7 +53,7 @@ fn logging_writes_info_logs_to_console_by_default() {
     fs::write(
         &config_path,
         r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]

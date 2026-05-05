@@ -5,7 +5,9 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
 pub struct Settings {
-    pub server: ServerSettings,
+    pub ingest: IngestSettings,
+    #[serde(default)]
+    pub logging: LoggingSettings,
     #[serde(alias = "metrics")]
     pub management: ManagementSettings,
     #[serde(default)]
@@ -13,22 +15,33 @@ pub struct Settings {
     #[serde(default)]
     pub wal: Option<WalSettings>,
     #[serde(default)]
-    pub checkpoint: CheckpointSettings,
-    #[serde(default)]
     pub events: EventsSettings,
-    pub redis: Option<RedisSettings>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
-pub struct ServerSettings {
+pub struct IngestSettings {
     pub bind_address: String,
-    #[serde(default)]
-    pub log_level: LogLevel,
-    #[serde(default = "default_log_format")]
-    pub log_format: String,
     #[serde(default = "default_max_event_bytes")]
     pub max_event_bytes: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct LoggingSettings {
+    #[serde(default)]
+    pub level: LogLevel,
+    #[serde(default = "default_log_format")]
+    pub format: String,
+}
+
+impl Default for LoggingSettings {
+    fn default() -> Self {
+        Self {
+            level: LogLevel::default(),
+            format: default_log_format(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -89,14 +102,6 @@ pub struct EventRouteSettings {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
-pub struct RedisSettings {
-    pub address: String,
-    pub connections_max_size: u32,
-    pub connections_min_size: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[allow(unused)]
 pub struct DatabaseSettings {
     pub url: String,
     #[serde(default = "default_database_refresh_interval_secs")]
@@ -119,6 +124,8 @@ pub struct WalSettings {
     pub wal_segment_max_bytes: u64,
     #[serde(default)]
     pub min_free_bytes: u64,
+    #[serde(default)]
+    pub checkpoint: CheckpointSettings,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -36,7 +36,7 @@ async fn wal_replay_sends_records_to_kafka_and_advances_checkpoint() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -239,6 +239,7 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
+        checkpoint: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -290,7 +291,7 @@ async fn wal_replay_stops_on_invalid_json_record_without_checkpoint() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -434,6 +435,7 @@ async fn wal_replay_does_not_checkpoint_each_successful_record_before_batch_flus
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
+        checkpoint: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -529,6 +531,7 @@ async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write(
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
+        checkpoint: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -571,7 +574,7 @@ async fn wal_replay_removes_segments_before_checkpoint() {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
@@ -723,6 +726,7 @@ async fn wal_replay_rejects_checkpoint_with_invalid_checksum() {
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
+        checkpoint: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -833,6 +837,7 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
+        checkpoint: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -921,6 +926,7 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         no_sync: false,
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
+        checkpoint: Default::default(),
     })
     .expect("wal writer");
     writer

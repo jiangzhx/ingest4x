@@ -5,8 +5,8 @@ use ingest4x::repositories::{CreateProjectInput, ProjectRepository, UpdateProjec
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    DatabaseSettings, EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, LogLevel,
-    ManagementSettings, ServerSettings, Settings,
+    DatabaseSettings, EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings,
+    IngestSettings, ManagementSettings, Settings,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -131,21 +131,18 @@ async fn refresh_if_needed_returns_false_when_version_is_unchanged() {
 #[actix_rt::test]
 async fn build_app_state_initializes_mock_registry_with_default_project() {
     let settings = Arc::new(Settings {
-        server: ServerSettings {
+        ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
-            log_level: LogLevel::Info,
-            log_format: "json".to_string(),
             max_event_bytes: ingest4x::settings::default_max_event_bytes(),
         },
+        logging: Default::default(),
         management: ManagementSettings {
             bind_address: "127.0.0.1:18090".to_string(),
             admin_password: None,
         },
         database: None,
         wal: None,
-        checkpoint: Default::default(),
         events: test_events_settings(),
-        redis: None,
     });
 
     let app_state = server::build_app_state(settings)
@@ -184,14 +181,13 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
 }
 
 #[actix_rt::test]
-async fn build_app_state_allows_database_config_without_redis_for_registry_backed_ingest() {
+async fn build_app_state_allows_database_config_for_registry_backed_ingest() {
     let settings = Arc::new(Settings {
-        server: ServerSettings {
+        ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
-            log_level: LogLevel::Info,
-            log_format: "json".to_string(),
             max_event_bytes: ingest4x::settings::default_max_event_bytes(),
         },
+        logging: Default::default(),
         management: ManagementSettings {
             bind_address: "127.0.0.1:18090".to_string(),
             admin_password: None,
@@ -201,25 +197,22 @@ async fn build_app_state_allows_database_config_without_redis_for_registry_backe
             refresh_interval_secs: 3,
         }),
         wal: None,
-        checkpoint: Default::default(),
         events: test_events_settings(),
-        redis: None,
     });
 
     server::build_app_state(settings)
         .await
-        .expect("database-backed ingest should not require redis for registry lookup");
+        .expect("database-backed ingest should initialize registry lookup");
 }
 
 #[actix_rt::test]
 async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
     let settings = Arc::new(Settings {
-        server: ServerSettings {
+        ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
-            log_level: LogLevel::Info,
-            log_format: "json".to_string(),
             max_event_bytes: ingest4x::settings::default_max_event_bytes(),
         },
+        logging: Default::default(),
         management: ManagementSettings {
             bind_address: "127.0.0.1:18090".to_string(),
             admin_password: Some("ingest4x".to_string()),
@@ -229,9 +222,7 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
             refresh_interval_secs: 3,
         }),
         wal: None,
-        checkpoint: Default::default(),
         events: test_events_settings(),
-        redis: None,
     });
 
     let app_state = server::build_app_state(settings)

@@ -113,21 +113,18 @@ mod tests {
 
     fn settings_with_admin_password(admin_password: Option<&str>) -> Settings {
         Settings {
-            server: crate::settings::ServerSettings {
+            ingest: crate::settings::IngestSettings {
                 bind_address: "127.0.0.1:0".to_string(),
-                log_level: crate::settings::LogLevel::Info,
-                log_format: "json".to_string(),
                 max_event_bytes: crate::settings::default_max_event_bytes(),
             },
+            logging: Default::default(),
             management: crate::settings::ManagementSettings {
                 bind_address: "127.0.0.1:0".to_string(),
                 admin_password: admin_password.map(str::to_string),
             },
             database: None,
             wal: None,
-            checkpoint: Default::default(),
             events: crate::settings::EventsSettings::default(),
-            redis: None,
         }
     }
 

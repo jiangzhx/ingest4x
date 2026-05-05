@@ -116,7 +116,7 @@ async fn build_mock_app_state(_mock_projects_toml: &str) -> server::AppState {
         &config_path,
         format!(
             r#"
-[server]
+[ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]

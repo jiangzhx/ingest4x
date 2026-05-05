@@ -1,17 +1,14 @@
-[server]
+[ingest]
 bind_address = "0.0.0.0:8090"
-log_level = "info"
-log_format = "json"
 max_event_bytes = 262144
+
+[logging]
+level = "info"
+format = "json"
 
 [management]
 bind_address = "127.0.0.1:18090"
 admin_password = "ingest4x"
-
-[redis]
-address = "redis://localhost:6379"
-connections_max_size = 500
-connections_min_size = 10
 
 [database]
 url = "sqlite://db/ingest4x.db?mode=rwc"

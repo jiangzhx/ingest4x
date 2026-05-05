@@ -14,8 +14,8 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, LogLevel,
-    ManagementSettings, ServerSettings, Settings,
+    EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, IngestSettings,
+    ManagementSettings, Settings,
 };
 use ingest4x::utils::events::init_event_sinks;
 use rdkafka::mocking::MockCluster;
@@ -42,21 +42,18 @@ fn create_kafka_cluster(topic: &str) -> (MockCluster<'static, DefaultProducerCon
 pub async fn create_configured_app(
 ) -> impl Service<Request, Response = ServiceResponse, Error = actix_web::Error> {
     let settings = Arc::new(Settings {
-        server: ServerSettings {
+        ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
-            log_level: LogLevel::Info,
-            log_format: "json".to_string(),
             max_event_bytes: ingest4x::settings::default_max_event_bytes(),
         },
+        logging: Default::default(),
         management: ManagementSettings {
             bind_address: "127.0.0.1:18090".to_string(),
             admin_password: None,
         },
         database: None,
         wal: None,
-        checkpoint: Default::default(),
         events: stdout_events_settings(),
-        redis: None,
     });
     let app_state = server::build_app_state(settings)
         .await

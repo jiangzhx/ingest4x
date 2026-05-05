@@ -72,7 +72,7 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
     spawn_wal_replay_loop(app_state.clone());
 
     let public_prometheus = init_public_prometheus(shared_registry.clone());
-    let server_bind_address = settings.server.bind_address.clone();
+    let ingest_bind_address = settings.ingest.bind_address.clone();
     let management_bind_address = settings.management.bind_address.clone();
 
     let public_app_state = app_state.clone();
@@ -81,9 +81,9 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
             .wrap(public_prometheus.clone())
             .configure(|cfg| configure_public_app(cfg, public_app_state.clone()))
     })
-    .bind(server_bind_address.as_str())?
+    .bind(ingest_bind_address.as_str())?
     .run();
-    info!("ingest4x public server listening on http://{server_bind_address}");
+    info!("ingest4x ingest server listening on http://{ingest_bind_address}");
 
     let private_prometheus = init_private_prometheus(shared_registry.clone());
 
@@ -173,7 +173,7 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
         project_registry: &state.project_registry,
         rule_repository: &state.rule_repository,
         processor: &state.processor,
-        checkpoint: state.settings.checkpoint.clone(),
+        checkpoint: wal.checkpoint.clone(),
     })
     .await
 }

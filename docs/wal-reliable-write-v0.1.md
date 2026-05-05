@@ -355,7 +355,7 @@ checkpoint_flush_records: 1000
 checkpoint_flush_bytes: 64MB
 ```
 
-当前实现使用 `[checkpoint]` 配置：
+当前实现使用 `[wal.checkpoint]` 配置：
 
 - `flush_interval`
 - `flush_records`
@@ -667,10 +667,10 @@ wal:
   flush_max_records: 1000
   min_free_bytes: <按部署环境配置>
 
-checkpoint:
-  flush_interval: 1s
-  flush_records: 1000
-  flush_bytes: 64MB
+  checkpoint:
+    flush_interval: 1s
+    flush_records: 1000
+    flush_bytes: 64MB
 
 replay:
   mode: serial
