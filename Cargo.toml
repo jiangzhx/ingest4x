@@ -22,13 +22,10 @@ tracing-log = "0.2.0"
 tracing-subscriber = { version = "0.3.19", features = ["fmt", "json"] }
 rdkafka = { version = "0.37.0", features = ["cmake-build", "ssl-vendored"] }
 clap = { version = "4.5.6", features = ["derive"] }
-redis = { version = "1", features = ["r2d2", "cluster", "connection-manager", "tokio-comp", "tokio-native-tls-comp"] }
-r2d2 = "0.8.10"
 config = "0.15.4"
 strum = "0.26"
 strum_macros = "0.26"
 local-ip-address = "0.6.1"
-moka = { version = "0.12.7", features = ["sync"] }
 prometheus = "0.13.4"
 futures = "0.3.30"
 anyhow = "1.0.94"
@@ -52,7 +49,6 @@ actix-rt = "2.10.0"
 assert-json-diff = "2.0.2"
 criterion = { version = "0.5.1", features = ["html_reports"] }
 tempfile = "3.15.0"
-redis-test = "1"
 
 
 [[bin]]
