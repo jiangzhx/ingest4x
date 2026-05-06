@@ -5,10 +5,13 @@ use ingest4x::repositories::{CreateProjectInput, ProjectRepository, UpdateProjec
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    DatabaseSettings, EventSinkConfig, EventsSettings, IngestSettings, ManagementSettings, Settings,
+    CheckpointSettings, DatabaseSettings, EventSinkConfig, EventsSettings, IngestSettings,
+    ManagementSettings, Settings, WalSettings,
 };
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
+use tempfile::tempdir;
 
 const ADMIN_PASSWORD_HEADER: &str = "x-admin-password";
 
@@ -129,6 +132,7 @@ async fn refresh_if_needed_returns_false_when_version_is_unchanged() {
 
 #[actix_rt::test]
 async fn build_app_state_initializes_mock_registry_with_default_project() {
+    let temp = tempdir().expect("temp dir");
     let settings = Arc::new(Settings {
         ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
@@ -140,7 +144,7 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
             admin_password: None,
         },
         database: None,
-        wal: None,
+        wal: test_wal_settings(temp.path()),
         events: test_events_settings(),
     });
 
@@ -181,6 +185,7 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
 
 #[actix_rt::test]
 async fn build_app_state_allows_database_config_for_registry_backed_ingest() {
+    let temp = tempdir().expect("temp dir");
     let settings = Arc::new(Settings {
         ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
@@ -195,7 +200,7 @@ async fn build_app_state_allows_database_config_for_registry_backed_ingest() {
             url: "sqlite::memory:".to_string(),
             refresh_interval_secs: 3,
         }),
-        wal: None,
+        wal: test_wal_settings(temp.path()),
         events: test_events_settings(),
     });
 
@@ -206,6 +211,7 @@ async fn build_app_state_allows_database_config_for_registry_backed_ingest() {
 
 #[actix_rt::test]
 async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
+    let temp = tempdir().expect("temp dir");
     let settings = Arc::new(Settings {
         ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
@@ -220,7 +226,7 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
             url: "sqlite::memory:".to_string(),
             refresh_interval_secs: 3,
         }),
-        wal: None,
+        wal: test_wal_settings(temp.path()),
         events: test_events_settings(),
     });
 
@@ -265,6 +271,19 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
 fn test_events_settings() -> EventsSettings {
     EventsSettings {
         sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+    }
+}
+
+fn test_wal_settings(dir: &Path) -> WalSettings {
+    WalSettings {
+        dir: dir.join("wal").display().to_string(),
+        node_id: None,
+        flush_max_interval: "1ms".to_string(),
+        flush_max_records: 1,
+        no_sync: false,
+        wal_segment_max_bytes: ingest4x::settings::default_wal_segment_max_bytes(),
+        min_free_bytes: 0,
+        checkpoint: CheckpointSettings::default(),
     }
 }
 

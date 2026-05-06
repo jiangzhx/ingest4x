@@ -556,12 +556,16 @@ bind_address = "127.0.0.1:18090"
 [database]
 url = "sqlite::memory:"
 
+[wal]
+dir = "{}"
+
 [events.sink.events]
 type = "stdout"
 
 [events.sink.events_error]
 type = "stdout"
-"#
+"#,
+            temp.path().join("wal").display()
         ),
     )
     .expect("write config");
@@ -570,7 +574,9 @@ type = "stdout"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    server::build_app_state(settings)
+    let app_state = server::build_app_state(settings)
         .await
-        .expect("build app state")
+        .expect("build app state");
+    let _kept_temp = temp.keep();
+    app_state
 }

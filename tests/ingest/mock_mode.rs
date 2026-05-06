@@ -14,12 +14,16 @@ async fn config_without_database_runs_ingest_without_external_services() {
 
     fs::write(
         &config_path,
-        r#"
+        format!(
+            r#"
 [ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
 
 [events.sink.events]
 type = "stdout"
@@ -27,6 +31,8 @@ type = "stdout"
 [events.sink.events_error]
 type = "stdout"
 "#,
+            temp.path().join("wal").display()
+        ),
     )
     .expect("write config");
 
@@ -71,12 +77,16 @@ async fn config_uses_info_json_logging_by_default() {
 
     fs::write(
         &config_path,
-        r#"
+        format!(
+            r#"
 [ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
 
 [events.sink.events]
 type = "stdout"
@@ -84,6 +94,8 @@ type = "stdout"
 [events.sink.events_error]
 type = "stdout"
 "#,
+            temp.path().join("wal").display()
+        ),
     )
     .expect("write config");
 
@@ -101,12 +113,16 @@ async fn config_without_database_real_server_wiring_rejects_unknown_project_on_p
 
     fs::write(
         &config_path,
-        r#"
+        format!(
+            r#"
 [ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
 
 [events.sink.events]
 type = "stdout"
@@ -114,6 +130,8 @@ type = "stdout"
 [events.sink.events_error]
 type = "stdout"
 "#,
+            temp.path().join("wal").display()
+        ),
     )
     .expect("write config");
 

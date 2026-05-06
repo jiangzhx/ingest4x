@@ -26,18 +26,13 @@ pub async fn index() -> HttpResponse {
     }))
 }
 
-pub async fn healthz(settings: Data<Arc<Settings>>, wal: Option<Data<WalWriter>>) -> HttpResponse {
-    let wal_enabled = settings.wal.is_some();
-    let wal_ready = match (wal_enabled, wal.as_ref()) {
-        (false, _) => true,
-        (true, Some(wal)) => wal.check_ready().is_ok(),
-        (true, None) => false,
-    };
+pub async fn healthz(wal: Data<WalWriter>) -> HttpResponse {
+    let wal_ready = wal.check_ready().is_ok();
 
     let status = if wal_ready { "ok" } else { "error" };
     let body = serde_json::json!({
         "status": status,
-        "wal_enabled": wal_enabled,
+        "wal_enabled": true,
         "wal_ready": wal_ready,
     });
 
@@ -56,7 +51,7 @@ pub struct AppState {
     pub(crate) rule_repository: Data<RuleRepository>,
     pub(crate) project_registry: Data<ProjectRegistryState>,
     pub(crate) processor: Data<ProcessorState>,
-    pub(crate) wal: Option<Data<WalWriter>>,
+    pub(crate) wal: Data<WalWriter>,
     pub(crate) wal_metrics: Option<Data<WalPrometheusMetrics>>,
     pub(crate) ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
 }
@@ -111,13 +106,9 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
     let processor = Data::new(ProcessorState::from_default_entry().map_err(|error| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
     })?);
-    let wal = settings
-        .wal
-        .as_ref()
-        .map(WalWriter::new)
-        .transpose()
-        .map_err(|error| std::io::Error::other(error.to_string()))?
-        .map(Data::new);
+    let wal = Data::new(
+        WalWriter::new(&settings.wal).map_err(|error| std::io::Error::other(error.to_string()))?,
+    );
 
     Ok(AppState {
         settings,
@@ -144,7 +135,7 @@ pub fn register_wal_prometheus_metrics(
         WalPrometheusMetrics::register(registry)
             .map_err(|error| std::io::Error::other(error.to_string()))?,
     );
-    metrics.observe(&state.settings, state.wal.as_ref().map(Data::get_ref));
+    metrics.observe(&state.settings, state.wal.get_ref());
     state.wal_metrics = Some(metrics);
     state.ingest_metrics = Some(ingest_metrics);
     Ok(())
@@ -163,26 +154,18 @@ pub fn configure_app(cfg: &mut ServiceConfig, state: AppState) {
 }
 
 pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
-    let Some(wal) = state.settings.wal.as_ref() else {
-        return Ok(0);
-    };
-
     replay_once(WalReplayContext {
-        dir: std::path::Path::new(&wal.dir),
+        dir: std::path::Path::new(&state.settings.wal.dir),
         event_sinks: &state.event_sinks,
         project_registry: &state.project_registry,
         rule_repository: &state.rule_repository,
         processor: &state.processor,
-        checkpoint: wal.checkpoint.clone(),
+        checkpoint: state.settings.wal.checkpoint.clone(),
     })
     .await
 }
 
 fn spawn_wal_replay_loop(state: AppState) {
-    if state.settings.wal.is_none() {
-        return;
-    }
-
     tokio::spawn(async move {
         let mut consecutive_errors = 0_u32;
         loop {
@@ -197,7 +180,7 @@ fn spawn_wal_replay_loop(state: AppState) {
                 Err(error) => {
                     if let Some(metrics) = state.wal_metrics.as_ref() {
                         metrics.inc_replay_errors();
-                        metrics.observe(&state.settings, state.wal.as_ref().map(Data::get_ref));
+                        metrics.observe(&state.settings, state.wal.get_ref());
                     }
                     let retry_delay = wal_replay_retry_delay(consecutive_errors);
                     consecutive_errors = consecutive_errors.saturating_add(1);

@@ -213,17 +213,23 @@ type = "stdout"
 }
 
 #[actix_rt::test]
-async fn private_metrics_include_disabled_wal_gauges_without_wal_config() {
+async fn private_metrics_include_ingest_business_labels_for_wal_appends() {
     let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("mock-config.toml");
     fs::write(
         &config_path,
-        r#"
+        format!(
+            r#"
 [ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+flush_max_records = 1
 
 [events.sink.events]
 type = "stdout"
@@ -231,62 +237,8 @@ type = "stdout"
 [events.sink.events_error]
 type = "stdout"
 "#,
-    )
-    .expect("write config");
-
-    let settings = Arc::new(
-        Settings::init_with_file(config_path.to_str().expect("config path"))
-            .expect("settings should load"),
-    );
-    let mut app_state = server::build_app_state(settings)
-        .await
-        .expect("build app state");
-    let registry = Registry::new();
-    server::register_wal_prometheus_metrics(&registry, &mut app_state)
-        .expect("register wal metrics");
-
-    let private_app = test::init_service(
-        App::new()
-            .wrap(init_private_prometheus(registry))
-            .configure(|cfg| {
-                server::configure_private_app(cfg, app_state.clone());
-            }),
-    )
-    .await;
-    let metrics_resp = test::call_service(
-        &private_app,
-        test::TestRequest::get().uri("/metrics").to_request(),
-    )
-    .await;
-    assert_eq!(metrics_resp.status(), StatusCode::OK);
-    let metrics =
-        String::from_utf8(test::read_body(metrics_resp).await.to_vec()).expect("metrics text");
-
-    assert!(metrics.contains("wal_enabled 0"));
-    assert!(metrics.contains("wal_ready 1"));
-    assert!(metrics.contains("wal_reliable_ack 0"));
-    assert!(metrics.contains("wal_max_lsn 0"));
-}
-
-#[actix_rt::test]
-async fn private_metrics_include_ingest_business_labels_without_wal() {
-    let temp = tempdir().expect("temp dir");
-    let config_path = temp.path().join("mock-config.toml");
-    fs::write(
-        &config_path,
-        r#"
-[ingest]
-bind_address = "127.0.0.1:8090"
-
-[management]
-bind_address = "127.0.0.1:18090"
-
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
-"#,
+            wal_dir.display()
+        ),
     )
     .expect("write config");
 
@@ -345,9 +297,9 @@ type = "stdout"
         String::from_utf8(test::read_body(metrics_resp).await.to_vec()).expect("metrics text");
 
     assert!(metrics
-        .contains(r#"ingest_events_total{appid="APPID",result="accepted",xwhat="startup"} 1"#));
+        .contains(r#"ingest_events_total{appid="APPID",result="wal_appended",xwhat="startup"} 1"#));
     assert!(metrics.contains(
-        r#"ingest_event_duration_seconds_count{appid="APPID",result="accepted",xwhat="startup"} 1"#
+        r#"ingest_event_duration_seconds_count{appid="APPID",result="wal_appended",xwhat="startup"} 1"#
     ));
 }
 

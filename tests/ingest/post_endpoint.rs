@@ -1,5 +1,5 @@
 use crate::support::mock_services::{
-    create_app, create_app_with_processor_script, create_app_with_project, TestService,
+    create_app, create_app_with_processor_script, create_app_with_project, replay_once, TestService,
 };
 use actix_http::StatusCode;
 use actix_web::test;
@@ -36,6 +36,7 @@ async fn post_ingest_normalizes_and_sends_event() {
 
     assert_eq!(status_code, StatusCode::OK);
     assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
+    assert_eq!(replay_once(&testservice).await.expect("replay wal once"), 1);
 
     let kafka_string = read_message_payload(&consumer).await;
     let mut event_from_kafka =
@@ -89,6 +90,7 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
     let status_code = resp.status();
 
     assert_eq!(status_code, StatusCode::OK);
+    assert_eq!(replay_once(&testservice).await.expect("replay wal once"), 1);
 
     let kafka_string = read_message_payload(&error_consumer).await;
     let mut emitted = serde_json::from_str::<Value>(kafka_string.as_str()).unwrap();
@@ -104,7 +106,7 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
 }
 
 #[actix_rt::test]
-async fn post_ingest_runs_rhai_processor_before_kafka_sink() {
+async fn post_ingest_replays_wal_through_rhai_processor_before_kafka_sink() {
     let script = r#"
 fn process(event, ctx) {
     let validation = validate(event);
@@ -139,6 +141,7 @@ fn process(event, ctx) {
     let resp = test::call_service(&app, req).await;
 
     assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(replay_once(&testservice).await.expect("replay wal once"), 1);
 
     let kafka_string = read_message_payload(&consumer).await;
     let emitted: Value = serde_json::from_str(kafka_string.as_str()).expect("event json");

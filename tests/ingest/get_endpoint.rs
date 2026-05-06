@@ -16,6 +16,7 @@ use tempfile::tempdir;
 #[actix_rt::test]
 async fn get_ingest_decodes_base64_json_and_sends_it_to_kafka_sink() {
     let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("mock-config.toml");
     let kafka = create_kafka_config("get-ingest-valid");
     let consumer = create_consumer(&kafka, "get-ingest-main-topic", &kafka.topic);
@@ -29,6 +30,10 @@ bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+flush_max_records = 1
 
 [events.sink.events]
 type = "kafka"
@@ -50,7 +55,11 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 "#,
-            kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
+            wal_dir.display(),
+            kafka.bootstrap_servers,
+            kafka.topic,
+            kafka.bootstrap_servers,
+            kafka.error_topic
         ),
     )
     .expect("write config");
@@ -90,6 +99,12 @@ linger_ms = "0"
 
     assert_eq!(status_code, StatusCode::OK);
     assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
+    assert_eq!(
+        server::replay_wal_once(&app_state)
+            .await
+            .expect("replay wal"),
+        1
+    );
 
     let kafka_string = read_message_payload(&consumer).await;
     let emitted = parse_event_sink_line(kafka_string.as_str());
@@ -117,6 +132,7 @@ fn parse_event_sink_line(line: &str) -> Value {
 #[actix_rt::test]
 async fn get_ingest_default_rhai_processor_uses_existing_validator() {
     let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("mock-config.toml");
     let kafka = create_kafka_config("get-ingest-invalid");
     let error_consumer = create_consumer(&kafka, "get-ingest-error-topic", &kafka.error_topic);
@@ -130,6 +146,10 @@ bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+flush_max_records = 1
 
 [events.sink.events]
 type = "kafka"
@@ -151,7 +171,11 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 "#,
-            kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
+            wal_dir.display(),
+            kafka.bootstrap_servers,
+            kafka.topic,
+            kafka.bootstrap_servers,
+            kafka.error_topic
         ),
     )
     .expect("write config");
@@ -186,6 +210,12 @@ linger_ms = "0"
     let status_code = resp.status();
 
     assert_eq!(status_code, StatusCode::OK);
+    assert_eq!(
+        server::replay_wal_once(&app_state)
+            .await
+            .expect("replay wal"),
+        1
+    );
 
     let kafka_string = read_message_payload(&error_consumer).await;
     let mut emitted = parse_event_sink_line(kafka_string.as_str());
@@ -203,6 +233,7 @@ linger_ms = "0"
 #[actix_rt::test]
 async fn get_ingest_returns_not_found_for_unknown_project_via_real_server_wiring() {
     let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("mock-config.toml");
     let kafka = create_kafka_config("get-ingest-unknown-project");
 
@@ -215,6 +246,9 @@ bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
 
 [events.sink.events]
 type = "kafka"
@@ -236,7 +270,11 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 "#,
-            kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
+            wal_dir.display(),
+            kafka.bootstrap_servers,
+            kafka.topic,
+            kafka.bootstrap_servers,
+            kafka.error_topic
         ),
     )
     .expect("write config");

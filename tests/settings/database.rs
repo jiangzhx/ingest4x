@@ -64,7 +64,7 @@ flush_max_records = 1000
 "#,
     );
 
-    let wal = settings.wal.expect("wal config");
+    let wal = settings.wal;
     assert_eq!(wal.flush_max_interval, "10ms");
     assert_eq!(wal.flush_max_records, 1000);
 }
@@ -83,7 +83,7 @@ flush_bytes = 67108864
 "#,
     );
 
-    let checkpoint = &settings.wal.expect("wal settings").checkpoint;
+    let checkpoint = &settings.wal.checkpoint;
     assert_eq!(checkpoint.flush_interval, "1s");
     assert_eq!(checkpoint.flush_records, 1000);
     assert_eq!(checkpoint.flush_bytes, 64 * 1024 * 1024);
@@ -103,6 +103,17 @@ bind_address = "127.0.0.1:18090"
 fn load_settings_with_management_section(extra_sections: &str) -> Settings {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("database-only.toml");
+    let default_wal = if extra_sections.contains("[wal]") {
+        String::new()
+    } else {
+        format!(
+            r#"
+[wal]
+dir = "{}"
+"#,
+            temp.path().join("wal").display()
+        )
+    };
 
     fs::write(
         &config_path,
@@ -110,6 +121,8 @@ fn load_settings_with_management_section(extra_sections: &str) -> Settings {
             r#"
 [ingest]
 bind_address = "127.0.0.1:8090"
+
+{default_wal}
 
 {extra_sections}
 "#,

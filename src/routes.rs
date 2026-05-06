@@ -17,11 +17,8 @@ pub fn configure_management_surface(cfg: &mut ServiceConfig, state: AppState) {
 
 fn register_public_app_data(cfg: &mut ServiceConfig, state: &AppState) {
     cfg.app_data(Data::new(state.settings.clone()))
-        .app_data(state.project_registry.clone());
-
-    if let Some(wal) = state.wal.clone() {
-        cfg.app_data(wal);
-    }
+        .app_data(state.project_registry.clone())
+        .app_data(state.wal.clone());
     if let Some(wal_metrics) = state.wal_metrics.clone() {
         cfg.app_data(wal_metrics);
     }
@@ -47,11 +44,8 @@ fn register_management_app_data(cfg: &mut ServiceConfig, state: &AppState) {
     cfg.app_data(Data::new(state.settings.clone()))
         .app_data(state.project_repository.clone())
         .app_data(state.rule_repository.clone())
-        .app_data(state.project_registry.clone());
-
-    if let Some(wal) = state.wal.clone() {
-        cfg.app_data(wal);
-    }
+        .app_data(state.project_registry.clone())
+        .app_data(state.wal.clone());
     if let Some(wal_metrics) = state.wal_metrics.clone() {
         cfg.app_data(wal_metrics);
     }

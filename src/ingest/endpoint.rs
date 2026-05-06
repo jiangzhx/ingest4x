@@ -1,8 +1,5 @@
-use crate::ingest::processor::{ProcessorRequestContext, ProcessorState};
-use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
 use crate::settings::{default_max_event_bytes, Settings};
-use crate::utils::events::EventSinkState;
 use crate::utils::get_ip;
 use crate::utils::prometheus::{IngestPrometheusMetrics, WalPrometheusMetrics};
 use crate::wal::{new_record, WalWriter};
@@ -22,10 +19,7 @@ pub async fn ingest(
     body: web::Bytes,
     query_params: Query<HashMap<String, String>>,
     project_registry: Data<ProjectRegistryState>,
-    event_sinks: Data<EventSinkState>,
-    rule_repository: Data<RuleRepository>,
-    processor: Data<ProcessorState>,
-    wal: Option<Data<WalWriter>>,
+    wal: Data<WalWriter>,
     wal_metrics: Option<Data<WalPrometheusMetrics>>,
     ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
     settings: Option<Data<Arc<Settings>>>,
@@ -50,29 +44,14 @@ pub async fn ingest(
         Err(response) => return response,
     };
 
-    if let Some(wal) = wal {
-        let appid = payload.appid.clone();
-        let event_name = payload.event_name.clone();
-        return append_wal_record(
-            &req,
-            body,
-            appid.as_str(),
-            event_name.as_str(),
-            &wal,
-            settings.as_ref().map(Data::get_ref).map(Arc::as_ref),
-            wal_metrics.as_ref().map(Data::get_ref),
-            ingest_metrics.as_ref().map(Data::get_ref),
-            started,
-        )
-        .await;
-    }
-
-    process_ingest_payload(
-        payload,
-        event_sinks,
-        rule_repository,
-        processor,
-        processor_request_context(&req),
+    append_wal_record(
+        &req,
+        body,
+        payload.appid.as_str(),
+        payload.event_name.as_str(),
+        &wal,
+        settings.as_ref().map(Data::get_ref).map(Arc::as_ref),
+        wal_metrics.as_ref().map(Data::get_ref),
         ingest_metrics.as_ref().map(Data::get_ref),
         started,
     )
@@ -103,7 +82,6 @@ fn decode_query_payload(query_params: &HashMap<String, String>) -> Result<Vec<u8
 }
 
 struct ValidatedIngestPayload {
-    json: Value,
     appid: String,
     event_name: String,
 }
@@ -138,11 +116,7 @@ fn validate_ingest_payload(
         return Err(HttpResponse::NotFound().body("Project not found"));
     }
 
-    Ok(ValidatedIngestPayload {
-        json,
-        appid,
-        event_name,
-    })
+    Ok(ValidatedIngestPayload { appid, event_name })
 }
 
 fn reject_if_payload_too_large(
@@ -156,93 +130,6 @@ fn reject_if_payload_too_large(
         return Some(HttpResponse::PayloadTooLarge().body("Payload Too Large"));
     }
     None
-}
-
-async fn process_ingest_payload(
-    payload: ValidatedIngestPayload,
-    event_sinks: Data<EventSinkState>,
-    rule_repository: Data<RuleRepository>,
-    processor: Data<ProcessorState>,
-    request_context: ProcessorRequestContext,
-    ingest_metrics: Option<&IngestPrometheusMetrics>,
-    started: Instant,
-) -> HttpResponse {
-    let ValidatedIngestPayload {
-        json,
-        appid,
-        event_name,
-    } = payload;
-
-    let rules = match rule_repository.compile_project_rules(&appid).await {
-        Ok(rules) => rules,
-        Err(err) => {
-            error!(
-                appid = appid.as_str(),
-                xwhat = event_name.as_str(),
-                error = %err,
-                "failed to compile project rules"
-            );
-            observe_ingest_event(ingest_metrics, &appid, &event_name, "rules_error", started);
-            return HttpResponse::InternalServerError().body(err.to_string());
-        }
-    };
-
-    let processed = match processor.process(json.clone(), rules, request_context) {
-        Ok(output) => output,
-        Err(err) => {
-            error!(
-                appid = appid.as_str(),
-                xwhat = event_name.as_str(),
-                error = %err,
-                "failed to process ingest payload"
-            );
-            observe_ingest_event(
-                ingest_metrics,
-                &appid,
-                &event_name,
-                "processor_error",
-                started,
-            );
-            return HttpResponse::InternalServerError().body("Failed to process event");
-        }
-    };
-
-    match event_sinks.send_deliveries(&processed.deliveries).await {
-        Ok(_) => {
-            observe_ingest_event(ingest_metrics, &appid, &event_name, "accepted", started);
-            HttpResponse::Ok().body("200")
-        }
-        Err(err) => {
-            error!(
-                appid = appid.as_str(),
-                xwhat = event_name.as_str(),
-                error = %err,
-                "failed to send event to sinks"
-            );
-            observe_ingest_event(ingest_metrics, &appid, &event_name, "sink_error", started);
-            HttpResponse::InternalServerError().body(err.to_string())
-        }
-    }
-}
-
-fn processor_request_context(req: &HttpRequest) -> ProcessorRequestContext {
-    let headers = req
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_string()))
-        })
-        .collect::<HashMap<_, _>>();
-
-    ProcessorRequestContext::new(
-        get_ip(req),
-        req.method().as_str().to_string(),
-        req.path().to_string(),
-        headers,
-    )
 }
 
 async fn append_wal_record(
@@ -260,7 +147,7 @@ async fn append_wal_record(
         req.method().as_str(),
         req.path(),
         req.uri().query().map(ToString::to_string),
-        req.peer_addr().map(|addr| addr.to_string()),
+        get_ip(req),
         request_headers(req),
         body,
     );
@@ -268,7 +155,7 @@ async fn append_wal_record(
     match wal.append(&record) {
         Ok(_) => {
             if let (Some(metrics), Some(settings)) = (wal_metrics, settings) {
-                metrics.observe(settings, Some(wal));
+                metrics.observe(settings, wal);
             }
             observe_ingest_event(ingest_metrics, appid, event_name, "wal_appended", started);
             HttpResponse::Ok().body("200")
@@ -277,7 +164,7 @@ async fn append_wal_record(
             if let Some(metrics) = wal_metrics {
                 metrics.inc_append_errors();
                 if let Some(settings) = settings {
-                    metrics.observe(settings, Some(wal));
+                    metrics.observe(settings, wal);
                 }
             }
             observe_ingest_event(

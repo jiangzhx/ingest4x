@@ -123,7 +123,16 @@ mod tests {
                 admin_password: admin_password.map(str::to_string),
             },
             database: None,
-            wal: None,
+            wal: crate::settings::WalSettings {
+                dir: "./wal".to_string(),
+                node_id: None,
+                flush_max_interval: crate::settings::default_wal_flush_max_interval(),
+                flush_max_records: crate::settings::default_wal_flush_max_records(),
+                no_sync: false,
+                wal_segment_max_bytes: crate::settings::default_wal_segment_max_bytes(),
+                min_free_bytes: 0,
+                checkpoint: Default::default(),
+            },
             events: crate::settings::EventsSettings::default(),
         }
     }

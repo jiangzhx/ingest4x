@@ -149,33 +149,10 @@ impl WalPrometheusMetrics {
         Ok(metrics)
     }
 
-    pub fn observe(&self, settings: &Settings, wal: Option<&WalWriter>) {
-        let Some(wal_settings) = settings.wal.as_ref() else {
-            self.node_info.reset();
-            self.enabled.set(0.0);
-            self.ready.set(1.0);
-            self.reliable_ack.set(0.0);
-            self.no_sync.set(0.0);
-            self.available_bytes.set(0.0);
-            self.min_free_bytes.set(0.0);
-            self.active_segment_id.set(0.0);
-            self.active_segment_bytes.set(0.0);
-            self.max_lsn.set(0.0);
-            self.checkpoint_lsn.set(0.0);
-            self.replay_lag_lsn.set(0.0);
-            return;
-        };
-
+    pub fn observe(&self, settings: &Settings, wal: &WalWriter) {
         self.enabled.set(1.0);
-        self.no_sync.set(bool_value(wal_settings.no_sync));
-        self.min_free_bytes.set(wal_settings.min_free_bytes as f64);
-
-        let Some(wal) = wal else {
-            self.node_info.reset();
-            self.ready.set(0.0);
-            self.reliable_ack.set(0.0);
-            return;
-        };
+        self.no_sync.set(bool_value(settings.wal.no_sync));
+        self.min_free_bytes.set(settings.wal.min_free_bytes as f64);
 
         match wal.snapshot() {
             Ok(snapshot) => {

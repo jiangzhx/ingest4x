@@ -310,7 +310,7 @@ linger_ms = "0"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let writer = WalWriter::new(settings.wal.as_ref().expect("wal settings")).expect("wal writer");
+    let writer = WalWriter::new(&settings.wal).expect("wal writer");
     writer
         .append(&new_record(
             "POST",

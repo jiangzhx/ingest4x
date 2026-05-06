@@ -12,8 +12,7 @@ pub struct Settings {
     pub management: ManagementSettings,
     #[serde(default)]
     pub database: Option<DatabaseSettings>,
-    #[serde(default)]
-    pub wal: Option<WalSettings>,
+    pub wal: WalSettings,
     #[serde(default)]
     pub events: EventsSettings,
 }

@@ -489,12 +489,16 @@ async fn create_app() -> impl actix_web::dev::Service<
 
     fs::write(
         &config_path,
-        r#"
+        format!(
+            r#"
 [ingest]
 bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
 
 [events.sink.events]
 type = "stdout"
@@ -502,6 +506,8 @@ type = "stdout"
 [events.sink.events_error]
 type = "stdout"
 "#,
+            temp.path().join("wal").display()
+        ),
     )
     .expect("write config");
 
@@ -512,6 +518,7 @@ type = "stdout"
     let app_state = server::build_app_state(settings)
         .await
         .expect("build app state");
+    let _kept_temp = temp.keep();
 
     test::init_service(App::new().configure(|cfg| {
         server::configure_private_app(cfg, app_state.clone());

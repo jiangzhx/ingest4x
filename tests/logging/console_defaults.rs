@@ -52,7 +52,8 @@ fn logging_writes_info_logs_to_console_by_default() {
 
     fs::write(
         &config_path,
-        r#"
+        format!(
+            r#"
 [ingest]
 bind_address = "127.0.0.1:8090"
 
@@ -61,7 +62,12 @@ bind_address = "127.0.0.1:18090"
 
 [database]
 url = "sqlite::memory:"
+
+[wal]
+dir = "{}"
 "#,
+            temp.path().join("wal").display()
+        ),
     )
     .expect("write config");
 

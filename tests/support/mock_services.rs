@@ -14,19 +14,30 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    EventSinkConfig, EventsSettings, IngestSettings, ManagementSettings, Settings,
+    CheckpointSettings, EventSinkConfig, EventsSettings, IngestSettings, ManagementSettings,
+    Settings, WalSettings,
 };
 use ingest4x::utils::events::init_event_sinks;
+use ingest4x::wal::replay::{replay_once as replay_wal_once, WalReplayContext};
+use ingest4x::wal::WalWriter;
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
+use tempfile::{tempdir, TempDir};
 
 pub struct TestService {
     pub bootstrap_servers: String,
     pub topic: String,
     pub error_topic: String,
     pub kafka_cluster: MockCluster<'static, DefaultProducerContext>,
+    wal_dir: TempDir,
+    event_sinks: Data<ingest4x::utils::events::EventSinkState>,
+    project_registry: Data<ProjectRegistryState>,
+    rule_repository: Data<RuleRepository>,
+    processor: Data<ProcessorState>,
+    checkpoint: CheckpointSettings,
 }
 
 fn create_kafka_cluster(topic: &str) -> (MockCluster<'static, DefaultProducerContext>, String) {
@@ -40,6 +51,7 @@ fn create_kafka_cluster(topic: &str) -> (MockCluster<'static, DefaultProducerCon
 
 pub async fn create_configured_app(
 ) -> impl Service<Request, Response = ServiceResponse, Error = actix_web::Error> {
+    let wal_dir = tempdir().expect("temp wal dir");
     let settings = Arc::new(Settings {
         ingest: IngestSettings {
             bind_address: "127.0.0.1:8090".to_string(),
@@ -51,7 +63,7 @@ pub async fn create_configured_app(
             admin_password: None,
         },
         database: None,
-        wal: None,
+        wal: test_wal_settings(wal_dir.path()),
         events: stdout_events_settings(),
     });
     let app_state = server::build_app_state(settings)
@@ -118,6 +130,7 @@ async fn create_app_with_project_event_settings_and_processor(
 ) {
     const TOPIC: &str = "fake_topic";
     const ERROR_TOPIC: &str = "fake_topic_error";
+    let wal_dir = tempdir().expect("temp wal dir");
     let (kafka_cluster, bootstrap_servers) = create_kafka_cluster(TOPIC);
     kafka_cluster
         .create_topic(ERROR_TOPIC, 1, 1)
@@ -129,17 +142,24 @@ async fn create_app_with_project_event_settings_and_processor(
     ))
     .expect("event sinks should initialize");
     let (project_registry, rule_repository) = create_project_state(project).await;
+    let project_registry = Data::new(project_registry);
+    let rule_repository = Data::new(rule_repository);
     let processor = match processor_script {
         Some(script) => ProcessorState::new(script.to_string(), 10_000)
             .expect("test processor should initialize"),
         None => ProcessorState::from_default_entry().expect("processor should initialize"),
     };
+    let processor = Data::new(processor);
+    let wal_settings = test_wal_settings(wal_dir.path());
+    let checkpoint = wal_settings.checkpoint.clone();
+    let wal = Data::new(WalWriter::new(&wal_settings).expect("test wal should initialize"));
 
-    let mut app = App::new().app_data(event_sinks);
+    let mut app = App::new().app_data(event_sinks.clone());
     app = app
-        .app_data(Data::new(project_registry))
-        .app_data(Data::new(rule_repository))
-        .app_data(Data::new(processor))
+        .app_data(project_registry.clone())
+        .app_data(rule_repository.clone())
+        .app_data(processor.clone())
+        .app_data(wal)
         .route("/ingest", web::post().to(ingest));
 
     (
@@ -149,8 +169,26 @@ async fn create_app_with_project_event_settings_and_processor(
             topic: TOPIC.to_string(),
             error_topic: ERROR_TOPIC.to_string(),
             kafka_cluster,
+            wal_dir,
+            event_sinks,
+            project_registry,
+            rule_repository,
+            processor,
+            checkpoint,
         },
     )
+}
+
+pub async fn replay_once(testservice: &TestService) -> anyhow::Result<usize> {
+    replay_wal_once(WalReplayContext {
+        dir: testservice.wal_dir.path(),
+        event_sinks: &testservice.event_sinks,
+        project_registry: &testservice.project_registry,
+        rule_repository: &testservice.rule_repository,
+        processor: &testservice.processor,
+        checkpoint: testservice.checkpoint.clone(),
+    })
+    .await
 }
 
 fn stdout_events_settings() -> EventsSettings {
@@ -195,6 +233,19 @@ fn kafka_events_settings(
     ]);
 
     EventsSettings { sink }
+}
+
+fn test_wal_settings(dir: &Path) -> WalSettings {
+    WalSettings {
+        dir: dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1ms".to_string(),
+        flush_max_records: 1,
+        no_sync: false,
+        wal_segment_max_bytes: ingest4x::settings::default_wal_segment_max_bytes(),
+        min_free_bytes: 0,
+        checkpoint: CheckpointSettings::default(),
+    }
 }
 
 async fn create_project_state(

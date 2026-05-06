@@ -10,7 +10,7 @@ fn default_settings_loads_root_ingest4x_toml() {
 }
 
 #[test]
-fn loads_config_without_rules_section() {
+fn rejects_config_without_wal_section() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("rules-config.toml");
 
@@ -32,11 +32,10 @@ type = "stdout"
     )
     .expect("write config");
 
-    let settings = Settings::init_with_file(config_path.to_str().expect("config path"))
-        .expect("settings should load");
+    let error = Settings::init_with_file(config_path.to_str().expect("config path"))
+        .expect_err("settings without wal should fail");
 
-    assert_eq!(settings.logging.level, LogLevel::Info);
-    assert_eq!(settings.logging.format, "json");
+    assert!(error.to_string().contains("wal"));
 }
 
 #[test]
@@ -52,6 +51,9 @@ bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "./wal"
 
 [events.sink.events]
 type = "stdout"
@@ -87,6 +89,9 @@ format = "json"
 bind_address = "127.0.0.1:18090"
 admin_password = "local-admin-password"
 
+[wal]
+dir = "./wal"
+
 [events.sink.events]
 type = "stdout"
 
@@ -120,6 +125,9 @@ bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "./wal"
 
 [events.sink.kafka_payment]
 type = "kafka"
