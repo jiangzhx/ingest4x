@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use ingest4x::db::{init_sqlite_database, seed};
-use ingest4x::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
+use ingest4x::ingest::processor::{ProcessorRequestContext, ProcessorState};
 use ingest4x::repositories::{ProjectRepository, RuleRepository};
 use ingest4x::rules::Rules;
 use serde_json::{json, Value};
@@ -8,18 +8,18 @@ use tokio::runtime::Runtime;
 
 const RULES_DIR: &str = "tests/fixtures/rules/ingest";
 const RHAI_VALIDATE_SCRIPT: &str = r#"
-fn main(event, request) {
+fn process(event, request) {
     let validation = validate(event);
     if !validation["ok"] {
-        return reject(event, validation["error"]);
+        emit("events_error", event);
+    } else {
+        emit("events", event);
     }
-
-    return accept(event);
 }
 "#;
 const RHAI_ACCEPT_SCRIPT: &str = r#"
-fn main(event, request) {
-    return accept(event);
+fn process(event, request) {
+    emit("events", event);
 }
 "#;
 
@@ -279,10 +279,7 @@ fn rules_benchmark(c: &mut Criterion) {
                     let output = accept_processor
                         .process(black_box(payload), black_box(rules), black_box(request))
                         .expect("rhai accept should run");
-                    match output {
-                        ProcessorOutput::Accepted(event) => black_box(event),
-                        _ => panic!("payload should be accepted"),
-                    }
+                    black_box(output.deliveries)
                 },
                 BatchSize::SmallInput,
             )
@@ -319,10 +316,7 @@ fn rules_benchmark(c: &mut Criterion) {
                         let output = processor
                             .process(black_box(payload), black_box(rules), black_box(request))
                             .expect("rhai validator should run");
-                        match output {
-                            ProcessorOutput::Accepted(event) => black_box(event),
-                            _ => panic!("valid payload should be accepted"),
-                        }
+                        black_box(output.deliveries)
                     },
                     BatchSize::SmallInput,
                 )
@@ -369,10 +363,7 @@ fn rules_benchmark(c: &mut Criterion) {
                         let output = processor
                             .process(black_box(payload), black_box(rules), black_box(request))
                             .expect("rhai validator should run");
-                        match output {
-                            ProcessorOutput::Rejected { error, .. } => black_box(error),
-                            _ => panic!("invalid payload should be rejected"),
-                        }
+                        black_box(output.deliveries)
                     },
                     BatchSize::SmallInput,
                 )

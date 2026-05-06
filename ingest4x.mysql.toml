@@ -14,11 +14,8 @@ admin_password = "ingest4x"
 url = "mysql://root:root@127.0.0.1:3306/ingest4x"
 refresh_interval_secs = 3
 
-[events.sink.stdout_all]
+[events.sink.events]
 type = "stdout"
 
-[[events.valid.routes]]
-sinks = ["stdout_all"]
-
-[[events.invalid.routes]]
-sinks = ["stdout_all"]
+[events.sink.events_error]
+type = "stdout"

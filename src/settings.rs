@@ -57,10 +57,6 @@ pub struct ManagementSettings {
 pub struct EventsSettings {
     #[serde(default)]
     pub sink: HashMap<String, EventSinkConfig>,
-    #[serde(default)]
-    pub valid: EventRouteSet,
-    #[serde(default)]
-    pub invalid: EventRouteSet,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -82,22 +78,6 @@ pub enum EventSinkConfig {
         linger_ms: String,
     },
     Stdout,
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-#[allow(unused)]
-pub struct EventRouteSet {
-    #[serde(default)]
-    pub routes: Vec<EventRouteSettings>,
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-#[allow(unused)]
-pub struct EventRouteSettings {
-    pub appid: Option<Vec<String>>,
-    pub xwhat: Option<Vec<String>>,
-    #[serde(default)]
-    pub sinks: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

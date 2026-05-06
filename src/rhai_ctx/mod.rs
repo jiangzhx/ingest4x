@@ -6,6 +6,8 @@ use rhai::{def_package, Dynamic, Engine, EvalAltResult, ImmutableString, Map};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
+use tracing::warn;
 
 // Host-side APIs exposed to Rhai processor scripts.
 def_package! {
@@ -13,9 +15,8 @@ def_package! {
         module.set_native_fn("epoch_ms", epoch_ms);
         module.set_native_fn("host_ip", host_ip);
         module.set_native_fn("ingest4x_version", ingest4x_version);
-        module.set_native_fn("accept", accept);
-        module.set_native_fn("reject", reject);
         module.set_native_fn("validate", validate);
+        module.set_native_fn("emit", emit);
     } |> |engine| {
         register_request_api(engine);
     }
@@ -31,21 +32,31 @@ pub struct ProcessorRequestContext {
 }
 
 #[derive(Clone)]
-struct ValidationContext {
+struct ProcessorContext {
     rules: Rules,
     event_name: String,
+    deliveries: Rc<RefCell<Vec<ProcessorDelivery>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProcessorDelivery {
+    pub target: String,
+    pub event: Value,
 }
 
 thread_local! {
-    static VALIDATION_CONTEXT: RefCell<Option<ValidationContext>> = const { RefCell::new(None) };
+    static PROCESSOR_CONTEXT: RefCell<Option<ProcessorContext>> = const { RefCell::new(None) };
 }
 
-pub(crate) struct ValidationContextGuard(Option<ValidationContext>);
+pub(crate) struct ProcessorContextGuard {
+    previous: Option<ProcessorContext>,
+    deliveries: Rc<RefCell<Vec<ProcessorDelivery>>>,
+}
 
-impl Drop for ValidationContextGuard {
+impl Drop for ProcessorContextGuard {
     fn drop(&mut self) {
-        VALIDATION_CONTEXT.with(|context| {
-            context.replace(self.0.take());
+        PROCESSOR_CONTEXT.with(|context| {
+            context.replace(self.previous.take());
         });
     }
 }
@@ -105,10 +116,24 @@ pub(crate) fn register_api(engine: &mut Engine) {
     ProcessorApiPackage::new().register_into_engine(engine);
 }
 
-pub(crate) fn enter_validation_context(rules: Rules, event_name: String) -> ValidationContextGuard {
-    let context = ValidationContext { rules, event_name };
-    let previous = VALIDATION_CONTEXT.with(|current| current.replace(Some(context)));
-    ValidationContextGuard(previous)
+pub(crate) fn enter_processor_context(rules: Rules, event_name: String) -> ProcessorContextGuard {
+    let deliveries = Rc::new(RefCell::new(Vec::new()));
+    let context = ProcessorContext {
+        rules,
+        event_name,
+        deliveries: Rc::clone(&deliveries),
+    };
+    let previous = PROCESSOR_CONTEXT.with(|current| current.replace(Some(context)));
+    ProcessorContextGuard {
+        previous,
+        deliveries,
+    }
+}
+
+impl ProcessorContextGuard {
+    pub(crate) fn deliveries(&self) -> Vec<ProcessorDelivery> {
+        self.deliveries.borrow().clone()
+    }
 }
 
 fn register_request_api(engine: &mut Engine) {
@@ -132,25 +157,10 @@ fn ingest4x_version() -> Result<ImmutableString, Box<EvalAltResult>> {
     Ok(env!("CARGO_PKG_VERSION").into())
 }
 
-fn accept(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
-    let mut output = Map::new();
-    output.insert("status".into(), "accepted".into());
-    output.insert("event".into(), event);
-    Ok(output)
-}
-
-fn reject(event: Dynamic, error: &str) -> Result<Map, Box<EvalAltResult>> {
-    let mut output = Map::new();
-    output.insert("status".into(), "rejected".into());
-    output.insert("event".into(), event);
-    output.insert("error".into(), error.into());
-    Ok(output)
-}
-
 fn validate(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
     let value: Value = from_dynamic(&event)
         .map_err(|err| EvalAltResult::ErrorRuntime(err.to_string().into(), rhai::Position::NONE))?;
-    let result: anyhow::Result<()> = VALIDATION_CONTEXT.with(
+    let result: anyhow::Result<()> = PROCESSOR_CONTEXT.with(
         |context| -> std::result::Result<anyhow::Result<()>, Box<EvalAltResult>> {
             let context = context.borrow();
             let context = context.as_ref().ok_or_else(|| {
@@ -173,4 +183,33 @@ fn validate(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
         }
     }
     Ok(output)
+}
+
+fn emit(target: &str, event: Dynamic) -> Result<(), Box<EvalAltResult>> {
+    if target.trim().is_empty() {
+        warn!("processor emit ignored empty sink target");
+        return Ok(());
+    }
+    let event: Value = match from_dynamic(&event) {
+        Ok(event) => event,
+        Err(error) => {
+            warn!(error = %error, "processor emit ignored non-json event");
+            return Ok(());
+        }
+    };
+
+    PROCESSOR_CONTEXT.with(|context| {
+        let context = context.borrow();
+        let context = context.as_ref().ok_or_else(|| {
+            EvalAltResult::ErrorRuntime(
+                "emit(target, event) called outside processor context".into(),
+                rhai::Position::NONE,
+            )
+        })?;
+        context.deliveries.borrow_mut().push(ProcessorDelivery {
+            target: target.to_string(),
+            event,
+        });
+        Ok(())
+    })
 }

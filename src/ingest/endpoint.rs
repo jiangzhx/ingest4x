@@ -1,8 +1,8 @@
-use crate::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
+use crate::ingest::processor::{ProcessorRequestContext, ProcessorState};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
 use crate::settings::{default_max_event_bytes, Settings};
-use crate::utils::events::{EventSinkState, EventStatus};
+use crate::utils::events::EventSinkState;
 use crate::utils::get_ip;
 use crate::utils::prometheus::{IngestPrometheusMetrics, WalPrometheusMetrics};
 use crate::wal::{new_record, WalWriter};
@@ -207,35 +207,7 @@ async fn process_ingest_payload(
         }
     };
 
-    let json = match processed {
-        ProcessorOutput::Accepted(value) => value,
-        ProcessorOutput::Rejected { event, error } => {
-            warn!(
-                appid = appid.as_str(),
-                xwhat = event_name.as_str(),
-                error = %error,
-                "ingest payload rejected by processor"
-            );
-            if let Err(sink_err) = event_sinks
-                .send_json(EventStatus::Invalid, &appid, event_name.as_str(), &event)
-                .await
-            {
-                warn!(
-                    appid = appid.as_str(),
-                    xwhat = event_name.as_str(),
-                    error = %sink_err,
-                    "failed to send rejected ingest payload to event sinks"
-                );
-            }
-            observe_ingest_event(ingest_metrics, &appid, &event_name, "rejected", started);
-            return HttpResponse::BadRequest().body(error);
-        }
-    };
-
-    match event_sinks
-        .send_json(EventStatus::Valid, &appid, event_name.as_str(), &json)
-        .await
-    {
+    match event_sinks.send_deliveries(&processed.deliveries).await {
         Ok(_) => {
             observe_ingest_event(ingest_metrics, &appid, &event_name, "accepted", started);
             HttpResponse::Ok().body("200")

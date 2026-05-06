@@ -1,9 +1,9 @@
-use crate::rhai_ctx::{enter_validation_context, register_api};
+use crate::rhai_ctx::{enter_processor_context, register_api, ProcessorDelivery};
 use crate::rules::Rules;
 use crate::settings::default_processor_max_operations;
 use anyhow::{anyhow, Result};
 use rhai::module_resolvers::StaticModuleResolver;
-use rhai::serde::{from_dynamic, to_dynamic};
+use rhai::serde::to_dynamic;
 use rhai::{Dynamic, Engine, Module, Scope, AST};
 use serde_json::Value;
 use std::fs;
@@ -25,9 +25,8 @@ struct ProcessorScript {
     modules: Vec<(String, String)>,
 }
 
-pub enum ProcessorOutput {
-    Accepted(Value),
-    Rejected { event: Value, error: String },
+pub struct ProcessorOutput {
+    pub deliveries: Vec<ProcessorDelivery>,
 }
 
 impl ProcessorState {
@@ -66,12 +65,12 @@ impl ProcessorState {
             .to_string();
         let input = to_dynamic(event).map_err(|err| anyhow!(err.to_string()))?;
         let mut scope = Scope::new();
-        let _validation_context = enter_validation_context(rules, event_name);
-        let result: Dynamic = self
+        let processor_context = enter_processor_context(rules, event_name);
+        let _: Dynamic = self
             .engine
-            .call_fn(&mut scope, &self.ast, "main", (input, request))
+            .call_fn(&mut scope, &self.ast, "process", (input, request))
             .map_err(|err| anyhow!(err.to_string()))?;
-        parse_processor_output(result)
+        parse_processor_output(processor_context.deliveries())
     }
 }
 
@@ -107,33 +106,8 @@ fn register_script_modules(engine: &mut Engine, modules: Vec<(String, String)>) 
     Ok(())
 }
 
-fn parse_processor_output(result: Dynamic) -> Result<ProcessorOutput> {
-    let value: Value = from_dynamic(&result).map_err(|err| anyhow!(err.to_string()))?;
-    let status = value
-        .get("status")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("processor result must include string status"))?;
-
-    match status {
-        "accepted" => Ok(ProcessorOutput::Accepted(
-            value
-                .get("event")
-                .cloned()
-                .ok_or_else(|| anyhow!("accepted processor result must include event"))?,
-        )),
-        "rejected" => Ok(ProcessorOutput::Rejected {
-            event: value
-                .get("event")
-                .cloned()
-                .ok_or_else(|| anyhow!("rejected processor result must include event"))?,
-            error: value
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("processor rejected event")
-                .to_string(),
-        }),
-        other => Err(anyhow!("unsupported processor status `{other}`")),
-    }
+fn parse_processor_output(deliveries: Vec<ProcessorDelivery>) -> Result<ProcessorOutput> {
+    Ok(ProcessorOutput { deliveries })
 }
 
 fn read_processor_script(path: impl AsRef<Path>) -> Result<ProcessorScript> {
@@ -240,9 +214,9 @@ mod tests {
             r#"
 import "custom" as custom;
 
-fn main(event, request) {
+fn process(event, request) {
     event = custom::custom_step(event);
-    return accept(event);
+    emit("stdout", event);
 }
 "#,
         )
@@ -261,7 +235,7 @@ fn custom_step(event) {
         let script = read_processor_script(pipeline.join("main.rhai")).expect("read pipeline");
 
         assert!(script.entry.contains("import \"custom\" as custom;"));
-        assert!(script.entry.contains("fn main"));
+        assert!(script.entry.contains("fn process"));
         assert_eq!(script.modules[0].0, "custom");
         assert!(script.modules[0].1.contains("fn custom_step"));
         compile_script(&script.entry, script.modules, 10_000).expect("compiled processor modules");
@@ -271,7 +245,7 @@ fn custom_step(event) {
     fn processor_does_not_expose_drop_decision_helper() {
         let processor = ProcessorState::new(
             r#"
-fn main(event, request) {
+fn process(event, request) {
     return drop("do not persist this event");
 }
 "#
@@ -294,5 +268,100 @@ fn main(event, request) {
         };
 
         assert!(error.to_string().contains("Function not found: drop"));
+    }
+
+    #[test]
+    fn processor_requires_process_entrypoint() {
+        let processor = ProcessorState::new(
+            r#"
+fn main(event, request) {
+    emit("stdout", event);
+}
+"#
+            .to_string(),
+            10_000,
+        )
+        .expect("processor should compile");
+
+        let error = match processor.process(
+            json!({
+                "appid": "APPID",
+                "xwhat": "custom_event",
+                "xcontext": {}
+            }),
+            Rules::default(),
+            ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+        ) {
+            Ok(_) => panic!("main entrypoint should not be called"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("Function not found: process"));
+    }
+
+    #[test]
+    fn processor_collects_emit_deliveries_per_event() {
+        let processor = ProcessorState::new(
+            r#"
+fn process(event, request) {
+    emit("kafka_raw", event);
+    event["xcontext"]["normalized"] = true;
+    emit("kafka_valid", event);
+    emit("kafka_raw", event);
+}
+"#
+            .to_string(),
+            10_000,
+        )
+        .expect("processor should compile");
+
+        let output = processor
+            .process(
+                json!({
+                    "appid": "APPID",
+                    "xwhat": "custom_event",
+                    "xcontext": {}
+                }),
+                Rules::default(),
+                ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+            )
+            .expect("processor should run");
+
+        assert_eq!(output.deliveries.len(), 3);
+        assert_eq!(output.deliveries[0].target, "kafka_raw");
+        assert_eq!(output.deliveries[0].event["xcontext"], json!({}));
+        assert_eq!(output.deliveries[1].target, "kafka_valid");
+        assert_eq!(
+            output.deliveries[1].event["xcontext"]["normalized"],
+            json!(true)
+        );
+        assert_eq!(output.deliveries[2].target, "kafka_raw");
+    }
+
+    #[test]
+    fn processor_allows_zero_emits() {
+        let processor = ProcessorState::new(
+            r#"
+fn process(event, request) {
+}
+"#
+            .to_string(),
+            10_000,
+        )
+        .expect("processor should compile");
+
+        let output = processor
+            .process(
+                json!({
+                    "appid": "APPID",
+                    "xwhat": "custom_event",
+                    "xcontext": {}
+                }),
+                Rules::default(),
+                ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+            )
+            .expect("processor without emit should be a normal drop");
+
+        assert!(output.deliveries.is_empty());
     }
 }

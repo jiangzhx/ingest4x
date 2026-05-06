@@ -1,18 +1,12 @@
-use crate::settings::{EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings};
+use crate::rhai_ctx::ProcessorDelivery;
+use crate::settings::{EventSinkConfig, EventsSettings};
 use crate::utils::kafka::KafkaProducer;
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
 use rdkafka::config::ClientConfig;
-use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-
-#[derive(Clone, Copy)]
-pub enum EventStatus {
-    Valid,
-    Invalid,
-}
 
 #[derive(Clone)]
 pub struct EventSinkState {
@@ -20,15 +14,20 @@ pub struct EventSinkState {
 }
 
 impl EventSinkState {
-    pub async fn send_json<T: Serialize>(
-        &self,
-        status: EventStatus,
-        appid: &str,
-        xwhat: &str,
-        payload: &T,
-    ) -> Result<()> {
-        let payload = serde_json::to_vec(payload)?;
-        self.router.send(status, appid, xwhat, &payload).await
+    pub async fn send_deliveries(&self, deliveries: &[ProcessorDelivery]) -> Result<()> {
+        self.router.send_deliveries(deliveries).await
+    }
+
+    pub async fn send_delivery(&self, delivery: &ProcessorDelivery) -> Result<()> {
+        self.router.send_delivery(delivery).await
+    }
+
+    pub fn sink_names(&self) -> Vec<String> {
+        self.router.sink_names()
+    }
+
+    pub fn contains_sink(&self, name: &str) -> bool {
+        self.router.contains_sink(name)
     }
 
     pub async fn check_alive(&self) -> Result<()> {
@@ -44,8 +43,6 @@ pub fn init_event_sinks(settings: &EventsSettings) -> Result<Data<EventSinkState
 
 struct EventRouter {
     sinks: HashMap<String, EventSink>,
-    valid: EventRouteSet,
-    invalid: EventRouteSet,
 }
 
 impl EventRouter {
@@ -56,41 +53,58 @@ impl EventRouter {
             sinks.insert(name.clone(), EventSink::from_config(config)?);
         }
 
-        validate_routes("events.valid", &settings.valid, &sinks)?;
-        validate_routes("events.invalid", &settings.invalid, &sinks)?;
-
-        Ok(Self {
-            sinks,
-            valid: settings.valid.clone(),
-            invalid: settings.invalid.clone(),
-        })
+        Ok(Self { sinks })
     }
 
-    async fn send(
-        &self,
-        status: EventStatus,
-        appid: &str,
-        xwhat: &str,
-        payload: &[u8],
-    ) -> Result<()> {
-        let route_set = match status {
-            EventStatus::Valid => &self.valid,
-            EventStatus::Invalid => &self.invalid,
-        };
-        let route = route_set
-            .routes
-            .iter()
-            .find(|route| route.matches(appid, xwhat))
-            .ok_or_else(|| anyhow!("no event route matched appid={appid} xwhat={xwhat}"))?;
-        let sink_name = route.sinks[0].as_str();
+    async fn send_deliveries(&self, deliveries: &[ProcessorDelivery]) -> Result<()> {
+        let mut sinks = Vec::with_capacity(deliveries.len());
+        for delivery in deliveries {
+            if delivery.target.trim().is_empty() {
+                tracing::warn!("processor delivery ignored empty sink target");
+                continue;
+            }
+            let sink = self.sinks.get(&delivery.target).or_else(|| {
+                tracing::warn!(
+                    target = delivery.target.as_str(),
+                    "processor delivery ignored unknown sink target"
+                );
+                None
+            });
+            let Some(sink) = sink else {
+                continue;
+            };
+            let payload = serde_json::to_vec(&delivery.event)?;
+            sinks.push((delivery.target.as_str(), sink, payload));
+        }
+
+        for (target, sink, payload) in sinks {
+            sink.send(&payload)
+                .await
+                .with_context(|| format!("event sink `{target}` failed"))?;
+        }
+
+        Ok(())
+    }
+
+    async fn send_delivery(&self, delivery: &ProcessorDelivery) -> Result<()> {
         let sink = self
             .sinks
-            .get(sink_name)
-            .ok_or_else(|| anyhow!("event route references unknown sink `{sink_name}`"))?;
-
-        sink.send(payload)
+            .get(&delivery.target)
+            .ok_or_else(|| anyhow!("unknown event sink target `{}`", delivery.target))?;
+        let payload = serde_json::to_vec(&delivery.event)?;
+        sink.send(&payload)
             .await
-            .with_context(|| format!("event sink `{sink_name}` failed"))
+            .with_context(|| format!("event sink `{}` failed", delivery.target))
+    }
+
+    fn sink_names(&self) -> Vec<String> {
+        let mut names = self.sinks.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    fn contains_sink(&self, name: &str) -> bool {
+        self.sinks.contains_key(name)
     }
 
     async fn check_alive(&self) -> Result<()> {
@@ -167,52 +181,11 @@ impl EventSink {
     }
 }
 
-fn validate_routes(
-    name: &str,
-    route_set: &EventRouteSet,
-    sinks: &HashMap<String, EventSink>,
-) -> Result<()> {
-    for (index, route) in route_set.routes.iter().enumerate() {
-        if route.sinks.len() != 1 {
-            return Err(anyhow!(
-                "{name}.routes[{index}] must declare exactly one sink"
-            ));
-        }
-
-        for sink_name in &route.sinks {
-            if !sinks.contains_key(sink_name) {
-                return Err(anyhow!(
-                    "{name}.routes[{index}] references unknown sink `{sink_name}`"
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-trait EventRouteMatch {
-    fn matches(&self, appid: &str, xwhat: &str) -> bool;
-}
-
-impl EventRouteMatch for EventRouteSettings {
-    fn matches(&self, appid: &str, xwhat: &str) -> bool {
-        self.appid
-            .as_ref()
-            .map(|values| values.iter().any(|value| value == appid))
-            .unwrap_or(true)
-            && self
-                .xwhat
-                .as_ref()
-                .map(|values| values.iter().any(|value| value == xwhat))
-                .unwrap_or(true)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{init_event_sinks, EventStatus};
-    use crate::settings::{EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings};
+    use super::init_event_sinks;
+    use crate::rhai_ctx::ProcessorDelivery;
+    use crate::settings::{EventSinkConfig, EventsSettings};
     use rdkafka::consumer::{Consumer, StreamConsumer};
     use rdkafka::mocking::MockCluster;
     use rdkafka::producer::DefaultProducerContext;
@@ -221,12 +194,24 @@ mod tests {
     use std::collections::HashMap;
 
     #[tokio::test]
-    async fn routes_valid_events_by_appid_and_xwhat_before_fallback() {
-        let kafka = create_kafka_cluster(&["payment-events", "default-events"]);
-        let payment_consumer = create_consumer(&kafka, "payment-route", "payment-events");
-        let default_consumer = create_consumer(&kafka, "default-route", "default-events");
+    async fn sends_processed_event_to_all_declared_targets() {
+        let kafka = create_kafka_cluster(&["raw-events", "payment-events"]);
+        let raw_consumer = create_consumer(&kafka, "raw-target", "raw-events");
+        let payment_consumer = create_consumer(&kafka, "payment-target", "payment-events");
         let settings = EventsSettings {
             sink: HashMap::from([
+                (
+                    "kafka_raw".to_string(),
+                    EventSinkConfig::Kafka {
+                        bootstrap_servers: kafka.bootstrap_servers.clone(),
+                        topic: "raw-events".to_string(),
+                        delivery_timeout_ms: "5000".to_string(),
+                        queue_buffering_max_ms: "0".to_string(),
+                        batch_num_messages: "1".to_string(),
+                        queue_buffering_max_messages: "300".to_string(),
+                        linger_ms: "0".to_string(),
+                    },
+                ),
                 (
                     "kafka_payment".to_string(),
                     EventSinkConfig::Kafka {
@@ -239,87 +224,72 @@ mod tests {
                         linger_ms: "0".to_string(),
                     },
                 ),
-                (
-                    "kafka_default".to_string(),
-                    EventSinkConfig::Kafka {
-                        bootstrap_servers: kafka.bootstrap_servers.clone(),
-                        topic: "default-events".to_string(),
-                        delivery_timeout_ms: "5000".to_string(),
-                        queue_buffering_max_ms: "0".to_string(),
-                        batch_num_messages: "1".to_string(),
-                        queue_buffering_max_messages: "300".to_string(),
-                        linger_ms: "0".to_string(),
-                    },
-                ),
             ]),
-            valid: EventRouteSet {
-                routes: vec![
-                    EventRouteSettings {
-                        appid: Some(vec!["game-a".to_string()]),
-                        xwhat: Some(vec!["payment".to_string()]),
-                        sinks: vec!["kafka_payment".to_string()],
-                    },
-                    EventRouteSettings {
-                        sinks: vec!["kafka_default".to_string()],
-                        ..Default::default()
-                    },
-                ],
-            },
-            invalid: EventRouteSet::default(),
         };
         let sinks = init_event_sinks(&settings).expect("event sinks should initialize");
 
         sinks
-            .send_json(
-                EventStatus::Valid,
-                "game-a",
-                "payment",
-                &json!({"id": "payment"}),
-            )
+            .send_deliveries(&[
+                ProcessorDelivery {
+                    target: "kafka_raw".to_string(),
+                    event: json!({"id": "raw"}),
+                },
+                ProcessorDelivery {
+                    target: "kafka_payment".to_string(),
+                    event: json!({"id": "payment"}),
+                },
+            ])
             .await
-            .expect("payment event should route");
-        sinks
-            .send_json(
-                EventStatus::Valid,
-                "game-a",
-                "startup",
-                &json!({"id": "startup"}),
-            )
-            .await
-            .expect("fallback event should route");
+            .expect("fan-out targets should send");
 
+        assert_eq!(
+            read_message_payload(&raw_consumer).await,
+            "{\"id\":\"raw\"}"
+        );
         assert_eq!(
             read_message_payload(&payment_consumer).await,
             "{\"id\":\"payment\"}"
         );
-        assert_eq!(
-            read_message_payload(&default_consumer).await,
-            "{\"id\":\"startup\"}"
-        );
     }
 
-    #[test]
-    fn route_must_declare_exactly_one_sink() {
+    #[tokio::test]
+    async fn ignores_unknown_declared_target_and_sends_known_targets() {
+        let kafka = create_kafka_cluster(&["raw-events"]);
+        let raw_consumer = create_consumer(&kafka, "unknown-target-ignored", "raw-events");
         let settings = EventsSettings {
-            sink: HashMap::from([
-                ("stdout_a".to_string(), EventSinkConfig::Stdout),
-                ("stdout_b".to_string(), EventSinkConfig::Stdout),
-            ]),
-            valid: EventRouteSet {
-                routes: vec![EventRouteSettings {
-                    sinks: vec!["stdout_a".to_string(), "stdout_b".to_string()],
-                    ..Default::default()
-                }],
-            },
-            invalid: EventRouteSet::default(),
+            sink: HashMap::from([(
+                "kafka_raw".to_string(),
+                EventSinkConfig::Kafka {
+                    bootstrap_servers: kafka.bootstrap_servers.clone(),
+                    topic: "raw-events".to_string(),
+                    delivery_timeout_ms: "5000".to_string(),
+                    queue_buffering_max_ms: "0".to_string(),
+                    batch_num_messages: "1".to_string(),
+                    queue_buffering_max_messages: "300".to_string(),
+                    linger_ms: "0".to_string(),
+                },
+            )]),
         };
+        let sinks = init_event_sinks(&settings).expect("event sinks should initialize");
 
-        let error = match init_event_sinks(&settings) {
-            Ok(_) => panic!("route with multiple sinks should fail"),
-            Err(error) => error,
-        };
+        sinks
+            .send_deliveries(&[
+                ProcessorDelivery {
+                    target: "kafka_raw".to_string(),
+                    event: json!({"id": "raw"}),
+                },
+                ProcessorDelivery {
+                    target: "missing_sink".to_string(),
+                    event: json!({"id": "payment"}),
+                },
+            ])
+            .await
+            .expect("unknown target should be ignored");
 
-        assert!(error.to_string().contains("must declare exactly one sink"));
+        assert_eq!(
+            read_message_payload(&raw_consumer).await,
+            "{\"id\":\"raw\"}"
+        );
     }
 
     struct TestKafkaCluster {

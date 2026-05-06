@@ -1,13 +1,12 @@
 import "custom" as custom;
 
-fn main(event, request) {
+fn process(event, request) {
     let validation = validate(event);
     if !validation["ok"] {
         event = custom::attach_reject_process_info(event, request, validation["error"]);
-        return reject(event, validation["error"]);
+        emit("events_error", event);
+    } else {
+        event = custom::normalize_event(event, request);
+        emit("events", event);
     }
-
-    event = custom::normalize_event(event, request);
-
-    return accept(event);
 }

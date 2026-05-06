@@ -14,7 +14,7 @@ admin_password = "ingest4x"
 url = "sqlite://db/ingest4x.db?mode=rwc"
 refresh_interval_secs = 3
 
-[events.sink.kafka_valid]
+[events.sink.events]
 type = "kafka"
 bootstrap_servers = "127.0.0.1:9092"
 topic = "ingest4x-events"
@@ -24,7 +24,7 @@ batch_num_messages = "100"
 queue_buffering_max_messages = "300"
 linger_ms = "100"
 
-[events.sink.kafka_invalid]
+[events.sink.events_error]
 type = "kafka"
 bootstrap_servers = "127.0.0.1:9092"
 topic = "ingest4x-events-error"
@@ -33,11 +33,3 @@ delivery_timeout_ms = "3000"
 batch_num_messages = "100"
 queue_buffering_max_messages = "300"
 linger_ms = "100"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
-ack = ["kafka_valid"]
-
-[[events.invalid.routes]]
-sinks = ["kafka_invalid"]
-ack = ["kafka_invalid"]

@@ -1,10 +1,11 @@
-use crate::ingest::processor::{ProcessorOutput, ProcessorRequestContext, ProcessorState};
+use crate::ingest::processor::{ProcessorRequestContext, ProcessorState};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
 use crate::settings::CheckpointSettings;
-use crate::utils::events::{EventSinkState, EventStatus};
+use crate::utils::events::EventSinkState;
 use crate::wal::{
-    read_entries_after_limit, remove_segments_covered_by_checkpoint, WalPosition, WalRecord,
+    read_entries_after_limit, remove_segments_covered_by_checkpoint, WalEntry, WalPosition,
+    WalRecord,
 };
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
+const CHECKPOINT_DIR: &str = "checkpoints";
 const CHECKPOINT_FILE: &str = "checkpoint.json";
 const NODE_ID_FILE: &str = "node_id";
 const REPLAY_BATCH_SIZE: usize = 1024;
@@ -35,12 +37,24 @@ struct CheckpointFlushPolicy {
     flush_bytes: u64,
 }
 
+struct SinkReplayState {
+    checkpoint: Option<WalPosition>,
+    blocked: bool,
+    failure: Option<String>,
+    pending_checkpoint: Option<WalPosition>,
+    pending_records: usize,
+    pending_bytes: u64,
+    last_checkpoint_flush: Instant,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct WalCheckpoint {
     #[serde(default = "checkpoint_version")]
     version: u16,
     #[serde(default)]
     node_id: String,
+    #[serde(default)]
+    sink_id: Option<String>,
     #[serde(default)]
     checkpoint_lsn: u64,
     #[serde(default, alias = "segment")]
@@ -57,6 +71,17 @@ struct WalCheckpoint {
 struct WalCheckpointChecksum<'a> {
     version: u16,
     node_id: &'a str,
+    sink_id: Option<&'a str>,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+}
+
+#[derive(Serialize)]
+struct LegacyWalCheckpointChecksum<'a> {
+    version: u16,
+    node_id: &'a str,
     checkpoint_lsn: u64,
     checkpoint_segment_id: u64,
     checkpoint_segment_offset: u64,
@@ -64,10 +89,11 @@ struct WalCheckpointChecksum<'a> {
 }
 
 impl WalCheckpoint {
-    fn new(position: WalPosition, node_id: String) -> io::Result<Self> {
+    fn new(position: WalPosition, node_id: String, sink_id: Option<&str>) -> io::Result<Self> {
         let mut checkpoint = Self {
             version: checkpoint_version(),
             node_id,
+            sink_id: sink_id.map(ToString::to_string),
             checkpoint_lsn: position.lsn,
             checkpoint_segment_id: position.segment,
             checkpoint_segment_offset: position.offset,
@@ -88,17 +114,34 @@ impl WalCheckpoint {
 
     fn validate_checksum(&self, path: &Path) -> io::Result<()> {
         let expected = self.compute_checksum()?;
-        if self.checksum != expected {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("checkpoint checksum mismatch: {}", path.display()),
-            ));
+        if self.checksum == expected {
+            return Ok(());
         }
-        Ok(())
+        if self.sink_id.is_none() && self.checksum == self.compute_legacy_checksum()? {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("checkpoint checksum mismatch: {}", path.display()),
+        ))
     }
 
     fn compute_checksum(&self) -> io::Result<u32> {
         let bytes = serde_json::to_vec(&WalCheckpointChecksum {
+            version: self.version,
+            node_id: self.node_id.as_str(),
+            sink_id: self.sink_id.as_deref(),
+            checkpoint_lsn: self.checkpoint_lsn,
+            checkpoint_segment_id: self.checkpoint_segment_id,
+            checkpoint_segment_offset: self.checkpoint_segment_offset,
+            updated_at: self.updated_at,
+        })
+        .map_err(io::Error::other)?;
+        Ok(crc32fast::hash(&bytes))
+    }
+
+    fn compute_legacy_checksum(&self) -> io::Result<u32> {
+        let bytes = serde_json::to_vec(&LegacyWalCheckpointChecksum {
             version: self.version,
             node_id: self.node_id.as_str(),
             checkpoint_lsn: self.checkpoint_lsn,
@@ -117,51 +160,83 @@ const fn checkpoint_version() -> u16 {
 
 pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     let checkpoint_policy = checkpoint_flush_policy(&context.checkpoint)?;
-    let checkpoint = read_checkpoint(context.dir)?;
-    let mut expected_lsn = checkpoint.map(|position| position.lsn + 1).unwrap_or(1);
-    let entries = read_entries_after_limit(context.dir, checkpoint, Some(REPLAY_BATCH_SIZE))?;
+    let sink_names = context.event_sinks.sink_names();
+    if sink_names.is_empty() {
+        return Ok(0);
+    }
+
+    let mut sink_states = read_sink_replay_states(context.dir, &sink_names)?;
+    let replay_start = min_checkpoint(&sink_states);
+    let entries = read_entries_after_limit(context.dir, replay_start, Some(REPLAY_BATCH_SIZE))?;
+    let mut expected_lsn = replay_start.map(|position| position.lsn + 1);
     let mut replayed = 0;
-    let mut pending_checkpoint = None;
-    let mut pending_checkpoint_records = 0_usize;
-    let mut pending_checkpoint_bytes = 0_u64;
-    let mut last_checkpoint_flush = Instant::now();
 
     for entry in entries {
-        if entry.position.lsn != expected_lsn {
+        let expected = expected_lsn.get_or_insert(entry.position.lsn);
+        if entry.position.lsn != *expected {
             return Err(anyhow!(
                 "non-contiguous wal lsn: expected {}, got {}",
-                expected_lsn,
+                *expected,
                 entry.position.lsn
             ));
         }
-        replay_record(&context, &entry.record).await?;
-        pending_checkpoint = Some(entry.next_position);
-        pending_checkpoint_records += 1;
-        pending_checkpoint_bytes += entry
-            .next_position
-            .offset
-            .saturating_sub(entry.position.offset);
-        if should_flush_checkpoint(
+        let deliveries = process_record(&context, &entry.record).await?;
+        replay_entry_to_sinks(
+            &context,
             &checkpoint_policy,
-            pending_checkpoint_records,
-            pending_checkpoint_bytes,
-            last_checkpoint_flush,
-        ) {
-            flush_checkpoint(context.dir, entry.next_position)?;
-            pending_checkpoint = None;
-            pending_checkpoint_records = 0;
-            pending_checkpoint_bytes = 0;
-            last_checkpoint_flush = Instant::now();
-        }
-        expected_lsn = entry.position.lsn + 1;
+            &mut sink_states,
+            &entry,
+            deliveries,
+        )
+        .await?;
+        expected_lsn = Some(entry.position.lsn + 1);
         replayed += 1;
     }
 
-    if let Some(position) = pending_checkpoint {
-        flush_checkpoint(context.dir, position)?;
+    flush_pending_checkpoints(context.dir, &mut sink_states)?;
+    cleanup_covered_segments(context.dir, &sink_states)?;
+
+    let failures = sink_failures(&sink_states);
+    if !failures.is_empty() {
+        return Err(anyhow!(
+            "wal replay sink delivery failed: {}",
+            failures.join("; ")
+        ));
     }
 
     Ok(replayed)
+}
+
+fn read_sink_replay_states(
+    dir: &Path,
+    sink_names: &[String],
+) -> io::Result<HashMap<String, SinkReplayState>> {
+    let mut states = HashMap::new();
+    for sink_name in sink_names {
+        states.insert(
+            sink_name.clone(),
+            SinkReplayState {
+                checkpoint: read_checkpoint(dir, sink_name)?,
+                blocked: false,
+                failure: None,
+                pending_checkpoint: None,
+                pending_records: 0,
+                pending_bytes: 0,
+                last_checkpoint_flush: Instant::now(),
+            },
+        );
+    }
+    Ok(states)
+}
+
+fn min_checkpoint(states: &HashMap<String, SinkReplayState>) -> Option<WalPosition> {
+    if states.values().any(|state| state.checkpoint.is_none()) {
+        return None;
+    }
+    states
+        .values()
+        .filter_map(|state| state.checkpoint)
+        .min_by_key(|position| (position.lsn, position.segment, position.offset))
 }
 
 fn checkpoint_flush_policy(settings: &CheckpointSettings) -> Result<CheckpointFlushPolicy> {
@@ -185,12 +260,10 @@ fn should_flush_checkpoint(
         || last_flush.elapsed() >= policy.flush_interval
 }
 
-fn flush_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
-    write_checkpoint(dir, position)?;
-    remove_segments_covered_by_checkpoint(dir, position.lsn, position.segment)
-}
-
-async fn replay_record(context: &WalReplayContext<'_>, record: &WalRecord) -> Result<()> {
+async fn process_record(
+    context: &WalReplayContext<'_>,
+    record: &WalRecord,
+) -> Result<Vec<crate::rhai_ctx::ProcessorDelivery>> {
     let json = match serde_json::from_slice::<Value>(&record.body) {
         Ok(json) => json,
         Err(error) => {
@@ -211,18 +284,11 @@ async fn replay_record(context: &WalReplayContext<'_>, record: &WalRecord) -> Re
         .and_then(Value::as_str)
         .unwrap_or("<missing>")
         .to_string();
-    let xwhat = json
-        .get("xwhat")
-        .and_then(Value::as_str)
-        .unwrap_or("default")
-        .to_string();
-
     if appid == "<missing>" || !context.project_registry.contains(&appid) {
-        context
-            .event_sinks
-            .send_json(EventStatus::Invalid, &appid, &xwhat, &json)
-            .await?;
-        return Ok(());
+        return Err(anyhow!(
+            "wal record {} references unknown appid `{appid}`",
+            record.record_id
+        ));
     }
 
     let rules = context
@@ -233,22 +299,140 @@ async fn replay_record(context: &WalReplayContext<'_>, record: &WalRecord) -> Re
         .processor
         .process(json.clone(), rules, request_context(record))?;
 
-    match output {
-        ProcessorOutput::Accepted(event) => {
-            context
-                .event_sinks
-                .send_json(EventStatus::Valid, &appid, &xwhat, &event)
-                .await?;
+    Ok(output.deliveries)
+}
+
+async fn replay_entry_to_sinks(
+    context: &WalReplayContext<'_>,
+    checkpoint_policy: &CheckpointFlushPolicy,
+    sink_states: &mut HashMap<String, SinkReplayState>,
+    entry: &WalEntry,
+    deliveries: Vec<crate::rhai_ctx::ProcessorDelivery>,
+) -> Result<()> {
+    let mut deliveries_by_sink: HashMap<String, Vec<crate::rhai_ctx::ProcessorDelivery>> =
+        HashMap::new();
+    for delivery in deliveries {
+        if context.event_sinks.contains_sink(&delivery.target) {
+            deliveries_by_sink
+                .entry(delivery.target.clone())
+                .or_default()
+                .push(delivery);
+        } else {
+            warn!(
+                target = delivery.target.as_str(),
+                record_id = entry.record.record_id.as_str(),
+                "processor delivery ignored unknown sink target"
+            );
         }
-        ProcessorOutput::Rejected { event, .. } => {
-            context
-                .event_sinks
-                .send_json(EventStatus::Invalid, &appid, &xwhat, &event)
-                .await?;
+    }
+
+    let sink_names = sink_states.keys().cloned().collect::<Vec<_>>();
+    for sink_name in sink_names {
+        let Some(state) = sink_states.get_mut(&sink_name) else {
+            continue;
+        };
+        if state.blocked || checkpoint_covers_entry(state.checkpoint, entry) {
+            continue;
+        }
+
+        if let Some(sink_deliveries) = deliveries_by_sink.get(&sink_name) {
+            for delivery in sink_deliveries {
+                if let Err(error) = context.event_sinks.send_delivery(delivery).await {
+                    state.blocked = true;
+                    state.failure = Some(format!(
+                        "sink `{sink_name}` failed at lsn {}: {error}",
+                        entry.position.lsn
+                    ));
+                    warn!(
+                        sink = sink_name.as_str(),
+                        lsn = entry.position.lsn,
+                        error = %error,
+                        "wal replay sink delivery failed; sink checkpoint will not advance"
+                    );
+                    break;
+                }
+            }
+            if state.blocked {
+                continue;
+            }
+        }
+
+        mark_sink_checkpoint_pending(state, entry);
+        if should_flush_checkpoint(
+            checkpoint_policy,
+            state.pending_records,
+            state.pending_bytes,
+            state.last_checkpoint_flush,
+        ) {
+            flush_sink_checkpoint(context.dir, sink_name.as_str(), state)?;
+            cleanup_covered_segments(context.dir, sink_states)?;
         }
     }
 
     Ok(())
+}
+
+fn checkpoint_covers_entry(checkpoint: Option<WalPosition>, entry: &WalEntry) -> bool {
+    checkpoint.is_some_and(|checkpoint| checkpoint.lsn >= entry.position.lsn)
+}
+
+fn mark_sink_checkpoint_pending(state: &mut SinkReplayState, entry: &WalEntry) {
+    state.pending_checkpoint = Some(entry.next_position);
+    state.pending_records += 1;
+    state.pending_bytes += entry
+        .next_position
+        .offset
+        .saturating_sub(entry.position.offset);
+}
+
+fn flush_sink_checkpoint(
+    dir: &Path,
+    sink_name: &str,
+    state: &mut SinkReplayState,
+) -> io::Result<()> {
+    let Some(position) = state.pending_checkpoint else {
+        return Ok(());
+    };
+    write_checkpoint(dir, sink_name, position)?;
+    state.checkpoint = Some(position);
+    state.pending_checkpoint = None;
+    state.pending_records = 0;
+    state.pending_bytes = 0;
+    state.last_checkpoint_flush = Instant::now();
+    Ok(())
+}
+
+fn flush_pending_checkpoints(
+    dir: &Path,
+    sink_states: &mut HashMap<String, SinkReplayState>,
+) -> io::Result<()> {
+    let sink_names = sink_states.keys().cloned().collect::<Vec<_>>();
+    for sink_name in sink_names {
+        if let Some(state) = sink_states.get_mut(&sink_name) {
+            flush_sink_checkpoint(dir, sink_name.as_str(), state)?;
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_covered_segments(
+    dir: &Path,
+    sink_states: &HashMap<String, SinkReplayState>,
+) -> io::Result<()> {
+    let Some(watermark) = min_checkpoint(sink_states) else {
+        return Ok(());
+    };
+    write_global_checkpoint(dir, watermark)?;
+    remove_segments_covered_by_checkpoint(dir, watermark.lsn, watermark.segment)
+}
+
+fn sink_failures(sink_states: &HashMap<String, SinkReplayState>) -> Vec<String> {
+    let mut failures = sink_states
+        .values()
+        .filter_map(|state| state.failure.clone())
+        .collect::<Vec<_>>();
+    failures.sort();
+    failures
 }
 
 fn request_context(record: &WalRecord) -> ProcessorRequestContext {
@@ -265,20 +449,63 @@ fn request_context(record: &WalRecord) -> ProcessorRequestContext {
     .with_request_id(record.record_id.clone())
 }
 
-fn checkpoint_path(dir: &Path) -> PathBuf {
+fn global_checkpoint_path(dir: &Path) -> PathBuf {
     dir.join(CHECKPOINT_FILE)
 }
 
-fn read_checkpoint(dir: &Path) -> io::Result<Option<WalPosition>> {
-    let path = checkpoint_path(dir);
+fn sink_checkpoint_path(dir: &Path, sink_name: &str) -> PathBuf {
+    dir.join(CHECKPOINT_DIR)
+        .join(format!("{}.json", checkpoint_file_stem(sink_name)))
+}
+
+fn read_checkpoint(dir: &Path, sink_name: &str) -> io::Result<Option<WalPosition>> {
+    let path = sink_checkpoint_path(dir, sink_name);
+    if !path.exists() {
+        return read_global_checkpoint(dir);
+    }
+
+    let checkpoint = read_checkpoint_file(&path)?;
+    validate_checkpoint(dir, &checkpoint, &path)?;
+    if checkpoint.sink_id.as_deref() != Some(sink_name) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "checkpoint sink_id mismatch: checkpoint={:?} current={}",
+                checkpoint.sink_id, sink_name
+            ),
+        ));
+    }
+    Ok(Some(checkpoint.position()))
+}
+
+fn read_global_checkpoint(dir: &Path) -> io::Result<Option<WalPosition>> {
+    let path = global_checkpoint_path(dir);
     if !path.exists() {
         return Ok(None);
     }
+    let checkpoint = read_checkpoint_file(&path)?;
+    validate_checkpoint(dir, &checkpoint, &path)?;
+    if checkpoint.sink_id.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "checkpoint sink_id mismatch: checkpoint={:?} current=<global>",
+                checkpoint.sink_id
+            ),
+        ));
+    }
+    Ok(Some(checkpoint.position()))
+}
 
+fn read_checkpoint_file(path: &Path) -> io::Result<WalCheckpoint> {
     let bytes = fs::read(path)?;
     let checkpoint = serde_json::from_slice::<WalCheckpoint>(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    checkpoint.validate_checksum(&checkpoint_path(dir))?;
+    Ok(checkpoint)
+}
+
+fn validate_checkpoint(dir: &Path, checkpoint: &WalCheckpoint, path: &Path) -> io::Result<()> {
+    checkpoint.validate_checksum(path)?;
     let node_id = read_node_id(dir)?;
     if checkpoint.node_id != node_id {
         return Err(io::Error::new(
@@ -289,14 +516,32 @@ fn read_checkpoint(dir: &Path) -> io::Result<Option<WalPosition>> {
             ),
         ));
     }
-    Ok(Some(checkpoint.position()))
+    Ok(())
 }
 
-fn write_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
-    fs::create_dir_all(dir)?;
-    let path = checkpoint_path(dir);
+fn write_checkpoint(dir: &Path, sink_name: &str, position: WalPosition) -> io::Result<()> {
+    let checkpoint_dir = dir.join(CHECKPOINT_DIR);
+    fs::create_dir_all(&checkpoint_dir)?;
+    let path = sink_checkpoint_path(dir, sink_name);
+    let temp_path = checkpoint_dir.join(format!("{}.json.tmp", checkpoint_file_stem(sink_name)));
+    let checkpoint = WalCheckpoint::new(position, read_node_id(dir)?, Some(sink_name))?;
+    let bytes = serde_json::to_vec(&checkpoint).map_err(io::Error::other)?;
+    let mut temp_file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temp_path)?;
+    temp_file.write_all(&bytes)?;
+    temp_file.sync_data()?;
+    drop(temp_file);
+    fs::rename(&temp_path, &path)?;
+    File::open(&checkpoint_dir)?.sync_all()
+}
+
+fn write_global_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
+    let path = global_checkpoint_path(dir);
     let temp_path = dir.join(format!("{CHECKPOINT_FILE}.tmp"));
-    let checkpoint = WalCheckpoint::new(position, read_node_id(dir)?)?;
+    let checkpoint = WalCheckpoint::new(position, read_node_id(dir)?, None)?;
     let bytes = serde_json::to_vec(&checkpoint).map_err(io::Error::other)?;
     let mut temp_file = OpenOptions::new()
         .create(true)
@@ -313,4 +558,21 @@ fn write_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
 fn read_node_id(dir: &Path) -> io::Result<String> {
     let node_id = fs::read_to_string(dir.join(NODE_ID_FILE))?;
     Ok(node_id.trim().to_string())
+}
+
+fn checkpoint_file_stem(sink_name: &str) -> String {
+    let mut stem = String::new();
+    for byte in sink_name.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+            stem.push(char::from(*byte));
+        } else {
+            stem.push('_');
+            stem.push_str(format!("{byte:02x}").as_str());
+        }
+    }
+    if stem.is_empty() {
+        "sink".to_string()
+    } else {
+        stem
+    }
 }
