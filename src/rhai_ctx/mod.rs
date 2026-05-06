@@ -29,6 +29,7 @@ pub struct ProcessorRequestContext {
     path: String,
     headers: HashMap<String, String>,
     request_id: Option<String>,
+    received_at_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -74,11 +75,17 @@ impl ProcessorRequestContext {
             path: path.into(),
             headers,
             request_id: None,
+            received_at_ms: None,
         }
     }
 
     pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
         self.request_id = Some(request_id.into());
+        self
+    }
+
+    pub fn with_received_at_ms(mut self, received_at_ms: u64) -> Self {
+        self.received_at_ms = Some(received_at_ms);
         self
     }
 
@@ -108,6 +115,12 @@ impl ProcessorRequestContext {
         self.request_id
             .as_ref()
             .map(|request_id| request_id.to_string().into())
+            .unwrap_or(Dynamic::UNIT)
+    }
+
+    fn received_at_ms(&mut self) -> Dynamic {
+        self.received_at_ms
+            .map(|received_at_ms| (received_at_ms as rhai::INT).into())
             .unwrap_or(Dynamic::UNIT)
     }
 }
@@ -143,6 +156,7 @@ fn register_request_api(engine: &mut Engine) {
     engine.register_fn("path", ProcessorRequestContext::path);
     engine.register_fn("header", ProcessorRequestContext::header);
     engine.register_fn("request_id", ProcessorRequestContext::request_id);
+    engine.register_fn("received_at_ms", ProcessorRequestContext::received_at_ms);
 }
 
 fn epoch_ms() -> Result<rhai::INT, Box<EvalAltResult>> {

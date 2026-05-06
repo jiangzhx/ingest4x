@@ -447,6 +447,7 @@ fn request_context(record: &WalRecord) -> ProcessorRequestContext {
             .collect::<HashMap<_, _>>(),
     )
     .with_request_id(record.record_id.clone())
+    .with_received_at_ms(record.received_at_ms)
 }
 
 fn global_checkpoint_path(dir: &Path) -> PathBuf {

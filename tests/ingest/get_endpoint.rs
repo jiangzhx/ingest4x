@@ -4,6 +4,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ingest4x::server;
 use ingest4x::settings::Settings;
+use ingest4x::wal::read_all_records;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
@@ -11,6 +12,7 @@ use rdkafka::{ClientConfig, Message};
 use serde_json::{json, Value};
 use std::fs;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::tempdir;
 
 #[actix_rt::test]
@@ -99,6 +101,9 @@ linger_ms = "0"
 
     assert_eq!(status_code, StatusCode::OK);
     assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
+    let records = read_all_records(&wal_dir).expect("read wal records");
+    let received_at_ms = records[0].received_at_ms;
+    tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(
         server::replay_wal_once(&app_state)
             .await
@@ -122,7 +127,11 @@ linger_ms = "0"
         emitted["xcontext"]["process_info"]["ingest4x_version"],
         json!(env!("CARGO_PKG_VERSION"))
     );
-    assert!(emitted["xwhen"].is_number());
+    assert_eq!(emitted["xwhen"], json!(received_at_ms));
+    assert_eq!(
+        emitted["xcontext"]["process_info"]["receive_time"],
+        json!(received_at_ms)
+    );
 }
 
 fn parse_event_sink_line(line: &str) -> Value {

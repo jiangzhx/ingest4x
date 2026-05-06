@@ -1,6 +1,11 @@
 fn normalize_event(event, request) {
     if !event.contains("xwhen") || event["xwhen"] == () {
-        event["xwhen"] = epoch_ms();
+        let received_at_ms = request.received_at_ms();
+        if received_at_ms != () {
+            event["xwhen"] = received_at_ms;
+        } else {
+            event["xwhen"] = epoch_ms();
+        }
     }
 
     if event.contains("xcontext") {
@@ -51,9 +56,14 @@ fn attach_reject_process_info(event, request, reason) {
 }
 
 fn process_info(request, reason) {
+    let receive_time = request.received_at_ms();
+    if receive_time == () {
+        receive_time = epoch_ms();
+    }
+
     let info = #{
         receive_host_ip: host_ip(),
-        receive_time: epoch_ms(),
+        receive_time: receive_time,
         ingest4x_version: ingest4x_version()
     };
 
