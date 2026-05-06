@@ -40,7 +40,7 @@ missing required field `xwhat`
 运行仓库内置 seed + JLT 测试：
 
 ```bash
-cargo test --test test_ingest_rules_compat
+cargo test --test ingest ingest_jlt_cases_match_rules
 ```
 
 ## 输出示例

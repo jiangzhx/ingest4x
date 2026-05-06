@@ -10,5 +10,5 @@
 
 ```bash
 # 仓库内置 JLT 与数据库 seed ruleset 一致性
-cargo test --test test_ingest_rules_compat
+cargo test --test ingest ingest_jlt_cases_match_rules
 ```

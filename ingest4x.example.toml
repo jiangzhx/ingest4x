@@ -1,0 +1,65 @@
+# ingest4x complete example configuration.
+#
+# Usage:
+# 1. Start MySQL and create the database before booting ingest4x:
+#    CREATE DATABASE ingest4x CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+# 2. Start Kafka and create the topics used below:
+#    ingest4x-events
+#    ingest4x-events-error
+# 3. Adjust database.url, Kafka bootstrap_servers, admin_password, and wal.dir for your machine.
+# 4. Run:
+#    cargo run --bin ingest4x -- server -c ingest4x.example.toml
+#
+# Runtime model:
+# - /ingest accepts GET and POST events on the ingest port.
+# - The request is validated at the access layer, then durably appended to WAL.
+# - WAL replay runs the Rhai processor and delivers output to the configured sinks.
+# - MySQL stores project/rule metadata; Kafka is the downstream event sink.
+
+[ingest]
+bind_address = "0.0.0.0:8090"
+max_event_bytes = 262144
+
+[logging]
+level = "info"
+format = "json"
+
+[management]
+bind_address = "127.0.0.1:18090"
+admin_password = "ingest4x"
+
+[database]
+url = "mysql://root:root@127.0.0.1:3306/ingest4x"
+refresh_interval_secs = 3
+
+[wal]
+dir = "./wal"
+flush_max_interval = "10ms"
+flush_max_records = 1000
+no_sync = false
+wal_segment_max_bytes = 134217728
+
+[wal.checkpoint]
+flush_interval = "1s"
+flush_records = 1000
+flush_bytes = 67108864
+
+[events.sink.events]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:9092"
+topic = "ingest4x-events"
+queue_buffering_max_ms = "0"
+delivery_timeout_ms = "3000"
+batch_num_messages = "100"
+queue_buffering_max_messages = "300"
+linger_ms = "100"
+
+[events.sink.events_error]
+type = "kafka"
+bootstrap_servers = "127.0.0.1:9092"
+topic = "ingest4x-events-error"
+queue_buffering_max_ms = "0"
+delivery_timeout_ms = "3000"
+batch_num_messages = "100"
+queue_buffering_max_messages = "300"
+linger_ms = "100"

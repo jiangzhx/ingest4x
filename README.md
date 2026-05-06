@@ -11,7 +11,7 @@
 直接运行：
 
 ```bash
-cargo test --test test_ingest_rules_compat
+cargo test --test ingest ingest_jlt_cases_match_rules
 ```
 
 这条命令会创建内存 SQLite，执行内置 seed，再用 seed 出来的 ruleset 跑 `tests/jlt/core/*.jlt`，适合先确认：
@@ -22,7 +22,7 @@ cargo test --test test_ingest_rules_compat
 
 ### 2. 启动服务
 
-如果你已经在本地准备好了 Kafka，并且 `ingest4x.toml` 中的 `[database]` 指向一个可写的 SQLite 文件，就可以直接启动：
+如果你使用仓库根目录的默认配置，并且 `ingest4x.toml` 中的 `[database]` 指向一个可写的 SQLite 文件，就可以直接启动：
 
 ```bash
 cargo build --release
@@ -37,9 +37,13 @@ cargo build --release
 - `/ingest` 的 `appid` 校验来自 SQLite-backed `ProjectRegistryState`
 - 项目数据由 `SQLite -> ProjectRepository -> ProjectRegistryState` 加载，不再依赖 Redis lookup
 
-### 3. 不依赖 Docker 跑本地 mock demo
+### 3. 使用完整示例配置启动
 
-如果你只是想在本地快速跑通 `/ingest`，现在可以直接使用不带 `[database]` 的示例配置：
+`ingest4x.example.toml` 是完整示例配置：MySQL 存储项目和规则元数据，WAL 作为 ACK 持久化边界，Kafka 作为 replay 后的事件 sink。启动前先准备：
+
+- MySQL 数据库：`CREATE DATABASE ingest4x CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
+- Kafka topics：`ingest4x-events`、`ingest4x-events-error`
+- 按本机环境修改 `database.url`、`events.sink.*.bootstrap_servers`、`management.admin_password` 和 `wal.dir`
 
 ```bash
 cargo run --bin ingest4x -- \
@@ -65,23 +69,22 @@ curl -X POST http://127.0.0.1:8090/ingest \
 
 这个模式下：
 
-- 不需要启动 Kafka
-- 不需要启动 Redis
-- `appid` 校验使用内置示例项目 `APPID`
-- mock 项目会先导入本地 registry，再复用同一条 `/ingest` 处理链路
-- 事件会直接输出到 stdout，便于本地调试
+- 需要启动 MySQL 和 Kafka
+- `appid` 校验来自 MySQL-backed `ProjectRegistryState`
+- 请求成功返回只表示事件已经写入并持久化到 WAL
+- 下游 Kafka 投递由 WAL replay 负责
 - `8090` 是接入面端口，只承载 `/` 与 `/ingest`
 
 ### 4. 理解 `/ingest` 的处理逻辑
 
 `/ingest` 的主链路是：
 
-1. 按 `xwhat` 选择 `rules.ingest` 做校验
-2. 校验失败时，把原始请求按 `events.invalid.routes` 写入事件 sink，并返回 `400`
-3. 将 JSON 解析成 `Event`
-4. 用 SQLite-backed registry 校验 `appid` 对应项目是否存在
-5. 对事件做 normalization
-6. 将结果按 `events.valid.routes` 写入事件 sink；Kafka、文件和 stdout 都是平级 sink
+1. 解析 JSON 并读取 `appid` / `xwhat`
+2. 用 registry 校验 `appid` 对应项目是否存在
+3. 检查 payload 大小
+4. 将原始请求写入 WAL，`no_sync = false` 时等待 WAL 持久化后 ACK
+5. 后台 WAL replay 读取 record，执行 Rhai processor 和业务 rules
+6. replay 按 processor emit 的目标写入 `[events.sink.*]`，例如 Kafka 或 stdout
 
 ### 5. 管理后台与 API 文档
 

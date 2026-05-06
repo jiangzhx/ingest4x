@@ -10,6 +10,29 @@ fn default_settings_loads_root_ingest4x_toml() {
 }
 
 #[test]
+fn example_settings_loads_mysql_kafka_wal_profile() {
+    let settings =
+        Settings::init_with_file("ingest4x.example.toml").expect("example settings should load");
+
+    assert_eq!(
+        settings
+            .database
+            .as_ref()
+            .map(|database| database.url.as_str()),
+        Some("mysql://root:root@127.0.0.1:3306/ingest4x")
+    );
+    assert_eq!(settings.wal.dir, "./wal");
+    assert!(matches!(
+        settings.events.sink.get("events"),
+        Some(EventSinkConfig::Kafka { topic, .. }) if topic == "ingest4x-events"
+    ));
+    assert!(matches!(
+        settings.events.sink.get("events_error"),
+        Some(EventSinkConfig::Kafka { topic, .. }) if topic == "ingest4x-events-error"
+    ));
+}
+
+#[test]
 fn rejects_config_without_wal_section() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("rules-config.toml");
