@@ -1,4 +1,4 @@
-use ingest4x::settings::{EventSinkConfig, LogLevel, Settings};
+use ingest4x::settings::{AutoOffsetReset, EventSinkConfig, LogLevel, Settings};
 use std::fs;
 use tempfile::tempdir;
 
@@ -173,6 +173,54 @@ type = "stdout"
     ));
     assert!(matches!(
         settings.events.sink.get("stdout_events_error"),
-        Some(EventSinkConfig::Stdout)
+        Some(EventSinkConfig::Stdout { .. })
     ));
+}
+
+#[test]
+fn event_sink_auto_offset_reset_defaults_to_latest_and_allows_earliest() {
+    let temp = tempdir().expect("temp dir");
+    let config_path = temp.path().join("offset-reset-config.toml");
+
+    fs::write(
+        &config_path,
+        r#"
+[ingest]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "./wal"
+
+[events.sink.events]
+type = "stdout"
+
+[events.sink.events_error]
+type = "stdout"
+auto_offset_reset = "earliest"
+"#,
+    )
+    .expect("write config");
+
+    let settings = Settings::init_with_file(config_path.to_str().expect("config path"))
+        .expect("settings should load");
+
+    assert_eq!(
+        settings
+            .events
+            .sink
+            .get("events")
+            .map(EventSinkConfig::auto_offset_reset),
+        Some(AutoOffsetReset::Latest)
+    );
+    assert_eq!(
+        settings
+            .events
+            .sink
+            .get("events_error")
+            .map(EventSinkConfig::auto_offset_reset),
+        Some(AutoOffsetReset::Earliest)
+    );
 }

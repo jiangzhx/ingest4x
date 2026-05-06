@@ -8,7 +8,7 @@ use crate::utils::events::{init_event_sinks, EventSinkState};
 use crate::utils::prometheus::{
     init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
 };
-use crate::wal::replay::{replay_once, WalReplayContext};
+use crate::wal::replay::{initialize_sink_checkpoints, replay_once, WalReplayContext};
 use crate::wal::WalWriter;
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{App, HttpResponse, HttpServer};
@@ -106,9 +106,13 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
     let processor = Data::new(ProcessorState::from_default_entry().map_err(|error| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
     })?);
+    let sink_names = event_sinks.sink_names();
     let wal = Data::new(
-        WalWriter::new(&settings.wal).map_err(|error| std::io::Error::other(error.to_string()))?,
+        WalWriter::new_for_active_sinks(&settings.wal, &sink_names)
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
     );
+    initialize_sink_checkpoints(std::path::Path::new(&settings.wal.dir), &event_sinks)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
 
     Ok(AppState {
         settings,

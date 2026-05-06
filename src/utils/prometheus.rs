@@ -154,7 +154,8 @@ impl WalPrometheusMetrics {
         self.no_sync.set(bool_value(settings.wal.no_sync));
         self.min_free_bytes.set(settings.wal.min_free_bytes as f64);
 
-        match wal.snapshot() {
+        let sink_names = settings.events.sink.keys().cloned().collect::<Vec<_>>();
+        match wal.snapshot_for_sinks(&sink_names) {
             Ok(snapshot) => {
                 self.node_info.reset();
                 self.node_info

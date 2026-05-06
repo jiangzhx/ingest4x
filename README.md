@@ -85,6 +85,7 @@ curl -X POST http://127.0.0.1:8090/ingest \
 4. 将原始请求写入 WAL，`no_sync = false` 时等待 WAL 持久化后 ACK
 5. 后台 WAL replay 读取 record，执行 Rhai processor 和业务 rules
 6. replay 按 processor emit 的目标写入 `[events.sink.*]`，例如 Kafka 或 stdout
+7. 每个 sink 使用 `wal/checkpoints/<sink>.json` 记录自己的 replay 位点；没有可用 checkpoint 时按该 sink 的 `auto_offset_reset` 决定从当前 WAL 最早还是最新位置开始
 
 ### 5. 管理后台与 API 文档
 

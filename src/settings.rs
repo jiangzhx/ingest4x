@@ -64,6 +64,8 @@ pub enum EventSinkConfig {
     Kafka {
         bootstrap_servers: String,
         topic: String,
+        #[serde(default)]
+        auto_offset_reset: AutoOffsetReset,
         #[serde(default = "default_kafka_delivery_timeout_ms")]
         delivery_timeout_ms: String,
         #[serde(default = "default_kafka_queue_buffering_max_ms")]
@@ -75,7 +77,35 @@ pub enum EventSinkConfig {
         #[serde(default = "default_kafka_linger_ms")]
         linger_ms: String,
     },
-    Stdout,
+    Stdout {
+        #[serde(default)]
+        auto_offset_reset: AutoOffsetReset,
+    },
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoOffsetReset {
+    Earliest,
+    #[default]
+    Latest,
+}
+
+impl EventSinkConfig {
+    pub const fn auto_offset_reset(&self) -> AutoOffsetReset {
+        match self {
+            Self::Kafka {
+                auto_offset_reset, ..
+            }
+            | Self::Stdout { auto_offset_reset } => *auto_offset_reset,
+        }
+    }
+
+    pub const fn stdout() -> Self {
+        Self::Stdout {
+            auto_offset_reset: AutoOffsetReset::Latest,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -7,9 +7,11 @@ use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
-use ingest4x::settings::{CheckpointSettings, EventSinkConfig, EventsSettings, Settings};
+use ingest4x::settings::{
+    AutoOffsetReset, CheckpointSettings, EventSinkConfig, EventsSettings, Settings,
+};
 use ingest4x::utils::events::init_event_sinks;
-use ingest4x::wal::replay::{replay_once, WalReplayContext};
+use ingest4x::wal::replay::{initialize_sink_checkpoints, replay_once, WalReplayContext};
 use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
@@ -50,6 +52,7 @@ dir = "{}"
 
 [events.sink.events]
 type = "kafka"
+auto_offset_reset = "earliest"
 bootstrap_servers = "{}"
 topic = "{}"
 delivery_timeout_ms = "5000"
@@ -60,6 +63,7 @@ linger_ms = "0"
 
 [events.sink.events_error]
 type = "kafka"
+auto_offset_reset = "earliest"
 bootstrap_servers = "{}"
 topic = "{}"
 delivery_timeout_ms = "5000"
@@ -125,11 +129,11 @@ linger_ms = "0"
     assert_eq!(emitted["xwhat"], input_payload["xwhat"]);
     assert_eq!(emitted["xcontext"]["installid"], json!("iid-wal-replay"));
     assert_eq!(emitted["xcontext"]["currencytype"], json!("CNY"));
-    assert!(wal_dir.join("checkpoint.json").exists());
+    assert!(!wal_dir.join("checkpoint.json").exists());
     let checkpoint: Value = serde_json::from_slice(
-        &fs::read(wal_dir.join("checkpoint.json")).expect("read checkpoint"),
+        &fs::read(wal_dir.join("checkpoints/events.json")).expect("read sink checkpoint"),
     )
-    .expect("checkpoint json");
+    .expect("sink checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
     assert_eq!(checkpoint["checkpoint_segment_id"], json!(1));
     assert!(checkpoint["checkpoint_segment_offset"].is_number());
@@ -180,6 +184,7 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
                 EventSinkConfig::Kafka {
                     bootstrap_servers: kafka.bootstrap_servers.clone(),
                     topic: kafka.topic.clone(),
+                    auto_offset_reset: AutoOffsetReset::Earliest,
                     delivery_timeout_ms: "5000".to_string(),
                     queue_buffering_max_ms: "0".to_string(),
                     batch_num_messages: "1".to_string(),
@@ -192,6 +197,7 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
                 EventSinkConfig::Kafka {
                     bootstrap_servers: kafka.bootstrap_servers.clone(),
                     topic: mutated_topic,
+                    auto_offset_reset: AutoOffsetReset::Earliest,
                     delivery_timeout_ms: "5000".to_string(),
                     queue_buffering_max_ms: "0".to_string(),
                     batch_num_messages: "1".to_string(),
@@ -284,6 +290,7 @@ dir = "{}"
 
 [events.sink.events]
 type = "kafka"
+auto_offset_reset = "earliest"
 bootstrap_servers = "{}"
 topic = "{}"
 delivery_timeout_ms = "5000"
@@ -294,6 +301,7 @@ linger_ms = "0"
 
 [events.sink.events_error]
 type = "kafka"
+auto_offset_reset = "earliest"
 bootstrap_servers = "{}"
 topic = "{}"
 delivery_timeout_ms = "5000"
@@ -364,9 +372,10 @@ linger_ms = "0"
         emitted["xcontext"]["installid"],
         json!("iid-after-invalid-json")
     );
-    let checkpoint: Value =
-        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
-            .expect("checkpoint json");
+    let checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/events.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
     let quarantine = quarantine_logs.single_record();
     assert_eq!(quarantine["code"], json!("replay_invalid_json_body"));
@@ -400,7 +409,7 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
@@ -466,9 +475,10 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         2
     );
 
-    let checkpoint: Value =
-        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
-            .expect("checkpoint json");
+    let checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
     let quarantine = quarantine_logs.single_record();
     assert_eq!(quarantine["code"], json!("replay_invalid_json_body"));
@@ -497,7 +507,7 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
@@ -546,9 +556,10 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
         1
     );
 
-    let checkpoint: Value =
-        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
-            .expect("checkpoint json");
+    let checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
     let sink_checkpoint: Value = serde_json::from_slice(
         &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
@@ -580,8 +591,8 @@ async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
         sink: HashMap::from([
-            ("sink_a".to_string(), EventSinkConfig::Stdout),
-            ("sink_b".to_string(), EventSinkConfig::Stdout),
+            ("sink_a".to_string(), stdout_sink(AutoOffsetReset::Earliest)),
+            ("sink_b".to_string(), stdout_sink(AutoOffsetReset::Earliest)),
         ]),
     })
     .expect("event sinks should initialize");
@@ -646,6 +657,164 @@ async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
 }
 
 #[actix_rt::test]
+async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Latest))]),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn process(event, request) {
+                emit("stdout", event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-latest-skip",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("latest reset should skip existing WAL"),
+        0
+    );
+    let sink_checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
+    assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(1));
+    assert!(!wal_dir.join("checkpoint.json").exists());
+}
+
+#[actix_rt::test]
+async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_wal() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Latest))]),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn process(event, request) {
+                emit("stdout", event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+
+    initialize_sink_checkpoints(&wal_dir, &event_sinks).expect("initialize sink checkpoints");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-latest-future",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("latest reset initialized before append should read future WAL"),
+        1
+    );
+    let sink_checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
+    assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(1));
+    assert!(!wal_dir.join("checkpoint.json").exists());
+}
+
+#[actix_rt::test]
 async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -666,7 +835,7 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
@@ -738,10 +907,7 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
     )
     .expect("sink checkpoint json");
     assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(1));
-    let checkpoint: Value =
-        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
-            .expect("checkpoint json");
-    assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
+    assert!(!wal_dir.join("checkpoint.json").exists());
 }
 
 #[actix_rt::test]
@@ -771,6 +937,7 @@ async fn wal_replay_rejects_tampered_sink_checkpoint() {
             EventSinkConfig::Kafka {
                 bootstrap_servers: kafka.bootstrap_servers.clone(),
                 topic: kafka.topic.clone(),
+                auto_offset_reset: AutoOffsetReset::Earliest,
                 delivery_timeout_ms: "5000".to_string(),
                 queue_buffering_max_ms: "0".to_string(),
                 batch_num_messages: "1".to_string(),
@@ -971,6 +1138,7 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
             EventSinkConfig::Kafka {
                 bootstrap_servers: kafka.bootstrap_servers.clone(),
                 topic: kafka.topic.clone(),
+                auto_offset_reset: AutoOffsetReset::Earliest,
                 delivery_timeout_ms: "5000".to_string(),
                 queue_buffering_max_ms: "0".to_string(),
                 batch_num_messages: "1".to_string(),
@@ -1059,7 +1227,7 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
@@ -1122,9 +1290,10 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
     .expect_err("LSN gap should stop WAL replay");
 
     assert!(error.to_string().contains("non-contiguous wal lsn"));
-    let checkpoint: Value =
-        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
-            .expect("checkpoint json");
+    let checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
 }
 
@@ -1272,6 +1441,10 @@ fn install_quarantine_capture() -> (CapturedQuarantineLogs, tracing::subscriber:
     let subscriber = tracing_subscriber::registry().with(logs.clone());
     let guard = tracing::subscriber::set_default(subscriber);
     (logs, guard)
+}
+
+fn stdout_sink(auto_offset_reset: AutoOffsetReset) -> EventSinkConfig {
+    EventSinkConfig::Stdout { auto_offset_reset }
 }
 
 fn rewrite_wal_entry_lsn(wal_dir: &Path, entry_index: usize, new_lsn: u64) {

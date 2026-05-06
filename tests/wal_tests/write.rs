@@ -799,6 +799,26 @@ async fn wal_writer_recovers_next_lsn_from_checkpoint_when_segments_are_deleted(
 }
 
 #[actix_rt::test]
+async fn wal_writer_ignores_retired_sink_checkpoints_when_active_sinks_are_declared() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    fs::create_dir_all(&wal_dir).expect("create wal dir");
+    fs::write(wal_dir.join("node_id"), "checkpoint-node\n").expect("write node id");
+    write_checkpoint_for_sink(&wal_dir, "checkpoint-node", "active", 3, 1, 512);
+    write_checkpoint_for_sink(&wal_dir, "checkpoint-node", "retired", 10, 4, 2048);
+
+    let writer = WalWriter::new_for_active_sinks(&wal_settings(&wal_dir), &["active".to_string()])
+        .expect("wal writer");
+    let position = writer
+        .append(&test_record("after-active-checkpoint"))
+        .expect("append record after active checkpoint");
+    drop(writer);
+
+    assert_eq!(position.lsn, 4);
+    assert_eq!(position.segment, 2);
+}
+
+#[actix_rt::test]
 async fn wal_writer_creates_segment_after_checkpoint_when_segments_are_deleted() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -1309,12 +1329,31 @@ fn write_checkpoint(
     checkpoint_segment_id: u64,
     checkpoint_segment_offset: u64,
 ) {
+    write_checkpoint_for_sink(
+        wal_dir,
+        node_id,
+        "events",
+        checkpoint_lsn,
+        checkpoint_segment_id,
+        checkpoint_segment_offset,
+    );
+}
+
+fn write_checkpoint_for_sink(
+    wal_dir: &Path,
+    node_id: &str,
+    sink_name: &str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+) {
     let updated_at = 1_777_877_000_000;
+    let sink_id = Some(sink_name);
     let checksum = crc32fast::hash(
         &serde_json::to_vec(&TestCheckpointChecksum {
             version: 1,
             node_id,
-            sink_id: None,
+            sink_id,
             checkpoint_lsn,
             checkpoint_segment_id,
             checkpoint_segment_offset,
@@ -1322,12 +1361,14 @@ fn write_checkpoint(
         })
         .expect("serialize checkpoint checksum"),
     );
+    let checkpoint_dir = wal_dir.join("checkpoints");
+    fs::create_dir_all(&checkpoint_dir).expect("create checkpoints dir");
     fs::write(
-        wal_dir.join("checkpoint.json"),
+        checkpoint_dir.join(format!("{sink_name}.json")),
         serde_json::to_vec(&TestCheckpoint {
             version: 1,
             node_id,
-            sink_id: None,
+            sink_id,
             checkpoint_lsn,
             checkpoint_segment_id,
             checkpoint_segment_offset,

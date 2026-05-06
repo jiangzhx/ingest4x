@@ -1,12 +1,12 @@
 use crate::ingest::processor::{ProcessorRequestContext, ProcessorState};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
-use crate::settings::CheckpointSettings;
+use crate::settings::{AutoOffsetReset, CheckpointSettings};
 use crate::utils::events::EventSinkState;
 use crate::wal::{
     error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
-    read_entries_after_limit, remove_segments_covered_by_checkpoint, WalEntry, WalPosition,
-    WalRecord,
+    read_entries_after_limit, read_wal_bounds, remove_segments_covered_by_checkpoint, WalBounds,
+    WalEntry, WalPosition, WalRecord,
 };
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 use tracing::warn;
 
 const CHECKPOINT_DIR: &str = "checkpoints";
-const CHECKPOINT_FILE: &str = "checkpoint.json";
 const NODE_ID_FILE: &str = "node_id";
 const QUARANTINE_SCHEMA: &str = "ingest4x.wal.quarantine.v1";
 const REPLAY_BATCH_SIZE: usize = 1024;
@@ -136,14 +135,18 @@ const fn checkpoint_version() -> u16 {
     1
 }
 
+pub fn initialize_sink_checkpoints(dir: &Path, event_sinks: &EventSinkState) -> io::Result<()> {
+    let _states = read_sink_replay_states(dir, event_sinks)?;
+    Ok(())
+}
+
 pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     let checkpoint_policy = checkpoint_flush_policy(&context.checkpoint)?;
-    let sink_names = context.event_sinks.sink_names();
-    if sink_names.is_empty() {
+    if context.event_sinks.sink_names().is_empty() {
         return Ok(0);
     }
 
-    let mut sink_states = read_sink_replay_states(context.dir, &sink_names)
+    let mut sink_states = read_sink_replay_states(context.dir, context.event_sinks)
         .map_err(ReplayIssue::checkpoint_corrupt)?;
     let replay_start = min_checkpoint(&sink_states);
     let entries = read_entries_after_limit(context.dir, replay_start, Some(REPLAY_BATCH_SIZE))
@@ -285,14 +288,19 @@ fn quarantine_event_fields(body: &[u8]) -> (Option<String>, Option<String>) {
 
 fn read_sink_replay_states(
     dir: &Path,
-    sink_names: &[String],
+    event_sinks: &EventSinkState,
 ) -> io::Result<HashMap<String, SinkReplayState>> {
     let mut states = HashMap::new();
+    let bounds = read_wal_bounds(dir)?;
+    let sink_names = event_sinks.sink_names();
     for sink_name in sink_names {
+        let reset = event_sinks
+            .auto_offset_reset(&sink_name)
+            .unwrap_or(AutoOffsetReset::Latest);
         states.insert(
             sink_name.clone(),
             SinkReplayState {
-                checkpoint: read_checkpoint(dir, sink_name)?,
+                checkpoint: read_checkpoint(dir, sink_name.as_str(), reset, &bounds)?,
                 blocked: false,
                 failure: None,
                 pending_checkpoint: None,
@@ -518,7 +526,6 @@ fn cleanup_covered_segments(
     let Some(watermark) = min_checkpoint(sink_states) else {
         return Ok(());
     };
-    write_global_checkpoint(dir, watermark)?;
     remove_segments_covered_by_checkpoint(dir, watermark.lsn, watermark.segment)
 }
 
@@ -546,19 +553,20 @@ fn request_context(record: &WalRecord) -> ProcessorRequestContext {
     .with_received_at_ms(record.received_at_ms)
 }
 
-fn global_checkpoint_path(dir: &Path) -> PathBuf {
-    dir.join(CHECKPOINT_FILE)
-}
-
 fn sink_checkpoint_path(dir: &Path, sink_name: &str) -> PathBuf {
     dir.join(CHECKPOINT_DIR)
         .join(format!("{}.json", checkpoint_file_stem(sink_name)))
 }
 
-fn read_checkpoint(dir: &Path, sink_name: &str) -> io::Result<Option<WalPosition>> {
+fn read_checkpoint(
+    dir: &Path,
+    sink_name: &str,
+    reset: AutoOffsetReset,
+    bounds: &WalBounds,
+) -> io::Result<Option<WalPosition>> {
     let path = sink_checkpoint_path(dir, sink_name);
     if !path.exists() {
-        return read_global_checkpoint(dir);
+        return reset_checkpoint(dir, sink_name, reset, bounds);
     }
 
     let checkpoint = read_checkpoint_file(&path)?;
@@ -572,26 +580,37 @@ fn read_checkpoint(dir: &Path, sink_name: &str) -> io::Result<Option<WalPosition
             ),
         ));
     }
-    Ok(Some(checkpoint.position()))
+    let position = checkpoint.position();
+    if checkpoint_before_wal_floor(position, bounds) {
+        return reset_checkpoint(dir, sink_name, reset, bounds);
+    }
+    Ok(Some(position))
 }
 
-fn read_global_checkpoint(dir: &Path) -> io::Result<Option<WalPosition>> {
-    let path = global_checkpoint_path(dir);
-    if !path.exists() {
-        return Ok(None);
+fn reset_checkpoint(
+    dir: &Path,
+    sink_name: &str,
+    reset: AutoOffsetReset,
+    bounds: &WalBounds,
+) -> io::Result<Option<WalPosition>> {
+    match reset {
+        AutoOffsetReset::Earliest => Ok(None),
+        AutoOffsetReset::Latest => {
+            let Some(position) = bounds.tail else {
+                return Ok(None);
+            };
+            write_checkpoint(dir, sink_name, position)?;
+            Ok(Some(position))
+        }
     }
-    let checkpoint = read_checkpoint_file(&path)?;
-    validate_checkpoint(dir, &checkpoint, &path)?;
-    if checkpoint.sink_id.is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "checkpoint sink_id mismatch: checkpoint={:?} current=<global>",
-                checkpoint.sink_id
-            ),
-        ));
-    }
-    Ok(Some(checkpoint.position()))
+}
+
+fn checkpoint_before_wal_floor(position: WalPosition, bounds: &WalBounds) -> bool {
+    let Some(floor) = bounds.floor else {
+        return false;
+    };
+    position.segment < floor.segment
+        || (position.segment == floor.segment && position.offset < floor.offset)
 }
 
 fn read_checkpoint_file(path: &Path) -> io::Result<WalCheckpoint> {
@@ -633,23 +652,6 @@ fn write_checkpoint(dir: &Path, sink_name: &str, position: WalPosition) -> io::R
     drop(temp_file);
     fs::rename(&temp_path, &path)?;
     File::open(&checkpoint_dir)?.sync_all()
-}
-
-fn write_global_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
-    let path = global_checkpoint_path(dir);
-    let temp_path = dir.join(format!("{CHECKPOINT_FILE}.tmp"));
-    let checkpoint = WalCheckpoint::new(position, read_node_id(dir)?, None)?;
-    let bytes = serde_json::to_vec(&checkpoint).map_err(io::Error::other)?;
-    let mut temp_file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temp_path)?;
-    temp_file.write_all(&bytes)?;
-    temp_file.sync_data()?;
-    drop(temp_file);
-    fs::rename(&temp_path, &path)?;
-    File::open(dir)?.sync_all()
 }
 
 fn read_node_id(dir: &Path) -> io::Result<String> {

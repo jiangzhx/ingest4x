@@ -46,6 +46,7 @@ flush_bytes = 67108864
 
 [events.sink.events]
 type = "kafka"
+auto_offset_reset = "latest"
 bootstrap_servers = "127.0.0.1:9092"
 topic = "ingest4x-events"
 queue_buffering_max_ms = "0"
@@ -56,6 +57,7 @@ linger_ms = "100"
 
 [events.sink.events_error]
 type = "kafka"
+auto_offset_reset = "latest"
 bootstrap_servers = "127.0.0.1:9092"
 topic = "ingest4x-events-error"
 queue_buffering_max_ms = "0"

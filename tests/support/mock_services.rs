@@ -14,11 +14,13 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    CheckpointSettings, EventSinkConfig, EventsSettings, IngestSettings, ManagementSettings,
-    Settings, WalSettings,
+    AutoOffsetReset, CheckpointSettings, EventSinkConfig, EventsSettings, IngestSettings,
+    ManagementSettings, Settings, WalSettings,
 };
 use ingest4x::utils::events::init_event_sinks;
-use ingest4x::wal::replay::{replay_once as replay_wal_once, WalReplayContext};
+use ingest4x::wal::replay::{
+    initialize_sink_checkpoints, replay_once as replay_wal_once, WalReplayContext,
+};
 use ingest4x::wal::WalWriter;
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
@@ -153,6 +155,8 @@ async fn create_app_with_project_event_settings_and_processor(
     let wal_settings = test_wal_settings(wal_dir.path());
     let checkpoint = wal_settings.checkpoint.clone();
     let wal = Data::new(WalWriter::new(&wal_settings).expect("test wal should initialize"));
+    initialize_sink_checkpoints(wal_dir.path(), &event_sinks)
+        .expect("test sink checkpoints should initialize");
 
     let mut app = App::new().app_data(event_sinks.clone());
     app = app
@@ -194,8 +198,8 @@ pub async fn replay_once(testservice: &TestService) -> anyhow::Result<usize> {
 fn stdout_events_settings() -> EventsSettings {
     EventsSettings {
         sink: HashMap::from([
-            ("events".to_string(), EventSinkConfig::Stdout),
-            ("events_error".to_string(), EventSinkConfig::Stdout),
+            ("events".to_string(), EventSinkConfig::stdout()),
+            ("events_error".to_string(), EventSinkConfig::stdout()),
         ]),
     }
 }
@@ -211,6 +215,7 @@ fn kafka_events_settings(
             EventSinkConfig::Kafka {
                 bootstrap_servers: bootstrap_servers.to_string(),
                 topic: topic.to_string(),
+                auto_offset_reset: AutoOffsetReset::Latest,
                 delivery_timeout_ms: "5000".to_string(),
                 queue_buffering_max_ms: "0".to_string(),
                 batch_num_messages: "1".to_string(),
@@ -223,6 +228,7 @@ fn kafka_events_settings(
             EventSinkConfig::Kafka {
                 bootstrap_servers: bootstrap_servers.to_string(),
                 topic: error_topic.to_string(),
+                auto_offset_reset: AutoOffsetReset::Latest,
                 delivery_timeout_ms: "5000".to_string(),
                 queue_buffering_max_ms: "0".to_string(),
                 batch_num_messages: "1".to_string(),

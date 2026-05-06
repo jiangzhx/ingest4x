@@ -270,7 +270,7 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
 
 fn test_events_settings() -> EventsSettings {
     EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::stdout())]),
     }
 }
 

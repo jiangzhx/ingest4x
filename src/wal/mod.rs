@@ -31,7 +31,7 @@ const SEGMENT_EXTENSION: &str = "wal";
 const FIRST_SEGMENT_ID: u64 = 1;
 const NODE_ID_FILE: &str = "node_id";
 const WAL_LOCK_FILE: &str = "wal.lock";
-const CHECKPOINT_FILE: &str = "checkpoint.json";
+const CHECKPOINT_DIR: &str = "checkpoints";
 
 static RECORD_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[cfg(debug_assertions)]
@@ -67,6 +67,12 @@ pub struct WalEntry {
     pub position: WalPosition,
     pub next_position: WalPosition,
     pub record: WalRecord,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalBounds {
+    pub floor: Option<WalPosition>,
+    pub tail: Option<WalPosition>,
 }
 
 #[derive(Clone, Debug)]
@@ -116,11 +122,25 @@ struct BufferedWalRecord {
 
 impl WalWriter {
     pub fn new(settings: &WalSettings) -> io::Result<Self> {
+        Self::new_with_active_sinks(settings, None)
+    }
+
+    pub fn new_for_active_sinks(settings: &WalSettings, sink_names: &[String]) -> io::Result<Self> {
+        Self::new_with_active_sinks(settings, Some(sink_names))
+    }
+
+    fn new_with_active_sinks(
+        settings: &WalSettings,
+        active_sink_names: Option<&[String]>,
+    ) -> io::Result<Self> {
         let dir = PathBuf::from(&settings.dir);
         fs::create_dir_all(&dir)?;
         let lock_file = acquire_wal_lock(&dir)?;
         let node_id = resolve_node_id(settings.node_id.as_deref(), &dir)?;
-        let checkpoint = read_checkpoint(&dir, &node_id)?;
+        let checkpoint = match active_sink_names {
+            Some(sink_names) => read_max_checkpoint_for_sinks(&dir, &node_id, sink_names)?,
+            None => read_max_sink_checkpoint(&dir, &node_id)?,
+        };
         let segment_id = recover_active_segment_id(&dir, checkpoint.as_ref())?;
         let next_lsn = recover_next_lsn(&dir, checkpoint.as_ref())?;
         ensure_segment_file(&dir, segment_id, &node_id, next_lsn)?;
@@ -183,7 +203,11 @@ impl WalWriter {
     }
 
     pub fn snapshot(&self) -> io::Result<WalSnapshot> {
-        self.inner.snapshot()
+        self.inner.snapshot(None)
+    }
+
+    pub fn snapshot_for_sinks(&self, sink_names: &[String]) -> io::Result<WalSnapshot> {
+        self.inner.snapshot(Some(sink_names))
     }
 
     #[allow(unused)]
@@ -330,14 +354,15 @@ impl WalWriterInner {
         ensure_wal_disk_space(&self.dir, self.min_free_bytes, estimated_wal_bytes)
     }
 
-    fn snapshot(&self) -> io::Result<WalSnapshot> {
+    fn snapshot(&self, sink_names: Option<&[String]>) -> io::Result<WalSnapshot> {
         let state = self
             .state
             .lock()
             .map_err(|_| io::Error::other("wal writer mutex poisoned"))?;
-        let checkpoint_lsn = read_checkpoint(&self.dir, &self.node_id)?
-            .map(|checkpoint| checkpoint.checkpoint_lsn)
-            .unwrap_or(0);
+        let checkpoint_lsn = match sink_names {
+            Some(sink_names) => read_min_sink_checkpoint_lsn(&self.dir, &self.node_id, sink_names)?,
+            None => read_min_checkpoint_lsn(&self.dir, &self.node_id)?,
+        };
         let available_bytes = fs2::available_space(&self.dir)?;
         let ready = available_bytes >= self.min_free_bytes;
 
@@ -510,6 +535,41 @@ pub fn read_entries_after_limit(
         }
     }
     Ok(entries)
+}
+
+pub fn read_wal_bounds(dir: impl AsRef<Path>) -> io::Result<WalBounds> {
+    let dir = dir.as_ref();
+    let mut segments = segment_ids(dir)?;
+    segments.sort_unstable();
+
+    let mut floor = None;
+    let mut tail = None;
+    let mut max_lsn = 0;
+    let mut last_segment = None;
+
+    for segment_id in segments {
+        let path = segment_path(dir, segment_id);
+        let segment_len = fs::metadata(&path)?.len();
+        last_segment = Some((segment_id, segment_len));
+        let entries = read_segment_entries_after(&path, SEGMENT_HEADER_LEN, None)?;
+        for entry in entries {
+            floor.get_or_insert(entry.position);
+            max_lsn = max_lsn.max(entry.position.lsn);
+            tail = Some(entry.next_position);
+        }
+    }
+
+    if let Some((segment, offset)) = last_segment {
+        if tail.is_none_or(|position| segment > position.segment || offset > position.offset) {
+            tail = Some(WalPosition {
+                lsn: max_lsn,
+                segment,
+                offset,
+            });
+        }
+    }
+
+    Ok(WalBounds { floor, tail })
 }
 
 pub fn remove_segments_before(dir: impl AsRef<Path>, segment: u64) -> io::Result<()> {
@@ -1146,10 +1206,113 @@ struct WalCheckpointChecksum<'a> {
     updated_at: u64,
 }
 
-fn read_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint>> {
-    let path = dir.join(CHECKPOINT_FILE);
+fn read_max_sink_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint>> {
+    let checkpoints = read_all_sink_checkpoints(dir, node_id)?;
+    Ok(max_checkpoint(checkpoints))
+}
+
+fn read_max_checkpoint_for_sinks(
+    dir: &Path,
+    node_id: &str,
+    sink_names: &[String],
+) -> io::Result<Option<WalCheckpoint>> {
+    let mut checkpoints = Vec::new();
+    for sink_name in sink_names {
+        let path = sink_checkpoint_path(dir, sink_name);
+        if path.exists() {
+            checkpoints.push(read_checkpoint_file(&path, node_id, Some(sink_name))?);
+        }
+    }
+    Ok(max_checkpoint(checkpoints))
+}
+
+fn max_checkpoint(checkpoints: Vec<WalCheckpoint>) -> Option<WalCheckpoint> {
+    checkpoints.into_iter().max_by_key(|checkpoint| {
+        (
+            checkpoint.checkpoint_lsn,
+            checkpoint.checkpoint_segment_id,
+            checkpoint.checkpoint_segment_offset,
+        )
+    })
+}
+
+fn read_min_checkpoint_lsn(dir: &Path, node_id: &str) -> io::Result<u64> {
+    Ok(read_all_sink_checkpoints(dir, node_id)?
+        .into_iter()
+        .map(|checkpoint| checkpoint.checkpoint_lsn)
+        .min()
+        .unwrap_or(0))
+}
+
+fn read_min_sink_checkpoint_lsn(
+    dir: &Path,
+    node_id: &str,
+    sink_names: &[String],
+) -> io::Result<u64> {
+    if sink_names.is_empty() {
+        return Ok(0);
+    }
+
+    let mut min_lsn = None;
+    for sink_name in sink_names {
+        let path = sink_checkpoint_path(dir, sink_name);
+        if !path.exists() {
+            return Ok(0);
+        }
+        let checkpoint = read_checkpoint_file(&path, node_id, Some(sink_name))?;
+        min_lsn = Some(min_lsn.map_or(checkpoint.checkpoint_lsn, |current: u64| {
+            current.min(checkpoint.checkpoint_lsn)
+        }));
+    }
+    Ok(min_lsn.unwrap_or(0))
+}
+
+fn read_all_sink_checkpoints(dir: &Path, node_id: &str) -> io::Result<Vec<WalCheckpoint>> {
+    let checkpoint_dir = dir.join(CHECKPOINT_DIR);
+    if !checkpoint_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut checkpoints = Vec::new();
+    for entry in fs::read_dir(checkpoint_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
+            continue;
+        }
+        checkpoints.push(read_checkpoint_file(&path, node_id, None)?);
+    }
+    Ok(checkpoints)
+}
+
+fn sink_checkpoint_path(dir: &Path, sink_name: &str) -> PathBuf {
+    dir.join(CHECKPOINT_DIR)
+        .join(format!("{}.json", checkpoint_file_stem(sink_name)))
+}
+
+fn checkpoint_file_stem(sink_name: &str) -> String {
+    sink_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn read_checkpoint_file(
+    path: &Path,
+    node_id: &str,
+    expected_sink_id: Option<&str>,
+) -> io::Result<WalCheckpoint> {
     if !path.exists() {
-        return Ok(None);
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("checkpoint missing: {}", path.display()),
+        ));
     }
 
     let checkpoint = serde_json::from_slice::<WalCheckpoint>(&fs::read(&path)?)
@@ -1163,14 +1326,25 @@ fn read_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint
             ),
         ));
     }
-    if checkpoint.sink_id.is_some() {
+    if checkpoint.sink_id.is_none() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "checkpoint sink_id mismatch: checkpoint={:?} current=<global>",
+                "checkpoint sink_id mismatch: checkpoint={:?} current=<sink>",
                 checkpoint.sink_id
             ),
         ));
+    }
+    if let Some(expected_sink_id) = expected_sink_id {
+        if checkpoint.sink_id.as_deref() != Some(expected_sink_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "checkpoint sink_id mismatch: checkpoint={:?} current={}",
+                    checkpoint.sink_id, expected_sink_id
+                ),
+            ));
+        }
     }
     let bytes = serde_json::to_vec(&WalCheckpointChecksum {
         version: checkpoint.version,
@@ -1190,7 +1364,7 @@ fn read_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint
         ));
     }
 
-    Ok(Some(checkpoint))
+    Ok(checkpoint)
 }
 
 fn sync_directory(dir: &Path) -> io::Result<()> {

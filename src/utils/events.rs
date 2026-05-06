@@ -1,5 +1,5 @@
 use crate::rhai_ctx::ProcessorDelivery;
-use crate::settings::{EventSinkConfig, EventsSettings};
+use crate::settings::{AutoOffsetReset, EventSinkConfig, EventsSettings};
 use crate::utils::kafka::KafkaProducer;
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
@@ -30,6 +30,10 @@ impl EventSinkState {
         self.router.contains_sink(name)
     }
 
+    pub fn auto_offset_reset(&self, name: &str) -> Option<AutoOffsetReset> {
+        self.router.auto_offset_reset(name)
+    }
+
     pub async fn check_alive(&self) -> Result<()> {
         self.router.check_alive().await
     }
@@ -42,7 +46,12 @@ pub fn init_event_sinks(settings: &EventsSettings) -> Result<Data<EventSinkState
 }
 
 struct EventRouter {
-    sinks: HashMap<String, EventSink>,
+    sinks: HashMap<String, EventSinkEntry>,
+}
+
+struct EventSinkEntry {
+    sink: EventSink,
+    auto_offset_reset: AutoOffsetReset,
 }
 
 impl EventRouter {
@@ -50,7 +59,13 @@ impl EventRouter {
         let mut sinks = HashMap::new();
 
         for (name, config) in &settings.sink {
-            sinks.insert(name.clone(), EventSink::from_config(config)?);
+            sinks.insert(
+                name.clone(),
+                EventSinkEntry {
+                    sink: EventSink::from_config(config)?,
+                    auto_offset_reset: config.auto_offset_reset(),
+                },
+            );
         }
 
         Ok(Self { sinks })
@@ -74,7 +89,7 @@ impl EventRouter {
                 continue;
             };
             let payload = serde_json::to_vec(&delivery.event)?;
-            sinks.push((delivery.target.as_str(), sink, payload));
+            sinks.push((delivery.target.as_str(), &sink.sink, payload));
         }
 
         for (target, sink, payload) in sinks {
@@ -92,7 +107,8 @@ impl EventRouter {
             .get(&delivery.target)
             .ok_or_else(|| anyhow!("unknown event sink target `{}`", delivery.target))?;
         let payload = serde_json::to_vec(&delivery.event)?;
-        sink.send(&payload)
+        sink.sink
+            .send(&payload)
             .await
             .with_context(|| format!("event sink `{}` failed", delivery.target))
     }
@@ -107,9 +123,14 @@ impl EventRouter {
         self.sinks.contains_key(name)
     }
 
+    fn auto_offset_reset(&self, name: &str) -> Option<AutoOffsetReset> {
+        self.sinks.get(name).map(|entry| entry.auto_offset_reset)
+    }
+
     async fn check_alive(&self) -> Result<()> {
         for (name, sink) in &self.sinks {
-            sink.check_alive()
+            sink.sink
+                .check_alive()
                 .await
                 .with_context(|| format!("event sink `{name}` is not alive"))?;
         }
@@ -131,6 +152,7 @@ impl EventSink {
             EventSinkConfig::Kafka {
                 bootstrap_servers,
                 topic,
+                auto_offset_reset: _,
                 delivery_timeout_ms,
                 queue_buffering_max_ms,
                 batch_num_messages,
@@ -153,7 +175,9 @@ impl EventSink {
                     topic: topic.clone(),
                 })
             }
-            EventSinkConfig::Stdout => Ok(Self::Stdout),
+            EventSinkConfig::Stdout {
+                auto_offset_reset: _,
+            } => Ok(Self::Stdout),
         }
     }
 
@@ -185,7 +209,7 @@ impl EventSink {
 mod tests {
     use super::init_event_sinks;
     use crate::rhai_ctx::ProcessorDelivery;
-    use crate::settings::{EventSinkConfig, EventsSettings};
+    use crate::settings::{AutoOffsetReset, EventSinkConfig, EventsSettings};
     use rdkafka::consumer::{Consumer, StreamConsumer};
     use rdkafka::mocking::MockCluster;
     use rdkafka::producer::DefaultProducerContext;
@@ -205,6 +229,7 @@ mod tests {
                     EventSinkConfig::Kafka {
                         bootstrap_servers: kafka.bootstrap_servers.clone(),
                         topic: "raw-events".to_string(),
+                        auto_offset_reset: AutoOffsetReset::Latest,
                         delivery_timeout_ms: "5000".to_string(),
                         queue_buffering_max_ms: "0".to_string(),
                         batch_num_messages: "1".to_string(),
@@ -217,6 +242,7 @@ mod tests {
                     EventSinkConfig::Kafka {
                         bootstrap_servers: kafka.bootstrap_servers.clone(),
                         topic: "payment-events".to_string(),
+                        auto_offset_reset: AutoOffsetReset::Latest,
                         delivery_timeout_ms: "5000".to_string(),
                         queue_buffering_max_ms: "0".to_string(),
                         batch_num_messages: "1".to_string(),
@@ -262,6 +288,7 @@ mod tests {
                 EventSinkConfig::Kafka {
                     bootstrap_servers: kafka.bootstrap_servers.clone(),
                     topic: "raw-events".to_string(),
+                    auto_offset_reset: AutoOffsetReset::Latest,
                     delivery_timeout_ms: "5000".to_string(),
                     queue_buffering_max_ms: "0".to_string(),
                     batch_num_messages: "1".to_string(),
