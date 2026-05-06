@@ -1250,6 +1250,7 @@ fn rewrite_segment_start_lsn(path: &Path, start_lsn: u64) {
 struct TestCheckpoint<'a> {
     version: u16,
     node_id: &'a str,
+    sink_id: Option<&'a str>,
     checkpoint_lsn: u64,
     checkpoint_segment_id: u64,
     checkpoint_segment_offset: u64,
@@ -1261,6 +1262,7 @@ struct TestCheckpoint<'a> {
 struct TestCheckpointChecksum<'a> {
     version: u16,
     node_id: &'a str,
+    sink_id: Option<&'a str>,
     checkpoint_lsn: u64,
     checkpoint_segment_id: u64,
     checkpoint_segment_offset: u64,
@@ -1279,6 +1281,7 @@ fn write_checkpoint(
         &serde_json::to_vec(&TestCheckpointChecksum {
             version: 1,
             node_id,
+            sink_id: None,
             checkpoint_lsn,
             checkpoint_segment_id,
             checkpoint_segment_offset,
@@ -1291,6 +1294,7 @@ fn write_checkpoint(
         serde_json::to_vec(&TestCheckpoint {
             version: 1,
             node_id,
+            sink_id: None,
             checkpoint_lsn,
             checkpoint_segment_id,
             checkpoint_segment_offset,

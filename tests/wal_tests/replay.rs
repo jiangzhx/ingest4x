@@ -8,12 +8,11 @@ use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{CheckpointSettings, EventSinkConfig, EventsSettings, Settings};
 use ingest4x::utils::events::init_event_sinks;
 use ingest4x::wal::replay::{replay_once, WalReplayContext};
-use ingest4x::wal::{new_record, read_entries_after_limit, WalPosition, WalRecord, WalWriter};
+use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
 use rdkafka::{ClientConfig, Message};
-use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
@@ -257,7 +256,7 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
 }
 
 #[actix_rt::test]
-async fn wal_replay_stops_on_invalid_json_record_without_checkpoint() {
+async fn wal_replay_quarantines_invalid_json_record_and_continues() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-replay-invalid-json.toml");
@@ -346,19 +345,28 @@ linger_ms = "0"
         .await
         .expect("build app state");
 
-    let error = server::replay_wal_once(&app_state)
-        .await
-        .expect_err("invalid WAL json should stop replay");
+    assert_eq!(
+        server::replay_wal_once(&app_state)
+            .await
+            .expect("replay wal"),
+        2
+    );
 
-    assert!(error.to_string().contains("invalid wal record json body"));
-    assert!(!wal_dir.join("checkpoint.json").exists());
-    assert!(read_message_payload_with_short_timeout(&consumer)
-        .await
-        .is_none());
+    let emitted = parse_json_message(read_message_payload(&consumer).await.as_str());
+    assert_eq!(
+        emitted["xcontext"]["installid"],
+        json!("iid-after-invalid-json")
+    );
+    let checkpoint: Value =
+        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
+            .expect("checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
+    let quarantine = fs::read_to_string(wal_dir.join("quarantine.jsonl")).expect("read quarantine");
+    assert!(quarantine.contains("invalid wal record json body"));
 }
 
 #[actix_rt::test]
-async fn wal_replay_does_not_checkpoint_each_successful_record_before_batch_flush() {
+async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let db = init_sqlite_database("sqlite::memory:")
@@ -425,23 +433,30 @@ async fn wal_replay_does_not_checkpoint_each_successful_record_before_batch_flus
         .expect("append invalid json record");
     drop(writer);
 
-    let error = replay_once(WalReplayContext {
-        dir: &wal_dir,
-        event_sinks: &event_sinks,
-        project_registry: &project_registry,
-        rule_repository: &rule_repository,
-        processor: &processor,
-        checkpoint: CheckpointSettings {
-            flush_interval: "1h".to_string(),
-            flush_records: 1000,
-            flush_bytes: 64 * 1024 * 1024,
-        },
-    })
-    .await
-    .expect_err("invalid WAL json should stop replay before checkpoint flush");
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings {
+                flush_interval: "1h".to_string(),
+                flush_records: 1000,
+                flush_bytes: 64 * 1024 * 1024,
+            },
+        })
+        .await
+        .expect("replay wal"),
+        2
+    );
 
-    assert!(error.to_string().contains("invalid wal record json body"));
-    assert!(!wal_dir.join("checkpoint.json").exists());
+    let checkpoint: Value =
+        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
+            .expect("checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
+    let quarantine = fs::read_to_string(wal_dir.join("quarantine.jsonl")).expect("read quarantine");
+    assert!(quarantine.contains("invalid wal record json body"));
 }
 
 #[actix_rt::test]
@@ -715,93 +730,6 @@ async fn wal_replay_rejects_tampered_sink_checkpoint() {
     .expect_err("tampered checkpoint should fail checksum validation");
 
     assert!(error.to_string().contains("checkpoint checksum mismatch"));
-}
-
-#[actix_rt::test]
-async fn wal_replay_uses_legacy_global_checkpoint_when_sink_checkpoint_is_missing() {
-    let temp = tempdir().expect("temp dir");
-    let wal_dir = temp.path().join("wal");
-    let db = init_sqlite_database("sqlite::memory:")
-        .await
-        .expect("sqlite database should initialize");
-    let project_repository = ProjectRepository::new(db.clone());
-    project_repository
-        .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
-            name: "APPID".to_string(),
-            enabled: true,
-        })
-        .await
-        .expect("project should be created");
-    let project_registry = ProjectRegistryState::load(project_repository)
-        .await
-        .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
-    })
-    .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
-        r#"
-            fn process(event, request) {
-                emit("stdout", event);
-            }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
-    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
-        dir: wal_dir.display().to_string(),
-        node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
-        checkpoint: Default::default(),
-    })
-    .expect("wal writer");
-    writer
-        .append(&test_wal_record(json!({
-            "appid": "APPID",
-            "xwhat": "custom_event",
-            "xcontext": {"installid": "iid-legacy-1", "os": "ios"}
-        })))
-        .expect("append first record");
-    writer
-        .append(&test_wal_record(json!({
-            "appid": "APPID",
-            "xwhat": "custom_event",
-            "xcontext": {"installid": "iid-legacy-2", "os": "ios"}
-        })))
-        .expect("append second record");
-    drop(writer);
-
-    let first_entry = read_entries_after_limit(&wal_dir, None, Some(1))
-        .expect("read first entry")
-        .remove(0);
-    write_legacy_global_checkpoint(&wal_dir, first_entry.next_position);
-
-    assert_eq!(
-        replay_once(WalReplayContext {
-            dir: &wal_dir,
-            event_sinks: &event_sinks,
-            project_registry: &project_registry,
-            rule_repository: &rule_repository,
-            processor: &processor,
-            checkpoint: CheckpointSettings::default(),
-        })
-        .await
-        .expect("legacy global checkpoint should be accepted"),
-        1
-    );
-
-    let sink_checkpoint: Value = serde_json::from_slice(
-        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
-    )
-    .expect("sink checkpoint json");
-    assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(2));
 }
 
 #[actix_rt::test]
@@ -1179,58 +1107,6 @@ fn rewrite_wal_entry_lsn(wal_dir: &Path, entry_index: usize, new_lsn: u64) {
         .expect("seek frame for rewrite");
     file.write_all(&frame).expect("rewrite frame");
     file.sync_data().expect("sync rewritten frame");
-}
-
-#[derive(Serialize)]
-struct LegacyTestCheckpoint<'a> {
-    version: u16,
-    node_id: &'a str,
-    checkpoint_lsn: u64,
-    checkpoint_segment_id: u64,
-    checkpoint_segment_offset: u64,
-    updated_at: u64,
-    checksum: u32,
-}
-
-#[derive(Serialize)]
-struct LegacyTestCheckpointChecksum<'a> {
-    version: u16,
-    node_id: &'a str,
-    checkpoint_lsn: u64,
-    checkpoint_segment_id: u64,
-    checkpoint_segment_offset: u64,
-    updated_at: u64,
-}
-
-fn write_legacy_global_checkpoint(wal_dir: &Path, position: WalPosition) {
-    let node_id = fs::read_to_string(wal_dir.join("node_id")).expect("read node id");
-    let node_id = node_id.trim();
-    let updated_at = 1_777_877_000_000;
-    let checksum = crc32fast::hash(
-        &serde_json::to_vec(&LegacyTestCheckpointChecksum {
-            version: 1,
-            node_id,
-            checkpoint_lsn: position.lsn,
-            checkpoint_segment_id: position.segment,
-            checkpoint_segment_offset: position.offset,
-            updated_at,
-        })
-        .expect("serialize legacy checkpoint checksum"),
-    );
-    fs::write(
-        wal_dir.join("checkpoint.json"),
-        serde_json::to_vec(&LegacyTestCheckpoint {
-            version: 1,
-            node_id,
-            checkpoint_lsn: position.lsn,
-            checkpoint_segment_id: position.segment,
-            checkpoint_segment_offset: position.offset,
-            updated_at,
-            checksum,
-        })
-        .expect("serialize legacy checkpoint"),
-    )
-    .expect("write legacy checkpoint");
 }
 
 async fn read_message_payload_with_timeout(consumer: &StreamConsumer) -> String {

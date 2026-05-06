@@ -382,12 +382,19 @@ WAL replay 采用 `at-least-once`：
 
 第一版 replay 严格按 LSN 串行处理。
 
-如果某个 LSN 失败：
+如果 WAL frame、CRC、LSN 连续性或 checkpoint 校验失败：
 
 - replay 停在当前 LSN。
 - 不得跳过。
 - 不得推进 checkpoint。
 - 不得处理后续 LSN。
+
+如果 record 结构有效，但业务处理阶段确认无法处理，例如 JSON 非法、项目已不存在、规则编译失败或 processor 抛错：
+
+- 将该 record 写入 `quarantine.jsonl`。
+- quarantine 写入和持久化成功后，允许推进对应 sink checkpoint。
+- replay 继续处理后续 LSN。
+- quarantine 文件作为后续人工排障和补偿依据。
 
 服务启动时不要求先 replay 完所有历史 WAL。只要满足以下条件，节点即可通过内部 `/healthz` 探测并接收新请求：
 

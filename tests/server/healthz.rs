@@ -213,6 +213,102 @@ type = "stdout"
 }
 
 #[actix_rt::test]
+async fn private_metrics_refresh_wal_lag_after_successful_replay() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-config.toml");
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[ingest]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[wal]
+dir = "{}"
+flush_max_records = 1
+
+[events.sink.events]
+type = "stdout"
+
+[events.sink.events_error]
+type = "stdout"
+"#,
+            wal_dir.display()
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let mut app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let registry = Registry::new();
+    server::register_wal_prometheus_metrics(&registry, &mut app_state)
+        .expect("register wal metrics");
+
+    let public_app = test::init_service(App::new().configure(|cfg| {
+        server::configure_public_app(cfg, app_state.clone());
+    }))
+    .await;
+    let private_app = test::init_service(
+        App::new()
+            .wrap(init_private_prometheus(registry))
+            .configure(|cfg| {
+                server::configure_private_app(cfg, app_state.clone());
+            }),
+    )
+    .await;
+
+    let ingest_resp = test::call_service(
+        &public_app,
+        test::TestRequest::post()
+            .uri("/ingest")
+            .set_payload(
+                serde_json::to_vec(&json!({
+                    "appid": "APPID",
+                    "xwhat": "startup",
+                    "xcontext": {
+                        "installid": "iid-replay-metrics",
+                        "os": "ios",
+                        "idfa": "idfa-replay-metrics"
+                    }
+                }))
+                .expect("serialize payload"),
+            )
+            .insert_header(("content-type", "application/json"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(ingest_resp.status(), StatusCode::OK);
+
+    assert_eq!(
+        server::replay_wal_once(&app_state)
+            .await
+            .expect("replay wal"),
+        1
+    );
+
+    let metrics_resp = test::call_service(
+        &private_app,
+        test::TestRequest::get().uri("/metrics").to_request(),
+    )
+    .await;
+    assert_eq!(metrics_resp.status(), StatusCode::OK);
+    let metrics =
+        String::from_utf8(test::read_body(metrics_resp).await.to_vec()).expect("metrics text");
+
+    assert!(metrics.contains("wal_checkpoint_lsn 1"));
+    assert!(metrics.contains("wal_replay_lag_lsn 0"));
+}
+
+#[actix_rt::test]
 async fn private_metrics_include_ingest_business_labels_for_wal_appends() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");

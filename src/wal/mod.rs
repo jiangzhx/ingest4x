@@ -1098,6 +1098,8 @@ fn recover_next_lsn(dir: &Path, checkpoint: Option<&WalCheckpoint>) -> io::Resul
 struct WalCheckpoint {
     version: u16,
     node_id: String,
+    #[serde(default)]
+    sink_id: Option<String>,
     checkpoint_lsn: u64,
     checkpoint_segment_id: u64,
     checkpoint_segment_offset: u64,
@@ -1109,6 +1111,7 @@ struct WalCheckpoint {
 struct WalCheckpointChecksum<'a> {
     version: u16,
     node_id: &'a str,
+    sink_id: Option<&'a str>,
     checkpoint_lsn: u64,
     checkpoint_segment_id: u64,
     checkpoint_segment_offset: u64,
@@ -1132,9 +1135,19 @@ fn read_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint
             ),
         ));
     }
+    if checkpoint.sink_id.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "checkpoint sink_id mismatch: checkpoint={:?} current=<global>",
+                checkpoint.sink_id
+            ),
+        ));
+    }
     let bytes = serde_json::to_vec(&WalCheckpointChecksum {
         version: checkpoint.version,
         node_id: checkpoint.node_id.as_str(),
+        sink_id: checkpoint.sink_id.as_deref(),
         checkpoint_lsn: checkpoint.checkpoint_lsn,
         checkpoint_segment_id: checkpoint.checkpoint_segment_id,
         checkpoint_segment_offset: checkpoint.checkpoint_segment_offset,

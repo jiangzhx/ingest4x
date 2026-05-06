@@ -8,7 +8,6 @@ pub struct Settings {
     pub ingest: IngestSettings,
     #[serde(default)]
     pub logging: LoggingSettings,
-    #[serde(alias = "metrics")]
     pub management: ManagementSettings,
     #[serde(default)]
     pub database: Option<DatabaseSettings>,

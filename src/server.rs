@@ -154,7 +154,7 @@ pub fn configure_app(cfg: &mut ServiceConfig, state: AppState) {
 }
 
 pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
-    replay_once(WalReplayContext {
+    let replayed = replay_once(WalReplayContext {
         dir: std::path::Path::new(&state.settings.wal.dir),
         event_sinks: &state.event_sinks,
         project_registry: &state.project_registry,
@@ -162,7 +162,13 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
         processor: &state.processor,
         checkpoint: state.settings.wal.checkpoint.clone(),
     })
-    .await
+    .await?;
+
+    if let Some(metrics) = state.wal_metrics.as_ref() {
+        metrics.observe(&state.settings, state.wal.get_ref());
+    }
+
+    Ok(replayed)
 }
 
 fn spawn_wal_replay_loop(state: AppState) {

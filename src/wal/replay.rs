@@ -20,6 +20,7 @@ use tracing::warn;
 const CHECKPOINT_DIR: &str = "checkpoints";
 const CHECKPOINT_FILE: &str = "checkpoint.json";
 const NODE_ID_FILE: &str = "node_id";
+const QUARANTINE_FILE: &str = "quarantine.jsonl";
 const REPLAY_BATCH_SIZE: usize = 1024;
 
 pub struct WalReplayContext<'a> {
@@ -57,9 +58,9 @@ struct WalCheckpoint {
     sink_id: Option<String>,
     #[serde(default)]
     checkpoint_lsn: u64,
-    #[serde(default, alias = "segment")]
+    #[serde(default)]
     checkpoint_segment_id: u64,
-    #[serde(default, alias = "offset")]
+    #[serde(default)]
     checkpoint_segment_offset: u64,
     #[serde(default)]
     updated_at: u64,
@@ -72,16 +73,6 @@ struct WalCheckpointChecksum<'a> {
     version: u16,
     node_id: &'a str,
     sink_id: Option<&'a str>,
-    checkpoint_lsn: u64,
-    checkpoint_segment_id: u64,
-    checkpoint_segment_offset: u64,
-    updated_at: u64,
-}
-
-#[derive(Serialize)]
-struct LegacyWalCheckpointChecksum<'a> {
-    version: u16,
-    node_id: &'a str,
     checkpoint_lsn: u64,
     checkpoint_segment_id: u64,
     checkpoint_segment_offset: u64,
@@ -117,9 +108,6 @@ impl WalCheckpoint {
         if self.checksum == expected {
             return Ok(());
         }
-        if self.sink_id.is_none() && self.checksum == self.compute_legacy_checksum()? {
-            return Ok(());
-        }
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("checkpoint checksum mismatch: {}", path.display()),
@@ -131,19 +119,6 @@ impl WalCheckpoint {
             version: self.version,
             node_id: self.node_id.as_str(),
             sink_id: self.sink_id.as_deref(),
-            checkpoint_lsn: self.checkpoint_lsn,
-            checkpoint_segment_id: self.checkpoint_segment_id,
-            checkpoint_segment_offset: self.checkpoint_segment_offset,
-            updated_at: self.updated_at,
-        })
-        .map_err(io::Error::other)?;
-        Ok(crc32fast::hash(&bytes))
-    }
-
-    fn compute_legacy_checksum(&self) -> io::Result<u32> {
-        let bytes = serde_json::to_vec(&LegacyWalCheckpointChecksum {
-            version: self.version,
-            node_id: self.node_id.as_str(),
             checkpoint_lsn: self.checkpoint_lsn,
             checkpoint_segment_id: self.checkpoint_segment_id,
             checkpoint_segment_offset: self.checkpoint_segment_offset,
@@ -180,7 +155,22 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                 entry.position.lsn
             ));
         }
-        let deliveries = process_record(&context, &entry.record).await?;
+        let deliveries = match process_record(&context, &entry.record).await {
+            Ok(deliveries) => deliveries,
+            Err(error) => {
+                warn!(
+                    record_id = entry.record.record_id.as_str(),
+                    lsn = entry.position.lsn,
+                    error = %error,
+                    "wal record quarantined; replay will continue"
+                );
+                quarantine_entry(context.dir, &entry, error.as_ref())?;
+                mark_all_sink_checkpoints_pending(&mut sink_states, &entry);
+                expected_lsn = Some(entry.position.lsn + 1);
+                replayed += 1;
+                continue;
+            }
+        };
         replay_entry_to_sinks(
             &context,
             &checkpoint_policy,
@@ -207,6 +197,49 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     Ok(replayed)
 }
 
+#[derive(Serialize)]
+struct QuarantinedWalRecord<'a> {
+    version: u16,
+    record_id: &'a str,
+    position: WalPosition,
+    next_position: WalPosition,
+    node_id: &'a str,
+    received_at_ms: u64,
+    method: &'a str,
+    path: &'a str,
+    query: Option<&'a str>,
+    error: &'a str,
+}
+
+fn quarantine_entry(dir: &Path, entry: &WalEntry, error: &dyn std::error::Error) -> io::Result<()> {
+    let path = dir.join(QUARANTINE_FILE);
+    let is_new_file = !path.exists();
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    let error = error.to_string();
+    serde_json::to_writer(
+        &mut file,
+        &QuarantinedWalRecord {
+            version: checkpoint_version(),
+            record_id: entry.record.record_id.as_str(),
+            position: entry.position,
+            next_position: entry.next_position,
+            node_id: entry.record.node_id.as_str(),
+            received_at_ms: entry.record.received_at_ms,
+            method: entry.record.method.as_str(),
+            path: entry.record.path.as_str(),
+            query: entry.record.query.as_deref(),
+            error: error.as_str(),
+        },
+    )
+    .map_err(io::Error::other)?;
+    file.write_all(b"\n")?;
+    file.sync_data()?;
+    if is_new_file {
+        File::open(dir)?.sync_all()?;
+    }
+    Ok(())
+}
+
 fn read_sink_replay_states(
     dir: &Path,
     sink_names: &[String],
@@ -227,6 +260,18 @@ fn read_sink_replay_states(
         );
     }
     Ok(states)
+}
+
+fn mark_all_sink_checkpoints_pending(
+    sink_states: &mut HashMap<String, SinkReplayState>,
+    entry: &WalEntry,
+) {
+    for state in sink_states.values_mut() {
+        if state.blocked || checkpoint_covers_entry(state.checkpoint, entry) {
+            continue;
+        }
+        mark_sink_checkpoint_pending(state, entry);
+    }
 }
 
 fn min_checkpoint(states: &HashMap<String, SinkReplayState>) -> Option<WalPosition> {
