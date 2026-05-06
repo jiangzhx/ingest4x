@@ -1041,6 +1041,39 @@ async fn durable_append_waits_for_interval_flush_when_record_threshold_not_reach
     assert_eq!(records[0].body, b"wait-for-flush");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn durable_append_async_does_not_block_runtime_while_waiting_for_flush_interval() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.no_sync = false;
+    settings.flush_max_interval = "100ms".to_string();
+    settings.flush_max_records = 100_000;
+
+    let writer = WalWriter::new(&settings).expect("wal writer");
+    let append = tokio::spawn({
+        let writer = writer.clone();
+        async move {
+            writer
+                .append_async(test_record("async-wait-for-flush"))
+                .await
+        }
+    });
+
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert!(
+        !append.is_finished(),
+        "durable append should still wait for the WAL flush interval"
+    );
+
+    let position = tokio::time::timeout(Duration::from_secs(1), append)
+        .await
+        .expect("append task should finish after interval flush")
+        .expect("append task should not panic")
+        .expect("append result");
+    assert_eq!(position.lsn, 1);
+}
+
 #[actix_rt::test]
 async fn durable_append_flushes_when_record_threshold_is_reached() {
     let temp = tempdir().expect("temp dir");

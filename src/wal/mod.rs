@@ -68,7 +68,7 @@ pub struct WalEntry {
     pub record: WalRecord,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WalWriter {
     inner: Arc<WalWriterInner>,
 }
@@ -160,6 +160,23 @@ impl WalWriter {
         self.inner.append(record)
     }
 
+    pub async fn append_async(&self, record: WalRecord) -> io::Result<WalPosition> {
+        let writer = self.clone();
+        #[cfg(debug_assertions)]
+        let fail_after_test_writes = FAIL_AFTER_TEST_WRITES.with(Cell::get);
+        tokio::task::spawn_blocking(move || {
+            #[cfg(debug_assertions)]
+            let previous_fail_after_test_writes = FAIL_AFTER_TEST_WRITES
+                .with(|remaining| replace_cell(remaining, fail_after_test_writes));
+            let result = writer.append(&record);
+            #[cfg(debug_assertions)]
+            FAIL_AFTER_TEST_WRITES.with(|remaining| remaining.set(previous_fail_after_test_writes));
+            result
+        })
+        .await
+        .map_err(|error| io::Error::other(format!("wal append task failed: {error}")))?
+    }
+
     pub fn check_ready(&self) -> io::Result<()> {
         self.inner.ensure_disk_space(0)
     }
@@ -176,6 +193,9 @@ impl WalWriter {
 
 impl Drop for WalWriter {
     fn drop(&mut self) {
+        if Arc::strong_count(&self.inner) != 1 {
+            return;
+        }
         if let Err(error) = self.flush() {
             error!(error = %error, "failed to flush wal buffer on drop");
         }
@@ -668,6 +688,13 @@ fn serialize_frame(record: &WalRecord) -> io::Result<Vec<u8>> {
 #[cfg(debug_assertions)]
 pub fn fail_after_test_writes(writes: usize) {
     FAIL_AFTER_TEST_WRITES.with(|remaining| remaining.set(writes));
+}
+
+#[cfg(debug_assertions)]
+fn replace_cell(cell: &Cell<usize>, value: usize) -> usize {
+    let previous = cell.get();
+    cell.set(value);
+    previous
 }
 
 #[cfg(debug_assertions)]

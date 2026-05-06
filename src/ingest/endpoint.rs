@@ -152,7 +152,7 @@ async fn append_wal_record(
         body,
     );
 
-    match wal.append(&record) {
+    match wal.append_async(record).await {
         Ok(_) => {
             if let (Some(metrics), Some(settings)) = (wal_metrics, settings) {
                 metrics.observe(settings, wal);
