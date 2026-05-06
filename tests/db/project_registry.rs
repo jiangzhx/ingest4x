@@ -5,8 +5,7 @@ use ingest4x::repositories::{CreateProjectInput, ProjectRepository, UpdateProjec
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    DatabaseSettings, EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings,
-    IngestSettings, ManagementSettings, Settings,
+    DatabaseSettings, EventSinkConfig, EventsSettings, IngestSettings, ManagementSettings, Settings,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -266,18 +265,6 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
 fn test_events_settings() -> EventsSettings {
     EventsSettings {
         sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["stdout".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["stdout".to_string()],
-                ..Default::default()
-            }],
-        },
     }
 }
 

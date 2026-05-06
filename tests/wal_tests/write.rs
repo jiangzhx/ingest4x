@@ -40,9 +40,6 @@ dir = "{}"
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -125,9 +122,6 @@ flush_max_records = 1
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -197,9 +191,6 @@ dir = "{}"
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -268,9 +259,6 @@ dir = "{}"
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -325,9 +313,6 @@ dir = "{}"
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -392,9 +377,6 @@ dir = "{}"
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -458,9 +440,6 @@ dir = "{}"
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -525,9 +504,6 @@ flush_max_records = 2
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),
@@ -596,9 +572,6 @@ dir = "{}"
 type = "kafka"
 bootstrap_servers = "127.0.0.1:65535"
 topic = "unused-valid"
-
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
 "#,
             wal_dir.display()
         ),

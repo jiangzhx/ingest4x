@@ -14,8 +14,7 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings, IngestSettings,
-    ManagementSettings, Settings,
+    EventSinkConfig, EventsSettings, IngestSettings, ManagementSettings, Settings,
 };
 use ingest4x::utils::events::init_event_sinks;
 use rdkafka::mocking::MockCluster;
@@ -156,19 +155,10 @@ async fn create_app_with_project_event_settings_and_processor(
 
 fn stdout_events_settings() -> EventsSettings {
     EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["stdout".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["stdout".to_string()],
-                ..Default::default()
-            }],
-        },
+        sink: HashMap::from([
+            ("events".to_string(), EventSinkConfig::Stdout),
+            ("events_error".to_string(), EventSinkConfig::Stdout),
+        ]),
     }
 }
 
@@ -179,7 +169,7 @@ fn kafka_events_settings(
 ) -> EventsSettings {
     let sink = HashMap::from([
         (
-            "kafka_valid".to_string(),
+            "events".to_string(),
             EventSinkConfig::Kafka {
                 bootstrap_servers: bootstrap_servers.to_string(),
                 topic: topic.to_string(),
@@ -191,7 +181,7 @@ fn kafka_events_settings(
             },
         ),
         (
-            "kafka_invalid".to_string(),
+            "events_error".to_string(),
             EventSinkConfig::Kafka {
                 bootstrap_servers: bootstrap_servers.to_string(),
                 topic: error_topic.to_string(),
@@ -204,21 +194,7 @@ fn kafka_events_settings(
         ),
     ]);
 
-    EventsSettings {
-        sink,
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["kafka_valid".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["kafka_invalid".to_string()],
-                ..Default::default()
-            }],
-        },
-    }
+    EventsSettings { sink }
 }
 
 async fn create_project_state(

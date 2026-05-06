@@ -5,17 +5,15 @@ use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
-use ingest4x::settings::{
-    CheckpointSettings, EventRouteSet, EventRouteSettings, EventSinkConfig, EventsSettings,
-    Settings,
-};
+use ingest4x::settings::{CheckpointSettings, EventSinkConfig, EventsSettings, Settings};
 use ingest4x::utils::events::init_event_sinks;
 use ingest4x::wal::replay::{replay_once, WalReplayContext};
-use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
+use ingest4x::wal::{new_record, read_entries_after_limit, WalPosition, WalRecord, WalWriter};
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
 use rdkafka::{ClientConfig, Message};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
@@ -45,7 +43,7 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
+[events.sink.events]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -55,10 +53,7 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
-
-[events.sink.kafka_invalid]
+[events.sink.events_error]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -67,9 +62,6 @@ queue_buffering_max_ms = "0"
 batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
-
-[[events.invalid.routes]]
-sinks = ["kafka_invalid"]
 "#,
             wal_dir.display(),
             kafka.bootstrap_servers,
@@ -147,7 +139,7 @@ sinks = ["kafka_invalid"]
 }
 
 #[actix_rt::test]
-async fn wal_replay_routes_valid_event_by_original_wal_keys() {
+async fn wal_replay_uses_processor_declared_sink_targets() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let kafka = create_kafka_config("wal-replay-original-route");
@@ -203,28 +195,13 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
                 },
             ),
         ]),
-        valid: EventRouteSet {
-            routes: vec![
-                EventRouteSettings {
-                    xwhat: Some(vec!["custom_event".to_string()]),
-                    sinks: vec!["kafka_original".to_string()],
-                    ..Default::default()
-                },
-                EventRouteSettings {
-                    xwhat: Some(vec!["mutated_event".to_string()]),
-                    sinks: vec!["kafka_mutated".to_string()],
-                    ..Default::default()
-                },
-            ],
-        },
-        invalid: EventRouteSet::default(),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
         r#"
-            fn main(event, request) {
+            fn process(event, request) {
                 event["xwhat"] = "mutated_event";
-                return #{ status: "accepted", event: event };
+                emit("kafka_mutated", event);
             }
         "#
         .to_string(),
@@ -269,12 +246,12 @@ async fn wal_replay_routes_valid_event_by_original_wal_keys() {
     );
 
     let emitted = parse_json_message(
-        read_message_payload_with_timeout(&original_consumer)
+        read_message_payload_with_timeout(&mutated_consumer)
             .await
             .as_str(),
     );
     assert_eq!(emitted["xwhat"], json!("mutated_event"));
-    assert!(read_message_payload_with_short_timeout(&mutated_consumer)
+    assert!(read_message_payload_with_short_timeout(&original_consumer)
         .await
         .is_none());
 }
@@ -300,7 +277,7 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
+[events.sink.events]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -310,10 +287,7 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
-
-[events.sink.kafka_invalid]
+[events.sink.events_error]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -322,9 +296,6 @@ queue_buffering_max_ms = "0"
 batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
-
-[[events.invalid.routes]]
-sinks = ["kafka_invalid"]
 "#,
             wal_dir.display(),
             kafka.bootstrap_servers,
@@ -408,19 +379,13 @@ async fn wal_replay_does_not_checkpoint_each_successful_record_before_batch_flus
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
         sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["stdout".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet::default(),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
         r#"
-            fn main(event, request) {
-                return #{ status: "accepted", event: event };
+            fn process(event, request) {
+                emit("stdout", event);
+
             }
         "#
         .to_string(),
@@ -480,7 +445,7 @@ async fn wal_replay_does_not_checkpoint_each_successful_record_before_batch_flus
 }
 
 #[actix_rt::test]
-async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write() {
+async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let db = init_sqlite_database("sqlite::memory:")
@@ -501,22 +466,11 @@ async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write(
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
         sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["stdout".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet::default(),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
         r#"
-            fn main(event, request) {
-                return #{
-                    status: "dropped",
-                    reason: "not a durable downstream decision"
-                };
+            fn process(event, request) {
             }
         "#
         .to_string(),
@@ -546,6 +500,209 @@ async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write(
         .expect("append record");
     drop(writer);
 
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("processor without emit should drop and advance WAL"),
+        1
+    );
+
+    let checkpoint: Value =
+        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
+            .expect("checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
+    let sink_checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
+    assert_eq!(sink_checkpoint["sink_id"], json!("stdout"));
+    assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(1));
+}
+
+#[actix_rt::test]
+async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([
+            ("sink_a".to_string(), EventSinkConfig::Stdout),
+            ("sink_b".to_string(), EventSinkConfig::Stdout),
+        ]),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn process(event, request) {
+                emit("sink_a", event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-single-target",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("replay should advance all registered sinks"),
+        1
+    );
+
+    let sink_a_checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/sink_a.json")).expect("sink_a checkpoint"),
+    )
+    .expect("sink_a checkpoint json");
+    let sink_b_checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/sink_b.json")).expect("sink_b checkpoint"),
+    )
+    .expect("sink_b checkpoint json");
+    assert_eq!(sink_a_checkpoint["checkpoint_lsn"], json!(1));
+    assert_eq!(sink_b_checkpoint["checkpoint_lsn"], json!(1));
+    assert_eq!(sink_b_checkpoint["sink_id"], json!("sink_b"));
+}
+
+#[actix_rt::test]
+async fn wal_replay_rejects_tampered_sink_checkpoint() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let kafka = create_kafka_config("wal-replay-checkpoint-checksum");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([(
+            "kafka_valid".to_string(),
+            EventSinkConfig::Kafka {
+                bootstrap_servers: kafka.bootstrap_servers.clone(),
+                topic: kafka.topic.clone(),
+                delivery_timeout_ms: "5000".to_string(),
+                queue_buffering_max_ms: "0".to_string(),
+                batch_num_messages: "1".to_string(),
+                queue_buffering_max_messages: "300".to_string(),
+                linger_ms: "0".to_string(),
+            },
+        )]),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn process(event, request) {
+                emit("kafka_valid", event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-checkpoint-checksum",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    let context = WalReplayContext {
+        dir: &wal_dir,
+        event_sinks: &event_sinks,
+        project_registry: &project_registry,
+        rule_repository: &rule_repository,
+        processor: &processor,
+        checkpoint: CheckpointSettings::default(),
+    };
+    assert_eq!(replay_once(context).await.expect("initial replay"), 1);
+
+    let checkpoint_path = wal_dir.join("checkpoints/kafka_valid.json");
+    let mut checkpoint: Value =
+        serde_json::from_slice(&fs::read(&checkpoint_path).expect("read checkpoint"))
+            .expect("checkpoint json");
+    checkpoint["checkpoint_lsn"] = json!(0);
+    fs::write(
+        &checkpoint_path,
+        serde_json::to_vec(&checkpoint).expect("serialize checkpoint"),
+    )
+    .expect("tamper checkpoint");
+
     let error = replay_once(WalReplayContext {
         dir: &wal_dir,
         event_sinks: &event_sinks,
@@ -555,12 +712,96 @@ async fn wal_replay_does_not_checkpoint_processor_drop_without_downstream_write(
         checkpoint: CheckpointSettings::default(),
     })
     .await
-    .expect_err("processor drop should stop WAL replay");
+    .expect_err("tampered checkpoint should fail checksum validation");
 
-    assert!(error
-        .to_string()
-        .contains("unsupported processor status `dropped`"));
-    assert!(!wal_dir.join("checkpoint.json").exists());
+    assert!(error.to_string().contains("checkpoint checksum mismatch"));
+}
+
+#[actix_rt::test]
+async fn wal_replay_uses_legacy_global_checkpoint_when_sink_checkpoint_is_missing() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn process(event, request) {
+                emit("stdout", event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {"installid": "iid-legacy-1", "os": "ios"}
+        })))
+        .expect("append first record");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {"installid": "iid-legacy-2", "os": "ios"}
+        })))
+        .expect("append second record");
+    drop(writer);
+
+    let first_entry = read_entries_after_limit(&wal_dir, None, Some(1))
+        .expect("read first entry")
+        .remove(0);
+    write_legacy_global_checkpoint(&wal_dir, first_entry.next_position);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("legacy global checkpoint should be accepted"),
+        1
+    );
+
+    let sink_checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
+    assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(2));
 }
 
 #[actix_rt::test]
@@ -584,7 +825,7 @@ bind_address = "127.0.0.1:18090"
 dir = "{}"
 wal_segment_max_bytes = 16
 
-[events.sink.kafka_valid]
+[events.sink.events]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -594,10 +835,7 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
-
-[events.sink.kafka_invalid]
+[events.sink.events_error]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -606,9 +844,6 @@ queue_buffering_max_ms = "0"
 batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
-
-[[events.invalid.routes]]
-sinks = ["kafka_invalid"]
 "#,
             wal_dir.display(),
             kafka.bootstrap_servers,
@@ -666,117 +901,6 @@ sinks = ["kafka_invalid"]
 }
 
 #[actix_rt::test]
-async fn wal_replay_rejects_checkpoint_with_invalid_checksum() {
-    let temp = tempdir().expect("temp dir");
-    let wal_dir = temp.path().join("wal");
-    let kafka = create_kafka_config("wal-replay-checkpoint-checksum");
-    let db = init_sqlite_database("sqlite::memory:")
-        .await
-        .expect("sqlite database should initialize");
-    let project_repository = ProjectRepository::new(db.clone());
-    project_repository
-        .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
-            name: "APPID".to_string(),
-            enabled: true,
-        })
-        .await
-        .expect("project should be created");
-    let project_registry = ProjectRegistryState::load(project_repository)
-        .await
-        .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([(
-            "kafka_valid".to_string(),
-            EventSinkConfig::Kafka {
-                bootstrap_servers: kafka.bootstrap_servers.clone(),
-                topic: kafka.topic.clone(),
-                delivery_timeout_ms: "5000".to_string(),
-                queue_buffering_max_ms: "0".to_string(),
-                batch_num_messages: "1".to_string(),
-                queue_buffering_max_messages: "300".to_string(),
-                linger_ms: "0".to_string(),
-            },
-        )]),
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["kafka_valid".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet::default(),
-    })
-    .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
-        r#"
-            fn main(event, request) {
-                return accept(event);
-            }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
-    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
-        dir: wal_dir.display().to_string(),
-        node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
-        checkpoint: Default::default(),
-    })
-    .expect("wal writer");
-    writer
-        .append(&test_wal_record(json!({
-            "appid": "APPID",
-            "xwhat": "custom_event",
-            "xcontext": {
-                "installid": "iid-checkpoint-checksum",
-                "os": "ios"
-            }
-        })))
-        .expect("append record");
-    drop(writer);
-
-    let context = WalReplayContext {
-        dir: &wal_dir,
-        event_sinks: &event_sinks,
-        project_registry: &project_registry,
-        rule_repository: &rule_repository,
-        processor: &processor,
-        checkpoint: CheckpointSettings::default(),
-    };
-    assert_eq!(replay_once(context).await.expect("initial replay"), 1);
-
-    let checkpoint_path = wal_dir.join("checkpoint.json");
-    let mut checkpoint: Value =
-        serde_json::from_slice(&fs::read(&checkpoint_path).expect("read checkpoint"))
-            .expect("checkpoint json");
-    checkpoint["checkpoint_lsn"] = json!(0);
-    fs::write(
-        &checkpoint_path,
-        serde_json::to_vec(&checkpoint).expect("serialize checkpoint"),
-    )
-    .expect("tamper checkpoint");
-
-    let error = replay_once(WalReplayContext {
-        dir: &wal_dir,
-        event_sinks: &event_sinks,
-        project_registry: &project_registry,
-        rule_repository: &rule_repository,
-        processor: &processor,
-        checkpoint: CheckpointSettings::default(),
-    })
-    .await
-    .expect_err("tampered checkpoint should fail checksum validation");
-
-    assert!(error.to_string().contains("checkpoint checksum mismatch"));
-}
-
-#[actix_rt::test]
 async fn wal_replay_rejects_checkpoint_for_different_node_id() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -810,19 +934,12 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
                 linger_ms: "0".to_string(),
             },
         )]),
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["kafka_valid".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet::default(),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
         r#"
-            fn main(event, request) {
-                return accept(event);
+            fn process(event, request) {
+                emit("kafka_valid", event);
             }
         "#
         .to_string(),
@@ -899,19 +1016,12 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
     let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks(&EventsSettings {
         sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
-        valid: EventRouteSet {
-            routes: vec![EventRouteSettings {
-                sinks: vec!["stdout".to_string()],
-                ..Default::default()
-            }],
-        },
-        invalid: EventRouteSet::default(),
     })
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
         r#"
-            fn main(event, request) {
-                return accept(event);
+            fn process(event, request) {
+                emit("stdout", event);
             }
         "#
         .to_string(),
@@ -1069,6 +1179,58 @@ fn rewrite_wal_entry_lsn(wal_dir: &Path, entry_index: usize, new_lsn: u64) {
         .expect("seek frame for rewrite");
     file.write_all(&frame).expect("rewrite frame");
     file.sync_data().expect("sync rewritten frame");
+}
+
+#[derive(Serialize)]
+struct LegacyTestCheckpoint<'a> {
+    version: u16,
+    node_id: &'a str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+    checksum: u32,
+}
+
+#[derive(Serialize)]
+struct LegacyTestCheckpointChecksum<'a> {
+    version: u16,
+    node_id: &'a str,
+    checkpoint_lsn: u64,
+    checkpoint_segment_id: u64,
+    checkpoint_segment_offset: u64,
+    updated_at: u64,
+}
+
+fn write_legacy_global_checkpoint(wal_dir: &Path, position: WalPosition) {
+    let node_id = fs::read_to_string(wal_dir.join("node_id")).expect("read node id");
+    let node_id = node_id.trim();
+    let updated_at = 1_777_877_000_000;
+    let checksum = crc32fast::hash(
+        &serde_json::to_vec(&LegacyTestCheckpointChecksum {
+            version: 1,
+            node_id,
+            checkpoint_lsn: position.lsn,
+            checkpoint_segment_id: position.segment,
+            checkpoint_segment_offset: position.offset,
+            updated_at,
+        })
+        .expect("serialize legacy checkpoint checksum"),
+    );
+    fs::write(
+        wal_dir.join("checkpoint.json"),
+        serde_json::to_vec(&LegacyTestCheckpoint {
+            version: 1,
+            node_id,
+            checkpoint_lsn: position.lsn,
+            checkpoint_segment_id: position.segment,
+            checkpoint_segment_offset: position.offset,
+            updated_at,
+            checksum,
+        })
+        .expect("serialize legacy checkpoint"),
+    )
+    .expect("write legacy checkpoint");
 }
 
 async fn read_message_payload_with_timeout(consumer: &StreamConsumer) -> String {

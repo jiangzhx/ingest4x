@@ -87,11 +87,8 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
 
     let resp = test::call_service(&app, req).await;
     let status_code = resp.status();
-    let body = test::read_body(resp).await;
-    let body_text = std::str::from_utf8(body.as_ref()).unwrap();
 
-    assert_eq!(status_code, StatusCode::BAD_REQUEST);
-    assert!(body_text.contains("xcontext.installid"));
+    assert_eq!(status_code, StatusCode::OK);
 
     let kafka_string = read_message_payload(&error_consumer).await;
     let mut emitted = serde_json::from_str::<Value>(kafka_string.as_str()).unwrap();
@@ -109,14 +106,14 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
 #[actix_rt::test]
 async fn post_ingest_runs_rhai_processor_before_kafka_sink() {
     let script = r#"
-fn main(event, ctx) {
+fn process(event, ctx) {
     let validation = validate(event);
     if !validation["ok"] {
-        return reject(event, validation["error"]);
+        emit("events_error", event);
+    } else {
+        event["xcontext"]["processor_marker"] = "rhai";
+        emit("events", event);
     }
-
-    event["xcontext"]["processor_marker"] = "rhai";
-    return accept(event);
 }
 "#;
     let (app, testservice) = create_app_with_processor_script(script).await;

@@ -6,7 +6,7 @@ use tempfile::tempdir;
 fn default_settings_loads_root_ingest4x_toml() {
     let settings = Settings::init().expect("default settings should load");
 
-    assert!(settings.events.sink.contains_key("stdout_all"));
+    assert!(settings.events.sink.contains_key("events"));
 }
 
 #[test]
@@ -23,14 +23,11 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.stdout]
+[events.sink.events]
 type = "stdout"
 
-[[events.valid.routes]]
-sinks = ["stdout"]
-
-[[events.invalid.routes]]
-sinks = ["stdout"]
+[events.sink.events_error]
+type = "stdout"
 "#,
     )
     .expect("write config");
@@ -56,14 +53,11 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.stdout]
+[events.sink.events]
 type = "stdout"
 
-[[events.valid.routes]]
-sinks = ["stdout"]
-
-[[events.invalid.routes]]
-sinks = ["stdout"]
+[events.sink.events_error]
+type = "stdout"
 "#,
     )
     .expect("write config");
@@ -71,7 +65,7 @@ sinks = ["stdout"]
     let settings = Settings::init_with_file(config_path.to_str().expect("config path"))
         .expect("settings should load");
 
-    assert!(settings.events.sink.contains_key("stdout"));
+    assert!(settings.events.sink.contains_key("events"));
 }
 
 #[test]
@@ -93,14 +87,11 @@ format = "json"
 bind_address = "127.0.0.1:18090"
 admin_password = "local-admin-password"
 
-[events.sink.stdout]
+[events.sink.events]
 type = "stdout"
 
-[[events.valid.routes]]
-sinks = ["stdout"]
-
-[[events.invalid.routes]]
-sinks = ["stdout"]
+[events.sink.events_error]
+type = "stdout"
 "#,
     )
     .expect("write config");
@@ -117,7 +108,7 @@ sinks = ["stdout"]
 }
 
 #[test]
-fn loads_event_sinks_and_status_routes_from_config_file() {
+fn loads_event_sinks_from_config_file() {
     let temp = tempdir().expect("temp dir");
     let config_path = temp.path().join("events-config.toml");
 
@@ -135,19 +126,8 @@ type = "kafka"
 bootstrap_servers = "127.0.0.1:9092"
 topic = "ingest4x-payment-events"
 
-[events.sink.stdout_invalid]
+[events.sink.stdout_events_error]
 type = "stdout"
-
-[[events.valid.routes]]
-appid = ["game-a"]
-xwhat = ["payment"]
-sinks = ["kafka_payment"]
-
-[[events.valid.routes]]
-sinks = ["kafka_payment"]
-
-[[events.invalid.routes]]
-sinks = ["stdout_invalid"]
 "#,
     )
     .expect("write config");
@@ -161,24 +141,7 @@ sinks = ["stdout_invalid"]
         Some(EventSinkConfig::Kafka { topic, .. }) if topic == "ingest4x-payment-events"
     ));
     assert!(matches!(
-        settings.events.sink.get("stdout_invalid"),
+        settings.events.sink.get("stdout_events_error"),
         Some(EventSinkConfig::Stdout)
     ));
-    assert_eq!(settings.events.valid.routes.len(), 2);
-    assert_eq!(
-        settings.events.valid.routes[0].appid.as_deref(),
-        Some(&["game-a".to_string()][..])
-    );
-    assert_eq!(
-        settings.events.valid.routes[0].xwhat.as_deref(),
-        Some(&["payment".to_string()][..])
-    );
-    assert_eq!(
-        settings.events.valid.routes[0].sinks,
-        vec!["kafka_payment".to_string()]
-    );
-    assert_eq!(
-        settings.events.invalid.routes[0].sinks,
-        vec!["stdout_invalid".to_string()]
-    );
 }

@@ -30,7 +30,7 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.kafka_valid]
+[events.sink.events]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -40,10 +40,7 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
-
-[events.sink.kafka_invalid]
+[events.sink.events_error]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -52,9 +49,6 @@ queue_buffering_max_ms = "0"
 batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
-
-[[events.invalid.routes]]
-sinks = ["kafka_invalid"]
 "#,
             kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
@@ -137,7 +131,7 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.kafka_valid]
+[events.sink.events]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -147,10 +141,7 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
-
-[events.sink.kafka_invalid]
+[events.sink.events_error]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -159,9 +150,6 @@ queue_buffering_max_ms = "0"
 batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
-
-[[events.invalid.routes]]
-sinks = ["kafka_invalid"]
 "#,
             kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
@@ -196,11 +184,8 @@ sinks = ["kafka_invalid"]
 
     let resp = test::call_service(&app, req).await;
     let status_code = resp.status();
-    let body = test::read_body(resp).await;
-    let body_text = std::str::from_utf8(body.as_ref()).unwrap();
 
-    assert_eq!(status_code, StatusCode::BAD_REQUEST);
-    assert!(body_text.contains("xcontext.installid"));
+    assert_eq!(status_code, StatusCode::OK);
 
     let kafka_string = read_message_payload(&error_consumer).await;
     let mut emitted = parse_event_sink_line(kafka_string.as_str());
@@ -231,7 +216,7 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
-[events.sink.kafka_valid]
+[events.sink.events]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -241,10 +226,7 @@ batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
 
-[[events.valid.routes]]
-sinks = ["kafka_valid"]
-
-[events.sink.kafka_invalid]
+[events.sink.events_error]
 type = "kafka"
 bootstrap_servers = "{}"
 topic = "{}"
@@ -253,9 +235,6 @@ queue_buffering_max_ms = "0"
 batch_num_messages = "1"
 queue_buffering_max_messages = "300"
 linger_ms = "0"
-
-[[events.invalid.routes]]
-sinks = ["kafka_invalid"]
 "#,
             kafka.bootstrap_servers, kafka.topic, kafka.bootstrap_servers, kafka.error_topic
         ),
