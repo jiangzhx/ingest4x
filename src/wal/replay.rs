@@ -4,10 +4,13 @@ use crate::services::ProjectRegistryState;
 use crate::settings::CheckpointSettings;
 use crate::utils::events::EventSinkState;
 use crate::wal::{
+    error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
     read_entries_after_limit, remove_segments_covered_by_checkpoint, WalEntry, WalPosition,
     WalRecord,
 };
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -20,7 +23,7 @@ use tracing::warn;
 const CHECKPOINT_DIR: &str = "checkpoints";
 const CHECKPOINT_FILE: &str = "checkpoint.json";
 const NODE_ID_FILE: &str = "node_id";
-const QUARANTINE_FILE: &str = "quarantine.jsonl";
+const QUARANTINE_SCHEMA: &str = "ingest4x.wal.quarantine.v1";
 const REPLAY_BATCH_SIZE: usize = 1024;
 
 pub struct WalReplayContext<'a> {
@@ -140,55 +143,56 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
         return Ok(0);
     }
 
-    let mut sink_states = read_sink_replay_states(context.dir, &sink_names)?;
+    let mut sink_states = read_sink_replay_states(context.dir, &sink_names)
+        .map_err(ReplayIssue::checkpoint_corrupt)?;
     let replay_start = min_checkpoint(&sink_states);
-    let entries = read_entries_after_limit(context.dir, replay_start, Some(REPLAY_BATCH_SIZE))?;
+    let entries = read_entries_after_limit(context.dir, replay_start, Some(REPLAY_BATCH_SIZE))
+        .map_err(ReplayIssue::wal_read_failed)?;
     let mut expected_lsn = replay_start.map(|position| position.lsn + 1);
     let mut replayed = 0;
 
     for entry in entries {
         let expected = expected_lsn.get_or_insert(entry.position.lsn);
         if entry.position.lsn != *expected {
-            return Err(anyhow!(
-                "non-contiguous wal lsn: expected {}, got {}",
-                *expected,
-                entry.position.lsn
-            ));
+            return Err(ReplayIssue::wal_lsn_gap(*expected, entry.position.lsn).into());
         }
         let deliveries = match process_record(&context, &entry.record).await {
             Ok(deliveries) => deliveries,
-            Err(error) => {
-                warn!(
-                    record_id = entry.record.record_id.as_str(),
-                    lsn = entry.position.lsn,
-                    error = %error,
-                    "wal record quarantined; replay will continue"
-                );
-                quarantine_entry(context.dir, &entry, error.as_ref())?;
-                mark_all_sink_checkpoints_pending(&mut sink_states, &entry);
+            Err(issue) if issue.action() == ReplayAction::QuarantineRecord => {
+                quarantine_replay_issue(&mut sink_states, &entry, &issue);
                 expected_lsn = Some(entry.position.lsn + 1);
                 replayed += 1;
                 continue;
             }
+            Err(issue) => return Err(issue.into()),
         };
-        replay_entry_to_sinks(
+        match replay_entry_to_sinks(
             &context,
             &checkpoint_policy,
             &mut sink_states,
             &entry,
             deliveries,
         )
-        .await?;
+        .await
+        {
+            Ok(()) => {}
+            Err(issue) if issue.action() == ReplayAction::QuarantineRecord => {
+                quarantine_replay_issue(&mut sink_states, &entry, &issue);
+            }
+            Err(issue) => return Err(issue.into()),
+        }
         expected_lsn = Some(entry.position.lsn + 1);
         replayed += 1;
     }
 
-    flush_pending_checkpoints(context.dir, &mut sink_states)?;
-    cleanup_covered_segments(context.dir, &sink_states)?;
+    flush_pending_checkpoints(context.dir, &mut sink_states)
+        .map_err(ReplayIssue::checkpoint_write_failed)?;
+    cleanup_covered_segments(context.dir, &sink_states)
+        .map_err(ReplayIssue::checkpoint_write_failed)?;
 
     let failures = sink_failures(&sink_states);
     if !failures.is_empty() {
-        return Err(anyhow!(
+        return Err(anyhow::anyhow!(
             "wal replay sink delivery failed: {}",
             failures.join("; ")
         ));
@@ -199,7 +203,9 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
 
 #[derive(Serialize)]
 struct QuarantinedWalRecord<'a> {
-    version: u16,
+    schema: &'a str,
+    code: &'a str,
+    action: &'a str,
     record_id: &'a str,
     position: WalPosition,
     next_position: WalPosition,
@@ -208,36 +214,73 @@ struct QuarantinedWalRecord<'a> {
     method: &'a str,
     path: &'a str,
     query: Option<&'a str>,
-    error: &'a str,
+    appid: Option<String>,
+    xwhat: Option<String>,
+    target: Option<String>,
+    message: &'a str,
+    error: String,
+    body_base64: String,
 }
 
-fn quarantine_entry(dir: &Path, entry: &WalEntry, error: &dyn std::error::Error) -> io::Result<()> {
-    let path = dir.join(QUARANTINE_FILE);
-    let is_new_file = !path.exists();
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
-    let error = error.to_string();
-    serde_json::to_writer(
-        &mut file,
-        &QuarantinedWalRecord {
-            version: checkpoint_version(),
-            record_id: entry.record.record_id.as_str(),
-            position: entry.position,
-            next_position: entry.next_position,
-            node_id: entry.record.node_id.as_str(),
-            received_at_ms: entry.record.received_at_ms,
-            method: entry.record.method.as_str(),
-            path: entry.record.path.as_str(),
-            query: entry.record.query.as_deref(),
-            error: error.as_str(),
-        },
-    )
-    .map_err(io::Error::other)?;
-    file.write_all(b"\n")?;
-    file.sync_data()?;
-    if is_new_file {
-        File::open(dir)?.sync_all()?;
+fn quarantine_replay_issue(
+    sink_states: &mut HashMap<String, SinkReplayState>,
+    entry: &WalEntry,
+    issue: &ReplayIssue,
+) {
+    let record = quarantine_record(entry, issue);
+    let record_json =
+        serde_json::to_string(&record).expect("quarantine record should serialize to json");
+    warn!(
+        target: QUARANTINE_LOG_TARGET,
+        record = %record_json,
+        record_id = entry.record.record_id.as_str(),
+        lsn = entry.position.lsn,
+        code = issue.code(),
+        action = issue.action().as_str(),
+        error = %issue,
+        "wal record quarantined; replay will continue"
+    );
+    mark_all_sink_checkpoints_pending(sink_states, entry);
+}
+
+fn quarantine_record<'a>(entry: &'a WalEntry, issue: &'a ReplayIssue) -> QuarantinedWalRecord<'a> {
+    let error = issue.to_string();
+    let (body_appid, body_xwhat) = quarantine_event_fields(&entry.record.body);
+    QuarantinedWalRecord {
+        schema: QUARANTINE_SCHEMA,
+        code: issue.code(),
+        action: issue.action().as_str(),
+        record_id: entry.record.record_id.as_str(),
+        position: entry.position,
+        next_position: entry.next_position,
+        node_id: entry.record.node_id.as_str(),
+        received_at_ms: entry.record.received_at_ms,
+        method: entry.record.method.as_str(),
+        path: entry.record.path.as_str(),
+        query: entry.record.query.as_deref(),
+        appid: body_appid.or_else(|| issue.appid().map(str::to_string)),
+        xwhat: body_xwhat.or_else(|| issue.xwhat().map(str::to_string)),
+        target: issue.target().map(str::to_string),
+        message: issue.message(),
+        error,
+        body_base64: STANDARD.encode(&entry.record.body),
     }
-    Ok(())
+}
+
+fn quarantine_event_fields(body: &[u8]) -> (Option<String>, Option<String>) {
+    let Ok(json) = serde_json::from_slice::<Value>(body) else {
+        return (None, None);
+    };
+
+    let appid = json
+        .get("appid")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let xwhat = json
+        .get("xwhat")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    (appid, xwhat)
 }
 
 fn read_sink_replay_states(
@@ -284,9 +327,14 @@ fn min_checkpoint(states: &HashMap<String, SinkReplayState>) -> Option<WalPositi
         .min_by_key(|position| (position.lsn, position.segment, position.offset))
 }
 
-fn checkpoint_flush_policy(settings: &CheckpointSettings) -> Result<CheckpointFlushPolicy> {
-    let flush_interval = humantime::parse_duration(&settings.flush_interval)
-        .map_err(|error| anyhow!("invalid checkpoint.flush_interval: {error}"))?;
+fn checkpoint_flush_policy(
+    settings: &CheckpointSettings,
+) -> std::result::Result<CheckpointFlushPolicy, ReplayIssue> {
+    let flush_interval = humantime::parse_duration(&settings.flush_interval).map_err(|error| {
+        ReplayIssue::checkpoint_config_invalid(format!(
+            "invalid checkpoint.flush_interval: {error}"
+        ))
+    })?;
     Ok(CheckpointFlushPolicy {
         flush_interval: flush_interval.max(Duration::from_millis(1)),
         flush_records: settings.flush_records.max(1),
@@ -308,7 +356,7 @@ fn should_flush_checkpoint(
 async fn process_record(
     context: &WalReplayContext<'_>,
     record: &WalRecord,
-) -> Result<Vec<crate::rhai_ctx::ProcessorDelivery>> {
+) -> std::result::Result<Vec<crate::rhai_ctx::ProcessorDelivery>, ReplayIssue> {
     let json = match serde_json::from_slice::<Value>(&record.body) {
         Ok(json) => json,
         Err(error) => {
@@ -317,32 +365,33 @@ async fn process_record(
                 error = %error,
                 "invalid wal record json body"
             );
-            return Err(anyhow!(
-                "invalid wal record json body for {}: {}",
-                record.record_id,
-                error
-            ));
+            return Err(ReplayIssue::invalid_json_body(error));
         }
     };
+    let xwhat = json
+        .get("xwhat")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
     let appid = json
         .get("appid")
         .and_then(Value::as_str)
-        .unwrap_or("<missing>")
-        .to_string();
-    if appid == "<missing>" || !context.project_registry.contains(&appid) {
-        return Err(anyhow!(
-            "wal record {} references unknown appid `{appid}`",
-            record.record_id
-        ));
+        .map(ToString::to_string);
+    let Some(appid) = appid else {
+        return Err(ReplayIssue::missing_appid(xwhat));
+    };
+    if !context.project_registry.contains(&appid) {
+        return Err(ReplayIssue::unknown_appid(appid, xwhat));
     }
 
     let rules = context
         .rule_repository
         .compile_project_rules(&appid)
-        .await?;
+        .await
+        .map_err(|error| ReplayIssue::from_rule_repository(&appid, error))?;
     let output = context
         .processor
-        .process(json.clone(), rules, request_context(record))?;
+        .process(json.clone(), rules, request_context(record))
+        .map_err(ReplayIssue::processor_runtime_failed)?;
 
     Ok(output.deliveries)
 }
@@ -353,21 +402,20 @@ async fn replay_entry_to_sinks(
     sink_states: &mut HashMap<String, SinkReplayState>,
     entry: &WalEntry,
     deliveries: Vec<crate::rhai_ctx::ProcessorDelivery>,
-) -> Result<()> {
+) -> std::result::Result<(), ReplayIssue> {
     let mut deliveries_by_sink: HashMap<String, Vec<crate::rhai_ctx::ProcessorDelivery>> =
         HashMap::new();
     for delivery in deliveries {
+        if delivery.target.trim().is_empty() {
+            return Err(ReplayIssue::empty_sink_target());
+        }
         if context.event_sinks.contains_sink(&delivery.target) {
             deliveries_by_sink
                 .entry(delivery.target.clone())
                 .or_default()
                 .push(delivery);
         } else {
-            warn!(
-                target = delivery.target.as_str(),
-                record_id = entry.record.record_id.as_str(),
-                "processor delivery ignored unknown sink target"
-            );
+            return Err(ReplayIssue::unknown_sink_target(delivery.target));
         }
     }
 
@@ -383,15 +431,16 @@ async fn replay_entry_to_sinks(
         if let Some(sink_deliveries) = deliveries_by_sink.get(&sink_name) {
             for delivery in sink_deliveries {
                 if let Err(error) = context.event_sinks.send_delivery(delivery).await {
+                    let issue =
+                        ReplayIssue::sink_send_failed(sink_name.clone(), entry.position.lsn, error);
                     state.blocked = true;
-                    state.failure = Some(format!(
-                        "sink `{sink_name}` failed at lsn {}: {error}",
-                        entry.position.lsn
-                    ));
+                    state.failure = Some(issue.to_string());
                     warn!(
                         sink = sink_name.as_str(),
                         lsn = entry.position.lsn,
-                        error = %error,
+                        code = issue.code(),
+                        action = issue.action().as_str(),
+                        error = %issue,
                         "wal replay sink delivery failed; sink checkpoint will not advance"
                     );
                     break;
@@ -409,8 +458,10 @@ async fn replay_entry_to_sinks(
             state.pending_bytes,
             state.last_checkpoint_flush,
         ) {
-            flush_sink_checkpoint(context.dir, sink_name.as_str(), state)?;
-            cleanup_covered_segments(context.dir, sink_states)?;
+            flush_sink_checkpoint(context.dir, sink_name.as_str(), state)
+                .map_err(ReplayIssue::checkpoint_write_failed)?;
+            cleanup_covered_segments(context.dir, sink_states)
+                .map_err(ReplayIssue::checkpoint_write_failed)?;
         }
     }
 

@@ -1,5 +1,7 @@
 use actix_http::StatusCode;
 use actix_web::{test, App};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use ingest4x::db::init_sqlite_database;
 use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
@@ -13,13 +15,17 @@ use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
 use rdkafka::{ClientConfig, Message};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::prelude::*;
 
 #[actix_rt::test]
 async fn wal_replay_sends_records_to_kafka_and_advances_checkpoint() {
@@ -344,6 +350,7 @@ linger_ms = "0"
     let app_state = server::build_app_state(settings)
         .await
         .expect("build app state");
+    let (quarantine_logs, _guard) = install_quarantine_capture();
 
     assert_eq!(
         server::replay_wal_once(&app_state)
@@ -361,8 +368,15 @@ linger_ms = "0"
         serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
             .expect("checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
-    let quarantine = fs::read_to_string(wal_dir.join("quarantine.jsonl")).expect("read quarantine");
-    assert!(quarantine.contains("invalid wal record json body"));
+    let quarantine = quarantine_logs.single_record();
+    assert_eq!(quarantine["code"], json!("replay_invalid_json_body"));
+    assert_eq!(quarantine["action"], json!("quarantine_record"));
+    assert!(quarantine["message"]
+        .as_str()
+        .unwrap()
+        .contains("invalid wal record json body"));
+    assert!(quarantine["body_base64"].as_str().is_some());
+    assert!(!wal_dir.join("quarantine.jsonl").exists());
 }
 
 #[actix_rt::test]
@@ -432,6 +446,7 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         ))
         .expect("append invalid json record");
     drop(writer);
+    let (quarantine_logs, _guard) = install_quarantine_capture();
 
     assert_eq!(
         replay_once(WalReplayContext {
@@ -455,8 +470,10 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
             .expect("checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
-    let quarantine = fs::read_to_string(wal_dir.join("quarantine.jsonl")).expect("read quarantine");
-    assert!(quarantine.contains("invalid wal record json body"));
+    let quarantine = quarantine_logs.single_record();
+    assert_eq!(quarantine["code"], json!("replay_invalid_json_body"));
+    assert_eq!(quarantine["action"], json!("quarantine_record"));
+    assert!(!wal_dir.join("quarantine.jsonl").exists());
 }
 
 #[actix_rt::test]
@@ -626,6 +643,105 @@ async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
     assert_eq!(sink_a_checkpoint["checkpoint_lsn"], json!(1));
     assert_eq!(sink_b_checkpoint["checkpoint_lsn"], json!(1));
     assert_eq!(sink_b_checkpoint["sink_id"], json!("sink_b"));
+}
+
+#[actix_rt::test]
+async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks(&EventsSettings {
+        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::Stdout)]),
+    })
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn process(event, request) {
+                emit("stdout", event);
+                emit("missing_sink", event);
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-unknown-sink",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+    let (quarantine_logs, _guard) = install_quarantine_capture();
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("unknown sink target should quarantine and continue"),
+        1
+    );
+
+    let quarantine = quarantine_logs.single_record();
+    assert_eq!(quarantine["code"], json!("replay_unknown_sink_target"));
+    assert_eq!(quarantine["action"], json!("quarantine_record"));
+    assert_eq!(quarantine["appid"], json!("APPID"));
+    assert_eq!(quarantine["xwhat"], json!("custom_event"));
+    assert_eq!(quarantine["target"], json!("missing_sink"));
+    let body = STANDARD
+        .decode(quarantine["body_base64"].as_str().expect("body_base64"))
+        .expect("decode body");
+    let body_json: Value = serde_json::from_slice(&body).expect("body json");
+    assert_eq!(
+        body_json["xcontext"]["installid"],
+        json!("iid-unknown-sink")
+    );
+    assert!(!wal_dir.join("quarantine.jsonl").exists());
+    let sink_checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/stdout.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
+    assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(1));
+    let checkpoint: Value =
+        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
+            .expect("checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
 }
 
 #[actix_rt::test]
@@ -1071,6 +1187,91 @@ fn test_wal_record(payload: Value) -> WalRecord {
         BTreeMap::new(),
         serde_json::to_vec(&payload).expect("serialize payload"),
     )
+}
+
+#[derive(Clone, Default)]
+struct CapturedQuarantineLogs {
+    records: Arc<Mutex<Vec<Value>>>,
+}
+
+impl CapturedQuarantineLogs {
+    fn single_record(&self) -> Value {
+        let records = self.records.lock().expect("quarantine records");
+        assert_eq!(records.len(), 1, "expected one quarantine record");
+        records[0].clone()
+    }
+}
+
+impl<S> Layer<S> for CapturedQuarantineLogs
+where
+    S: Subscriber,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        if event.metadata().target() != "ingest4x::wal::quarantine" {
+            return;
+        }
+
+        let mut fields = JsonValueVisitor::default();
+        event.record(&mut fields);
+        let record = fields
+            .values
+            .remove("record")
+            .unwrap_or_else(|| Value::Object(fields.values));
+        self.records
+            .lock()
+            .expect("quarantine records")
+            .push(record);
+    }
+}
+
+#[derive(Default)]
+struct JsonValueVisitor {
+    values: Map<String, Value>,
+}
+
+impl JsonValueVisitor {
+    fn insert_string_or_json(&mut self, field: &Field, value: &str) {
+        let value =
+            serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()));
+        self.values.insert(field.name().to_string(), value);
+    }
+}
+
+impl Visit for JsonValueVisitor {
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.values
+            .insert(field.name().to_string(), Value::Bool(value));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.values
+            .insert(field.name().to_string(), Value::Number(value.into()));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.values
+            .insert(field.name().to_string(), Value::Number(value.into()));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.insert_string_or_json(field, value);
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        let value = format!("{value:?}");
+        let unquoted = value
+            .strip_prefix('"')
+            .and_then(|text| text.strip_suffix('"'))
+            .unwrap_or(value.as_str());
+        self.insert_string_or_json(field, unquoted);
+    }
+}
+
+fn install_quarantine_capture() -> (CapturedQuarantineLogs, tracing::subscriber::DefaultGuard) {
+    let logs = CapturedQuarantineLogs::default();
+    let subscriber = tracing_subscriber::registry().with(logs.clone());
+    let guard = tracing::subscriber::set_default(subscriber);
+    (logs, guard)
 }
 
 fn rewrite_wal_entry_lsn(wal_dir: &Path, entry_index: usize, new_lsn: u64) {

@@ -40,13 +40,16 @@ fn normalize_event(event, request) {
     return event;
 }
 
-fn attach_reject_process_info(event, request, reason) {
+fn attach_reject_process_info(event, request, reason, error_code) {
     if !event.contains("xcontext") || event["xcontext"] == () {
         event["xcontext"] = #{};
     }
 
     let xcontext = event["xcontext"];
     xcontext["process_info"] = process_info(request, reason);
+    if error_code != () {
+        xcontext["process_info"]["error_code"] = error_code;
+    }
     event["xcontext"] = xcontext;
     return event;
 }

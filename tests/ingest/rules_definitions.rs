@@ -27,6 +27,26 @@ async fn load_rules() -> Rules {
 }
 
 #[tokio::test]
+async fn rules_validation_errors_expose_stable_codes() {
+    let rules = load_rules().await;
+    let missing_installid = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
+        "xcontext": {
+            "os": "ios",
+            "idfa": "idfa-1"
+        }
+    });
+
+    let error = rules
+        .validate("custom_event", &missing_installid)
+        .expect_err("missing required field should fail");
+
+    assert_eq!(error.code(), "rules_required_field_missing");
+    assert_eq!(error.path(), Some("xcontext.installid"));
+}
+
+#[tokio::test]
 async fn shipped_rules_require_openid_for_toutiao_and_tiktok() {
     let rules = load_rules().await;
 

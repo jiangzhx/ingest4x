@@ -174,8 +174,8 @@ fn ingest4x_version() -> Result<ImmutableString, Box<EvalAltResult>> {
 fn validate(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
     let value: Value = from_dynamic(&event)
         .map_err(|err| EvalAltResult::ErrorRuntime(err.to_string().into(), rhai::Position::NONE))?;
-    let result: anyhow::Result<()> = PROCESSOR_CONTEXT.with(
-        |context| -> std::result::Result<anyhow::Result<()>, Box<EvalAltResult>> {
+    let result =
+        PROCESSOR_CONTEXT.with(|context| -> std::result::Result<_, Box<EvalAltResult>> {
             let context = context.borrow();
             let context = context.as_ref().ok_or_else(|| {
                 EvalAltResult::ErrorRuntime(
@@ -184,8 +184,7 @@ fn validate(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
                 )
             })?;
             Ok(context.rules.validate(&context.event_name, &value))
-        },
-    )?;
+        })?;
     let mut output = Map::new();
     match result {
         Ok(()) => {
@@ -193,7 +192,12 @@ fn validate(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
         }
         Err(err) => {
             output.insert("ok".into(), false.into());
-            output.insert("error".into(), err.to_string().into());
+            output.insert("code".into(), err.code().into());
+            output.insert("error".into(), err.message().into());
+            output.insert("message".into(), err.message().into());
+            if let Some(path) = err.path() {
+                output.insert("path".into(), path.into());
+            }
         }
     }
     Ok(output)

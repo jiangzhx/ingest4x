@@ -1,6 +1,7 @@
 use crate::settings::WalSettings;
 use serde::{Deserialize, Serialize};
 
+pub(crate) mod error;
 pub mod replay;
 
 #[cfg(debug_assertions)]

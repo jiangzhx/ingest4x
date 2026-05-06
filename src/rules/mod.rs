@@ -1,3 +1,4 @@
+mod error;
 pub(crate) mod loader;
 pub(crate) mod merge;
 pub(crate) mod types;
@@ -7,6 +8,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+pub use error::RulesValidationError;
 pub use types::{CompiledEventRule, CompiledFieldRule, FieldType, Rules};
 
 #[derive(Clone)]
@@ -40,7 +42,11 @@ impl Rules {
         self.events.contains_key(event_name) || self.events.contains_key("default")
     }
 
-    pub fn validate(&self, event_name: &str, payload: &Value) -> Result<()> {
+    pub fn validate(
+        &self,
+        event_name: &str,
+        payload: &Value,
+    ) -> std::result::Result<(), RulesValidationError> {
         validate::validate_event(self, event_name, payload)
     }
 }

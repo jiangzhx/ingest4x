@@ -12,7 +12,7 @@ web/admin/dist/
 /ingest4x.db-wal
 docs/features
 docs/superpowers
-wal/
+/wal/
 .graphify_*
 /graphify-out/
 /AGENTS.md

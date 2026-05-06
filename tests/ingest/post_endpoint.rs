@@ -98,6 +98,10 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
         .as_str()
         .unwrap()
         .contains("xcontext.installid"));
+    assert_eq!(
+        emitted["xcontext"]["process_info"]["error_code"],
+        json!("rules_required_field_missing")
+    );
     emitted["xcontext"]
         .as_object_mut()
         .unwrap()

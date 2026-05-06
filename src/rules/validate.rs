@@ -2,10 +2,14 @@ use super::types::{
     CompiledConditionalRequirement, CompiledConditionalRules, CompiledFieldRule, FieldConstraints,
     FieldType, NumericConstraints, Rules, StringConstraints,
 };
-use anyhow::{anyhow, bail, Result};
+use crate::rules::error::{RulesValidationCode, RulesValidationError};
 use serde_json::Value;
 
-pub(crate) fn validate_event(rules: &Rules, event_name: &str, payload: &Value) -> Result<()> {
+pub(crate) fn validate_event(
+    rules: &Rules,
+    event_name: &str,
+    payload: &Value,
+) -> Result<(), RulesValidationError> {
     let Some(rule) = rules
         .events
         .get(event_name)
@@ -17,7 +21,11 @@ pub(crate) fn validate_event(rules: &Rules, event_name: &str, payload: &Value) -
     for (path, field_rule) in &rule.fields {
         let value = lookup_path(payload, path);
         if field_rule.required && !is_present(value) {
-            bail!("missing required field `{path}`");
+            return Err(rules_error(
+                RulesValidationCode::RequiredFieldMissing,
+                format!("missing required field `{path}`"),
+                Some(path),
+            ));
         }
 
         if let Some(value) = value.filter(|value| !value.is_null()) {
@@ -30,7 +38,11 @@ pub(crate) fn validate_event(rules: &Rules, event_name: &str, payload: &Value) -
     validate_conditional_rules(payload, &rule.rules)
 }
 
-fn validate_field_type(path: &str, field_rule: &CompiledFieldRule, value: &Value) -> Result<()> {
+fn validate_field_type(
+    path: &str,
+    field_rule: &CompiledFieldRule,
+    value: &Value,
+) -> Result<(), RulesValidationError> {
     let Some(field_type) = field_rule.field_type() else {
         return Ok(());
     };
@@ -47,11 +59,19 @@ fn validate_field_type(path: &str, field_rule: &CompiledFieldRule, value: &Value
     if valid {
         Ok(())
     } else {
-        bail!("field `{path}` expected type `{field_type:?}`");
+        Err(rules_error(
+            RulesValidationCode::FieldTypeMismatch,
+            format!("field `{path}` expected type `{field_type:?}`"),
+            Some(path),
+        ))
     }
 }
 
-fn validate_enum(path: &str, field_rule: &CompiledFieldRule, value: &Value) -> Result<()> {
+fn validate_enum(
+    path: &str,
+    field_rule: &CompiledFieldRule,
+    value: &Value,
+) -> Result<(), RulesValidationError> {
     let Some(StringConstraints {
         enum_values: Some(enum_values),
     }) = (match field_rule.constraints.as_ref() {
@@ -63,7 +83,11 @@ fn validate_enum(path: &str, field_rule: &CompiledFieldRule, value: &Value) -> R
     };
 
     let Some(actual) = value.as_str() else {
-        bail!("field `{path}` must be a string to use enum");
+        return Err(rules_error(
+            RulesValidationCode::FieldTypeMismatch,
+            format!("field `{path}` must be a string to use enum"),
+            Some(path),
+        ));
     };
 
     if enum_values
@@ -72,11 +96,19 @@ fn validate_enum(path: &str, field_rule: &CompiledFieldRule, value: &Value) -> R
     {
         Ok(())
     } else {
-        bail!("field `{path}` must be one of [{}]", enum_values.join(", "))
+        Err(rules_error(
+            RulesValidationCode::EnumValueInvalid,
+            format!("field `{path}` must be one of [{}]", enum_values.join(", ")),
+            Some(path),
+        ))
     }
 }
 
-fn validate_number_rules(path: &str, field_rule: &CompiledFieldRule, value: &Value) -> Result<()> {
+fn validate_number_rules(
+    path: &str,
+    field_rule: &CompiledFieldRule,
+    value: &Value,
+) -> Result<(), RulesValidationError> {
     let Some(NumericConstraints { gt, gte, lt, lte }) = (match field_rule.constraints.as_ref() {
         Some(FieldConstraints::Number(constraints)) => Some(constraints),
         Some(FieldConstraints::Integer(constraints)) => Some(constraints),
@@ -85,40 +117,67 @@ fn validate_number_rules(path: &str, field_rule: &CompiledFieldRule, value: &Val
         return Ok(());
     };
 
-    let number = value
-        .as_f64()
-        .ok_or_else(|| anyhow!("field `{path}` could not be represented as f64"))?;
+    let Some(number) = value.as_f64() else {
+        return Err(rules_error(
+            RulesValidationCode::NumberParseFailed,
+            format!("field `{path}` could not be represented as f64"),
+            Some(path),
+        ));
+    };
 
     if let Some(gt) = gt {
         if number <= *gt {
-            bail!("field `{path}` must be greater than {gt}");
+            return Err(rules_error(
+                RulesValidationCode::NumberConstraintFailed,
+                format!("field `{path}` must be greater than {gt}"),
+                Some(path),
+            ));
         }
     }
     if let Some(gte) = gte {
         if number < *gte {
-            bail!("field `{path}` must be greater than or equal to {gte}");
+            return Err(rules_error(
+                RulesValidationCode::NumberConstraintFailed,
+                format!("field `{path}` must be greater than or equal to {gte}"),
+                Some(path),
+            ));
         }
     }
     if let Some(lt) = lt {
         if number >= *lt {
-            bail!("field `{path}` must be less than {lt}");
+            return Err(rules_error(
+                RulesValidationCode::NumberConstraintFailed,
+                format!("field `{path}` must be less than {lt}"),
+                Some(path),
+            ));
         }
     }
     if let Some(lte) = lte {
         if number > *lte {
-            bail!("field `{path}` must be less than or equal to {lte}");
+            return Err(rules_error(
+                RulesValidationCode::NumberConstraintFailed,
+                format!("field `{path}` must be less than or equal to {lte}"),
+                Some(path),
+            ));
         }
     }
 
     Ok(())
 }
 
-fn validate_conditional_rules(payload: &Value, rules: &CompiledConditionalRules) -> Result<()> {
+fn validate_conditional_rules(
+    payload: &Value,
+    rules: &CompiledConditionalRules,
+) -> Result<(), RulesValidationError> {
     for rule in &rules.required_if {
         if condition_matches(payload, rule) {
             for field in &rule.fields {
                 if !is_present(lookup_path(payload, field)) {
-                    bail!("missing required field `{field}`");
+                    return Err(rules_error(
+                        RulesValidationCode::ConditionalRequiredMissing,
+                        format!("missing required field `{field}`"),
+                        Some(field),
+                    ));
                 }
             }
         }
@@ -131,11 +190,23 @@ fn validate_conditional_rules(payload: &Value, rules: &CompiledConditionalRules)
                 .iter()
                 .any(|field| is_present(lookup_path(payload, field)))
         {
-            bail!("at least one field is required: {}", rule.fields.join(", "));
+            return Err(rules_error(
+                RulesValidationCode::ConditionalRequiredMissing,
+                format!("at least one field is required: {}", rule.fields.join(", ")),
+                None::<&str>,
+            ));
         }
     }
 
     Ok(())
+}
+
+fn rules_error(
+    code: RulesValidationCode,
+    message: String,
+    path: Option<impl Into<String>>,
+) -> RulesValidationError {
+    RulesValidationError::new(code, message, path)
 }
 
 fn condition_matches(payload: &Value, rule: &CompiledConditionalRequirement) -> bool {

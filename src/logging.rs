@@ -1,4 +1,5 @@
 use crate::settings::Settings;
+use crate::wal::error::QUARANTINE_LOG_TARGET;
 use anyhow::Result;
 use humantime::format_rfc3339_micros;
 use serde_json::{Map, Value};
@@ -19,11 +20,17 @@ use tracing_subscriber::{fmt, registry::Registry};
 
 const LOG_DIR: &str = "logs";
 const LOG_PREFIX: &str = "ingest4x";
+const QUARANTINE_LOG_DIR: &str = "logs/quarantine";
+const QUARANTINE_LOG_PREFIX: &str = "quarantine";
 
 fn should_emit_log(level: &tracing::Level, configured_level: Option<tracing::Level>) -> bool {
     configured_level
         .map(|max_level| *level <= max_level)
         .unwrap_or(false)
+}
+
+fn should_emit_quarantine_log(target: &str) -> bool {
+    target == QUARANTINE_LOG_TARGET
 }
 
 pub fn init_logging(settings: &Settings) -> Result<()> {
@@ -42,20 +49,39 @@ where
     let logging = &settings.logging;
 
     ensure_log_dir(LOG_DIR)?;
+    ensure_log_dir(QUARANTINE_LOG_DIR)?;
     let (file_writer, file_guard) = tracing_appender::non_blocking(build_rolling_appender(
         LOG_DIR,
         LOG_PREFIX,
         Rotation::DAILY,
         7,
+        "log",
     )?);
-    let log_level = logging.level.as_tracing_level();
-    let console_filter = filter_fn(move |meta| should_emit_log(meta.level(), log_level));
-    let file_filter = filter_fn(move |meta| should_emit_log(meta.level(), log_level));
+    let (quarantine_writer, quarantine_guard) =
+        tracing_appender::non_blocking(build_rolling_appender(
+            QUARANTINE_LOG_DIR,
+            QUARANTINE_LOG_PREFIX,
+            Rotation::DAILY,
+            30,
+            "jsonl",
+        )?);
+    let (console_log_level, file_log_level) = (
+        logging.level.as_tracing_level(),
+        logging.level.as_tracing_level(),
+    );
+    let console_filter = filter_fn(move |meta| {
+        meta.target() != QUARANTINE_LOG_TARGET && should_emit_log(meta.level(), console_log_level)
+    });
+    let file_filter = filter_fn(move |meta| {
+        meta.target() != QUARANTINE_LOG_TARGET && should_emit_log(meta.level(), file_log_level)
+    });
+    let quarantine_filter = filter_fn(move |meta| should_emit_quarantine_log(meta.target()));
 
     match logging.format.as_str() {
         "json" => Registry::default()
             .with(JsonLogLayer::new(console_writer).with_filter(console_filter))
             .with(JsonLogLayer::new(file_writer).with_filter(file_filter))
+            .with(QuarantineJsonLogLayer::new(quarantine_writer).with_filter(quarantine_filter))
             .try_init()?,
         _ => Registry::default()
             .with(
@@ -68,10 +94,11 @@ where
                     .with_writer(file_writer)
                     .with_filter(file_filter),
             )
+            .with(QuarantineJsonLogLayer::new(quarantine_writer).with_filter(quarantine_filter))
             .try_init()?,
     }
 
-    set_logging_guard(file_guard);
+    set_logging_guards(vec![file_guard, quarantine_guard]);
     Ok(())
 }
 
@@ -117,6 +144,41 @@ where
         }
 
         if let Ok(serialized) = serde_json::to_string(&Value::Object(line)) {
+            let mut writer = self.writer.make_writer();
+            let _ = writer.write_all(serialized.as_bytes());
+            let _ = writer.write_all(b"\n");
+            let _ = writer.flush();
+        }
+    }
+}
+
+#[derive(Clone)]
+struct QuarantineJsonLogLayer<W> {
+    writer: Arc<W>,
+}
+
+impl<W> QuarantineJsonLogLayer<W> {
+    fn new(writer: W) -> Self {
+        Self {
+            writer: Arc::new(writer),
+        }
+    }
+}
+
+impl<S, W> Layer<S> for QuarantineJsonLogLayer<W>
+where
+    S: Subscriber,
+    W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut fields = JsonFieldVisitor::default();
+        event.record(&mut fields);
+        let payload = fields
+            .values
+            .remove("record")
+            .unwrap_or_else(|| Value::Object(fields.values));
+
+        if let Ok(serialized) = serde_json::to_string(&payload) {
             let mut writer = self.writer.make_writer();
             let _ = writer.write_all(serialized.as_bytes());
             let _ = writer.write_all(b"\n");
@@ -175,9 +237,9 @@ impl Visit for JsonFieldVisitor {
     }
 }
 
-fn set_logging_guard(guard: WorkerGuard) {
-    static GUARD: std::sync::OnceLock<WorkerGuard> = std::sync::OnceLock::new();
-    let _ = GUARD.set(guard);
+fn set_logging_guards(guards: Vec<WorkerGuard>) {
+    static GUARDS: std::sync::OnceLock<Vec<WorkerGuard>> = std::sync::OnceLock::new();
+    let _ = GUARDS.set(guards);
 }
 
 fn ensure_log_dir(path: &str) -> std::io::Result<()> {
@@ -189,18 +251,62 @@ fn build_rolling_appender(
     prefix: &str,
     rotation: Rotation,
     max_files: usize,
+    suffix: &str,
 ) -> Result<RollingFileAppender> {
     Ok(RollingFileAppender::builder()
         .rotation(rotation)
         .filename_prefix(prefix)
-        .filename_suffix("log")
+        .filename_suffix(suffix)
         .max_log_files(max_files)
         .build(log_dir)?)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::should_emit_log;
+    use super::{should_emit_log, should_emit_quarantine_log, QuarantineJsonLogLayer};
+    use crate::wal::error::QUARANTINE_LOG_TARGET;
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::prelude::*;
+
+    #[derive(Clone, Default)]
+    struct SharedBuffer {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    struct SharedBufferWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl SharedBuffer {
+        fn contents(&self) -> String {
+            String::from_utf8(self.bytes.lock().expect("buffer lock").clone()).expect("utf8")
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedBuffer {
+        type Writer = SharedBufferWriter;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            SharedBufferWriter {
+                bytes: self.bytes.clone(),
+            }
+        }
+    }
+
+    impl Write for SharedBufferWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn log_filter_uses_configured_max_level() {
@@ -212,5 +318,34 @@ mod tests {
             &tracing::Level::DEBUG,
             Some(tracing::Level::INFO),
         ));
+    }
+
+    #[test]
+    fn quarantine_filter_ignores_configured_level() {
+        assert!(!should_emit_log(&tracing::Level::WARN, None));
+        assert!(should_emit_quarantine_log(QUARANTINE_LOG_TARGET));
+        assert!(!should_emit_quarantine_log("ingest4x::wal::replay"));
+    }
+
+    #[test]
+    fn quarantine_log_layer_writes_record_payload_as_jsonl() {
+        let writer = SharedBuffer::default();
+        let subscriber =
+            tracing_subscriber::registry().with(QuarantineJsonLogLayer::new(writer.clone()));
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(
+                target: QUARANTINE_LOG_TARGET,
+                record = %r#"{"schema":"ingest4x.wal.quarantine.v1","code":"replay_unknown_sink_target"}"#,
+                "wal record quarantined"
+            );
+        });
+
+        let line = writer.contents();
+        let value: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("quarantine jsonl payload");
+        assert_eq!(value["schema"], "ingest4x.wal.quarantine.v1");
+        assert_eq!(value["code"], "replay_unknown_sink_target");
+        assert!(value.get("target").is_none());
     }
 }
