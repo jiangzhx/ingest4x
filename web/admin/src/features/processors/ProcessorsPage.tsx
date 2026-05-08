@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { App, Alert, Button, Result, Space, Spin, Typography } from "antd";
 import { ProcessorScriptDetailModal } from "./ProcessorScriptDetailModal";
 import { ProcessorScriptFormModal } from "./ProcessorScriptFormModal";
@@ -41,6 +41,13 @@ export function ProcessorsPage() {
     editingScript !== null && detailQuery.data?.id === editingScript.id
       ? detailQuery.data
       : null;
+  const editingInitialValues = useMemo(
+    () =>
+      editingDetail === null
+        ? undefined
+        : toProcessorScriptFormValues(editingDetail),
+    [editingDetail],
+  );
   const isInitialLoading = scriptsQuery.isLoading;
   const showInitialError = scriptsQuery.isError && scriptsQuery.data === undefined;
 
@@ -222,11 +229,7 @@ export function ProcessorsPage() {
       <ProcessorScriptFormModal
         open={isCreateOpen || editingScript !== null}
         mode={editingScript === null ? "create" : "edit"}
-        initialValues={
-          editingDetail === null
-            ? undefined
-            : toProcessorScriptFormValues(editingDetail)
-        }
+        initialValues={editingInitialValues}
         confirmLoading={
           createScriptMutation.isPending || updateScriptMutation.isPending
         }

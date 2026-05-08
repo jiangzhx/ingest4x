@@ -190,6 +190,20 @@ test("processor script edit updates existing script through put endpoint", () =>
   );
 });
 
+test("processor script edit keeps draft source when validation rerenders the page", () => {
+  assert.match(processorsPageSource, /useMemo/);
+  assert.match(processorsPageSource, /const editingInitialValues = useMemo/);
+  assert.match(
+    processorsPageSource,
+    /toProcessorScriptFormValues\(editingDetail\)[\s\S]*\[\s*editingDetail\s*\]/,
+  );
+  assert.match(processorsPageSource, /initialValues=\{editingInitialValues\}/);
+  assert.doesNotMatch(
+    processorsPageSource,
+    /initialValues=\{\s*editingDetail === null[\s\S]*toProcessorScriptFormValues\(editingDetail\)[\s\S]*\}/,
+  );
+});
+
 test("processor script form validates Rhai syntax before create and update", () => {
   assert.match(processorApiSource, /validateProcessorScript/);
   assert.match(processorApiSource, /\/api\/admin\/processor-scripts\/validate/);
