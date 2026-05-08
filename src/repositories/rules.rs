@@ -96,7 +96,7 @@ pub type RuleRepositoryResult<T> = std::result::Result<T, RuleRepositoryError>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RuleRepositoryError {
-    ProjectNotFound { appid: String },
+    ProjectNotFound { id: i32 },
     RuleSetNotFound { id: i32 },
     RuleNotFound { id: i32 },
     ParentNotFound { id: i32 },
@@ -312,10 +312,10 @@ impl RuleRepository {
 
     pub async fn assign_rule_set_to_project(
         &self,
-        appid: &str,
+        project_id: i32,
         input: CreateProjectRuleSetInput,
     ) -> RuleRepositoryResult<ProjectRuleSet> {
-        let project = find_project_by_appid(&self.db, appid).await?;
+        let project = find_project_by_id(&self.db, project_id).await?;
         ensure_rule_set_exists(&self.db, input.rule_set_id).await?;
         let now = current_timestamp();
 
@@ -352,9 +352,9 @@ impl RuleRepository {
 
     pub async fn list_project_rule_sets(
         &self,
-        appid: &str,
+        project_id: i32,
     ) -> RuleRepositoryResult<Vec<ProjectRuleSet>> {
-        let project = find_project_by_appid(&self.db, appid).await?;
+        let project = find_project_by_id(&self.db, project_id).await?;
         Ok(project_rule_sets::Entity::find()
             .filter(project_rule_sets::Column::ProjectId.eq(project.id))
             .order_by_asc(project_rule_sets::Column::Id)
@@ -367,10 +367,10 @@ impl RuleRepository {
 
     pub async fn delete_project_rule_set(
         &self,
-        appid: &str,
+        project_id: i32,
         rule_set_id: i32,
     ) -> RuleRepositoryResult<()> {
-        let project = find_project_by_appid(&self.db, appid).await?;
+        let project = find_project_by_id(&self.db, project_id).await?;
         let result = project_rule_sets::Entity::delete_many()
             .filter(project_rule_sets::Column::ProjectId.eq(project.id))
             .filter(project_rule_sets::Column::RuleSetId.eq(rule_set_id))
@@ -382,8 +382,8 @@ impl RuleRepository {
         Ok(())
     }
 
-    pub async fn compile_project_rules(&self, appid: &str) -> RuleRepositoryResult<Rules> {
-        let project = find_project_by_appid(&self.db, appid).await?;
+    pub async fn compile_project_rules(&self, project_id: i32) -> RuleRepositoryResult<Rules> {
+        let project = find_project_by_id(&self.db, project_id).await?;
         let assignments = project_rule_sets::Entity::find()
             .filter(project_rule_sets::Column::ProjectId.eq(project.id))
             .filter(project_rule_sets::Column::Enabled.eq(true))
@@ -488,17 +488,14 @@ fn parse_rule_content(content: &str) -> RuleRepositoryResult<RuleFragment> {
     })
 }
 
-async fn find_project_by_appid(
+async fn find_project_by_id(
     db: &DatabaseConnection,
-    appid: &str,
+    id: i32,
 ) -> RuleRepositoryResult<projects::Model> {
-    projects::Entity::find()
-        .filter(projects::Column::Appid.eq(appid))
+    projects::Entity::find_by_id(id)
         .one(db)
         .await?
-        .ok_or_else(|| RuleRepositoryError::ProjectNotFound {
-            appid: appid.to_string(),
-        })
+        .ok_or(RuleRepositoryError::ProjectNotFound { id })
 }
 
 async fn ensure_rule_set_exists(db: &DatabaseConnection, id: i32) -> RuleRepositoryResult<()> {
@@ -694,7 +691,7 @@ impl From<DbErr> for RuleRepositoryError {
 impl Display for RuleRepositoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ProjectNotFound { appid } => write!(f, "project '{appid}' not found"),
+            Self::ProjectNotFound { id } => write!(f, "project '{id}' not found"),
             Self::RuleSetNotFound { id } => write!(f, "rule set '{id}' not found"),
             Self::RuleNotFound { id } => write!(f, "rule '{id}' not found"),
             Self::ParentNotFound { id } => write!(f, "parent rule '{id}' not found"),

@@ -13,11 +13,11 @@ async fn load_rules() -> Rules {
     let rules = RuleRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_test_token".to_string(),
         })
         .await
         .expect("project should be created");
@@ -26,7 +26,7 @@ async fn load_rules() -> Rules {
         .expect("seed should run");
 
     rules
-        .compile_project_rules("APPID")
+        .compile_project_rules(project.id)
         .await
         .expect("seeded rules should compile")
 }

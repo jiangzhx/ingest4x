@@ -380,25 +380,33 @@ async fn process_record(
         .get("xwhat")
         .and_then(Value::as_str)
         .map(ToString::to_string);
-    let appid = json
+    let event_appid = json
         .get("appid")
         .and_then(Value::as_str)
         .map(ToString::to_string);
-    let Some(appid) = appid else {
+    let Some(_event_appid) = event_appid else {
         return Err(ReplayIssue::missing_appid(xwhat));
     };
-    if !context.project_registry.contains(&appid) {
-        return Err(ReplayIssue::unknown_appid(appid, xwhat));
+    if !context
+        .project_registry
+        .contains_project_id(record.project_id)
+    {
+        return Err(ReplayIssue::unknown_project_id(record.project_id, xwhat));
     }
 
     let rules = context
         .rule_repository
-        .compile_project_rules(&appid)
+        .compile_project_rules(record.project_id)
         .await
-        .map_err(|error| ReplayIssue::from_rule_repository(&appid, error))?;
+        .map_err(|error| ReplayIssue::from_rule_repository(record.project_id, error))?;
     let output = context
         .processor
-        .process_event(&appid, json.clone(), rules, request_context(record))
+        .process_event(
+            record.project_id,
+            json.clone(),
+            rules,
+            request_context(record),
+        )
         .map_err(ReplayIssue::processor_runtime_failed)?;
 
     Ok(output.deliveries)

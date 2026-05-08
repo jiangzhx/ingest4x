@@ -28,7 +28,7 @@ export interface ProcessorScriptDetail extends ProcessorScript {
 
 export interface ProjectProcessor {
   id: number;
-  appid: string;
+  project_id: number;
   processor_script_id: number;
   enabled: boolean;
   created_at: number;

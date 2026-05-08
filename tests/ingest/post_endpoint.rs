@@ -18,6 +18,7 @@ async fn post_ingest_normalizes_and_sends_event() {
     let req = test::TestRequest::post()
         .peer_addr("8.8.8.8:8080".parse::<SocketAddr>().unwrap())
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_test_token"))
         .set_json(json!({
             "appid": "APPID",
             "xwhat": "custom_event",
@@ -83,6 +84,7 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_test_token"))
         .set_json(invalid_payload.clone())
         .to_request();
 
@@ -131,6 +133,7 @@ fn process(event, ctx) {
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_test_token"))
         .set_json(json!({
             "appid": "APPID",
             "xwhat": "custom_event",
@@ -159,6 +162,7 @@ async fn post_ingest_returns_not_found_when_project_is_missing() {
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_test_token"))
         .set_json(json!({
             "appid": "APPID",
             "xwhat": "custom_event",
@@ -174,10 +178,38 @@ async fn post_ingest_returns_not_found_when_project_is_missing() {
     let status_code = resp.status();
     let body = test::read_body(resp).await;
 
-    assert_eq!(status_code, StatusCode::NOT_FOUND);
+    assert_eq!(status_code, StatusCode::UNAUTHORIZED);
     assert_eq!(
         std::str::from_utf8(body.as_ref()).unwrap(),
-        "Project not found"
+        "invalid ingest token"
+    );
+}
+
+#[actix_rt::test]
+async fn post_ingest_requires_ingest_token() {
+    let (app, _testservice) = create_app().await;
+
+    let req = test::TestRequest::post()
+        .uri("/ingest")
+        .set_json(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-1",
+                "os": "ios",
+                "idfa": "idfa-1"
+            }
+        }))
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+    let status_code = resp.status();
+    let body = test::read_body(resp).await;
+
+    assert_eq!(status_code, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        std::str::from_utf8(body.as_ref()).unwrap(),
+        "missing ingest token"
     );
 }
 

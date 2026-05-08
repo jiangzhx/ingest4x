@@ -31,6 +31,10 @@ pub async fn ingest(
         Ok(body) => body,
         Err(issue) => return issue.into_response(),
     };
+    let project = match authenticate_project(&req, &project_registry) {
+        Ok(project) => project,
+        Err(issue) => return issue.into_response(),
+    };
 
     if let Some(issue) = reject_if_payload_too_large(
         body.len(),
@@ -41,7 +45,7 @@ pub async fn ingest(
         return issue.into_response();
     }
 
-    let payload = match validate_ingest_payload(&body, &project_registry) {
+    let payload = match validate_ingest_payload(&body) {
         Ok(payload) => payload,
         Err(issue) => return issue.into_response(),
     };
@@ -49,6 +53,7 @@ pub async fn ingest(
     append_wal_record(
         &req,
         body,
+        project.id,
         payload.appid.as_str(),
         payload.event_name.as_str(),
         &wal,
@@ -91,10 +96,36 @@ struct ValidatedIngestPayload {
     event_name: String,
 }
 
-fn validate_ingest_payload(
-    body: &[u8],
+fn authenticate_project(
+    req: &HttpRequest,
     project_registry: &ProjectRegistryState,
-) -> Result<ValidatedIngestPayload, IngestIssue> {
+) -> Result<crate::repositories::Project, IngestIssue> {
+    let Some(token) = ingest_token_from_request(req) else {
+        return Err(IngestIssue::MissingIngestToken);
+    };
+    project_registry
+        .authenticate(token)
+        .ok_or(IngestIssue::InvalidIngestToken)
+}
+
+fn ingest_token_from_request(req: &HttpRequest) -> Option<&str> {
+    if let Some(value) = req.headers().get("x-ingest-token") {
+        return value
+            .to_str()
+            .ok()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+    }
+
+    let value = req.headers().get("authorization")?.to_str().ok()?.trim();
+    value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn validate_ingest_payload(body: &[u8]) -> Result<ValidatedIngestPayload, IngestIssue> {
     let json = match serde_json::from_slice::<Value>(body) {
         Ok(json) => json,
         Err(err) => {
@@ -113,15 +144,6 @@ fn validate_ingest_payload(
         warn!(xwhat = event_name.as_str(), "missing or invalid appid");
         return Err(IngestIssue::MissingAppid);
     };
-
-    if !project_registry.contains(&appid) {
-        warn!(
-            appid = appid.as_str(),
-            xwhat = event_name.as_str(),
-            "project not found"
-        );
-        return Err(IngestIssue::ProjectNotFound);
-    }
 
     Ok(ValidatedIngestPayload { appid, event_name })
 }
@@ -144,11 +166,12 @@ enum IngestIssue {
     // intentionally keep the current compatibility surface.
     MethodNotAllowed,
     MissingData,
+    MissingIngestToken,
+    InvalidIngestToken,
     InvalidBase64 { message: String },
     PayloadTooLarge,
     InvalidJson { message: String },
     MissingAppid,
-    ProjectNotFound,
     WalAppendFailed,
 }
 
@@ -157,11 +180,12 @@ impl IngestIssue {
         match self {
             Self::MethodNotAllowed => "ingest_method_not_allowed",
             Self::MissingData => "ingest_missing_data",
+            Self::MissingIngestToken => "ingest_missing_token",
+            Self::InvalidIngestToken => "ingest_invalid_token",
             Self::InvalidBase64 { .. } => "ingest_invalid_base64",
             Self::PayloadTooLarge => "ingest_payload_too_large",
             Self::InvalidJson { .. } => "ingest_invalid_json",
             Self::MissingAppid => "ingest_missing_appid",
-            Self::ProjectNotFound => "ingest_project_not_found",
             Self::WalAppendFailed => "ingest_wal_append_failed",
         }
     }
@@ -170,6 +194,8 @@ impl IngestIssue {
         match self {
             Self::MethodNotAllowed => HttpResponse::MethodNotAllowed().finish(),
             Self::MissingData => HttpResponse::BadRequest().body("missing query param: data"),
+            Self::MissingIngestToken => HttpResponse::Unauthorized().body("missing ingest token"),
+            Self::InvalidIngestToken => HttpResponse::Unauthorized().body("invalid ingest token"),
             Self::InvalidBase64 { message } => {
                 HttpResponse::BadRequest().body(format!("invalid base64 data: {message}"))
             }
@@ -178,7 +204,6 @@ impl IngestIssue {
                 HttpResponse::BadRequest().body(format!("invalid json payload: {message}"))
             }
             Self::MissingAppid => HttpResponse::BadRequest().body("missing or invalid appid"),
-            Self::ProjectNotFound => HttpResponse::NotFound().body("Project not found"),
             Self::WalAppendFailed => HttpResponse::ServiceUnavailable().json(serde_json::json!({
                 "error": "wal_capacity_exceeded",
                 "message": "WAL disk space is insufficient or unavailable"
@@ -190,6 +215,7 @@ impl IngestIssue {
 async fn append_wal_record(
     req: &HttpRequest,
     body: Vec<u8>,
+    project_id: i32,
     appid: &str,
     event_name: &str,
     wal: &WalWriter,
@@ -205,6 +231,7 @@ async fn append_wal_record(
         req.uri().query().map(ToString::to_string),
         get_ip(req),
         request_headers(req),
+        project_id,
         body,
     );
 
@@ -256,6 +283,12 @@ fn observe_ingest_event(
 fn request_headers(req: &HttpRequest) -> BTreeMap<String, String> {
     req.headers()
         .iter()
+        .filter(|(name, _)| {
+            !matches!(
+                name.as_str().to_ascii_lowercase().as_str(),
+                "authorization" | "x-ingest-token"
+            )
+        })
         .filter_map(|(name, value)| {
             value
                 .to_str()

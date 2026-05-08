@@ -75,12 +75,12 @@ export function useAssignProjectProcessorMutation() {
 
   return useMutation({
     mutationFn: ({
-      appid,
+      projectId,
       payload,
     }: {
-      appid: string;
+      projectId: number;
       payload: AssignProjectProcessorPayload;
-    }) => assignProjectProcessor(appid, payload),
+    }) => assignProjectProcessor(projectId, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: projectProcessorsQueryKey });
     },
@@ -91,7 +91,7 @@ export function useDeleteProjectProcessorMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (appid: string) => deleteProjectProcessor(appid),
+    mutationFn: (projectId: number) => deleteProjectProcessor(projectId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: projectProcessorsQueryKey });
     },

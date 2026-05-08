@@ -58,14 +58,15 @@ async fn admin_can_create_rule_set_rule_and_assign_rule_set_to_project() {
             with_admin_password(test::TestRequest::post())
                 .uri("/api/admin/projects")
                 .set_json(json!({
-                    "appid": "admin-rules-app",
                     "name": "Admin Rules App",
-                    "enabled": true
+                    "enabled": true,
+                    "ingest_token": "igx_admin_rules_app"
                 }))
                 .to_request(),
         )
         .await;
         assert_eq!(create_project.status(), StatusCode::CREATED);
+        let project: Value = test::read_body_json(create_project).await;
 
         let create_rule_set = test::call_service(
             &app,
@@ -109,7 +110,7 @@ async fn admin_can_create_rule_set_rule_and_assign_rule_set_to_project() {
         let assign = test::call_service(
             &app,
             with_admin_password(test::TestRequest::put())
-                .uri("/api/admin/projects/admin-rules-app/rule-sets")
+                .uri(format!("/api/admin/projects/{}/rule-sets", project["id"]).as_str())
                 .set_json(json!({
                     "rule_set_id": rule_set["id"],
                     "enabled": true
@@ -129,7 +130,7 @@ async fn admin_can_create_rule_set_rule_and_assign_rule_set_to_project() {
         let list_assignments = test::call_service(
             &app,
             with_admin_password(test::TestRequest::get())
-                .uri("/api/admin/projects/admin-rules-app/rule-sets")
+                .uri(format!("/api/admin/projects/{}/rule-sets", project["id"]).as_str())
                 .to_request(),
         )
         .await;
@@ -160,7 +161,7 @@ async fn admin_can_create_rule_set_rule_and_assign_rule_set_to_project() {
         let replace_assign = test::call_service(
             &app,
             with_admin_password(test::TestRequest::put())
-                .uri("/api/admin/projects/admin-rules-app/rule-sets")
+                .uri(format!("/api/admin/projects/{}/rule-sets", project["id"]).as_str())
                 .set_json(json!({
                     "rule_set_id": second_rule_set["id"],
                     "enabled": true
@@ -173,7 +174,7 @@ async fn admin_can_create_rule_set_rule_and_assign_rule_set_to_project() {
         let replaced_assignments = test::call_service(
             &app,
             with_admin_password(test::TestRequest::get())
-                .uri("/api/admin/projects/admin-rules-app/rule-sets")
+                .uri(format!("/api/admin/projects/{}/rule-sets", project["id"]).as_str())
                 .to_request(),
         )
         .await;
@@ -205,7 +206,7 @@ async fn openapi_json_includes_admin_rules_paths() {
         assert_eq!(status, StatusCode::OK);
         assert!(body["paths"]["/api/admin/rule-sets"].is_object());
         assert!(body["paths"]["/api/admin/rule-sets/{rule_set_id}/rules"].is_object());
-        assert!(body["paths"]["/api/admin/projects/{appid}/rule-sets"].is_object());
+        assert!(body["paths"]["/api/admin/projects/{project_id}/rule-sets"].is_object());
     })
     .await;
 }

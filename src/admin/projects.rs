@@ -1,7 +1,7 @@
 use crate::ingest::processor::ProcessorRegistryState as ProcessorRuntimeState;
 use crate::repositories::{
-    CreateProjectInput, CreateProjectRuleSetInput, ProcessorRepository, Project, ProjectRepository,
-    ProjectRepositoryError, RuleRepository, UpdateProjectInput,
+    generate_ingest_token, CreateProjectInput, CreateProjectRuleSetInput, ProcessorRepository,
+    Project, ProjectRepository, ProjectRepositoryError, RuleRepository, UpdateProjectInput,
 };
 use crate::services::ProjectRegistryState;
 use actix_web::web::{self, Data, Json, Path, ServiceConfig};
@@ -12,9 +12,9 @@ use utoipa::{OpenApi, ToSchema};
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct CreateProjectRequest {
-    appid: String,
     name: String,
     enabled: bool,
+    ingest_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -25,11 +25,19 @@ struct UpdateProjectRequest {
 
 #[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
 struct ProjectResponse {
-    appid: String,
+    id: i32,
     name: String,
     enabled: bool,
+    ingest_token_prefix: String,
     created_at: i64,
     updated_at: i64,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
+struct CreateProjectResponse {
+    #[serde(flatten)]
+    project: ProjectResponse,
+    ingest_token: String,
 }
 
 #[derive(OpenApi)]
@@ -42,7 +50,7 @@ struct ProjectResponse {
         delete_project
     ),
     components(
-        schemas(CreateProjectRequest, UpdateProjectRequest, ProjectResponse)
+        schemas(CreateProjectRequest, UpdateProjectRequest, ProjectResponse, CreateProjectResponse)
     ),
     tags(
         (name = "admin.projects", description = "Admin project CRUD endpoints")
@@ -55,9 +63,9 @@ pub fn configure(cfg: &mut ServiceConfig) {
         web::scope("/projects")
             .route("", web::get().to(list_projects))
             .route("", web::post().to(create_project))
-            .route("/{appid}", web::get().to(get_project))
-            .route("/{appid}", web::put().to(update_project))
-            .route("/{appid}", web::delete().to(delete_project)),
+            .route("/{project_id}", web::get().to(get_project))
+            .route("/{project_id}", web::put().to(update_project))
+            .route("/{project_id}", web::delete().to(delete_project)),
     );
 }
 
@@ -84,10 +92,10 @@ async fn list_projects(repository: Data<ProjectRepository>) -> HttpResponse {
 
 #[utoipa::path(
     get,
-    path = "/api/admin/projects/{appid}",
+    path = "/api/admin/projects/{project_id}",
     tag = "admin.projects",
     params(
-        ("appid" = String, Path, description = "Project appid")
+        ("project_id" = i32, Path, description = "Project id")
     ),
     responses(
         (status = 200, description = "Project details", body = ProjectResponse),
@@ -95,8 +103,8 @@ async fn list_projects(repository: Data<ProjectRepository>) -> HttpResponse {
         (status = 500, description = "Repository failure", body = String)
     )
 )]
-async fn get_project(appid: Path<String>, repository: Data<ProjectRepository>) -> HttpResponse {
-    match repository.get_project(&appid).await {
+async fn get_project(project_id: Path<i32>, repository: Data<ProjectRepository>) -> HttpResponse {
+    match repository.get_project(*project_id).await {
         Ok(Some(project)) => HttpResponse::Ok().json(ProjectResponse::from(project)),
         Ok(None) => HttpResponse::NotFound().finish(),
         Err(error) => map_repository_error(error),
@@ -109,9 +117,9 @@ async fn get_project(appid: Path<String>, repository: Data<ProjectRepository>) -
     tag = "admin.projects",
     request_body = CreateProjectRequest,
     responses(
-        (status = 201, description = "Project created", body = ProjectResponse),
+        (status = 201, description = "Project created", body = CreateProjectResponse),
         (status = 400, description = "Invalid JSON payload"),
-        (status = 409, description = "Project appid already exists", body = String),
+        (status = 409, description = "Project ingest token already exists", body = String),
         (status = 500, description = "Repository failure", body = String)
     )
 )]
@@ -123,31 +131,46 @@ async fn create_project(
     processor: Data<ProcessorRuntimeState>,
     request: Json<CreateProjectRequest>,
 ) -> HttpResponse {
+    let request = request.into_inner();
+    let ingest_token = request
+        .ingest_token
+        .clone()
+        .filter(|token| !token.trim().is_empty())
+        .unwrap_or_else(generate_ingest_token);
     match repository
-        .create_project(CreateProjectInput::from(request.into_inner()))
+        .create_project(CreateProjectInput::from_request(
+            request,
+            ingest_token.clone(),
+        ))
         .await
     {
         Ok(project) => {
-            let appid = project.appid.clone();
-            assign_default_rule_set_to_project(&rule_repository, &appid).await;
-            if let Err(error) = processor_repository.assign_default_processor(&appid).await {
+            let project_id = project.id;
+            assign_default_rule_set_to_project(&rule_repository, project_id).await;
+            if let Err(error) = processor_repository
+                .assign_default_processor(project_id)
+                .await
+            {
                 return HttpResponse::InternalServerError().body(error.to_string());
             }
             if let Err(error) = processor.refresh_if_needed().await {
-                warn!("processor registry refresh failed after create for '{appid}': {error}");
+                warn!("processor registry refresh failed after create for '{project_id}': {error}");
             }
             finalize_success_response(
-                HttpResponse::Created().json(ProjectResponse::from(project)),
+                HttpResponse::Created().json(CreateProjectResponse {
+                    project: ProjectResponse::from(project),
+                    ingest_token,
+                }),
                 registry.refresh_if_needed().await,
                 "create",
-                &appid,
+                project_id,
             )
         }
         Err(error) => map_repository_error(error),
     }
 }
 
-async fn assign_default_rule_set_to_project(rule_repository: &RuleRepository, appid: &str) {
+async fn assign_default_rule_set_to_project(rule_repository: &RuleRepository, project_id: i32) {
     let Ok(rule_sets) = rule_repository.list_rule_sets().await else {
         return;
     };
@@ -155,7 +178,7 @@ async fn assign_default_rule_set_to_project(rule_repository: &RuleRepository, ap
     if let Some(rule_set) = rule_sets.into_iter().find(|rule_set| rule_set.enabled) {
         let _ = rule_repository
             .assign_rule_set_to_project(
-                appid,
+                project_id,
                 CreateProjectRuleSetInput {
                     rule_set_id: rule_set.id,
                     enabled: true,
@@ -167,10 +190,10 @@ async fn assign_default_rule_set_to_project(rule_repository: &RuleRepository, ap
 
 #[utoipa::path(
     put,
-    path = "/api/admin/projects/{appid}",
+    path = "/api/admin/projects/{project_id}",
     tag = "admin.projects",
     params(
-        ("appid" = String, Path, description = "Project appid")
+        ("project_id" = i32, Path, description = "Project id")
     ),
     request_body = UpdateProjectRequest,
     responses(
@@ -181,22 +204,22 @@ async fn assign_default_rule_set_to_project(rule_repository: &RuleRepository, ap
     )
 )]
 async fn update_project(
-    appid: Path<String>,
+    project_id: Path<i32>,
     repository: Data<ProjectRepository>,
     registry: Data<ProjectRegistryState>,
     request: Json<UpdateProjectRequest>,
 ) -> HttpResponse {
     match repository
-        .update_project(&appid, UpdateProjectInput::from(request.into_inner()))
+        .update_project(*project_id, UpdateProjectInput::from(request.into_inner()))
         .await
     {
         Ok(project) => {
-            let appid = project.appid.clone();
+            let project_id = project.id;
             finalize_success_response(
                 HttpResponse::Ok().json(ProjectResponse::from(project)),
                 registry.refresh_if_needed().await,
                 "update",
-                &appid,
+                project_id,
             )
         }
         Err(error) => map_repository_error(error),
@@ -205,10 +228,10 @@ async fn update_project(
 
 #[utoipa::path(
     delete,
-    path = "/api/admin/projects/{appid}",
+    path = "/api/admin/projects/{project_id}",
     tag = "admin.projects",
     params(
-        ("appid" = String, Path, description = "Project appid")
+        ("project_id" = i32, Path, description = "Project id")
     ),
     responses(
         (status = 204, description = "Project deleted"),
@@ -217,16 +240,16 @@ async fn update_project(
     )
 )]
 async fn delete_project(
-    appid: Path<String>,
+    project_id: Path<i32>,
     repository: Data<ProjectRepository>,
     registry: Data<ProjectRegistryState>,
 ) -> HttpResponse {
-    match repository.delete_project(&appid).await {
+    match repository.delete_project(*project_id).await {
         Ok(()) => finalize_success_response(
             HttpResponse::NoContent().finish(),
             registry.refresh_if_needed().await,
             "delete",
-            &appid,
+            *project_id,
         ),
         Err(error) => map_repository_error(error),
     }
@@ -236,10 +259,10 @@ fn finalize_success_response(
     response: HttpResponse,
     refresh_result: crate::repositories::ProjectRepositoryResult<bool>,
     operation: &str,
-    appid: &str,
+    project_id: i32,
 ) -> HttpResponse {
     if let Err(error) = refresh_result {
-        warn!("project registry refresh failed after {operation} for '{appid}': {error}");
+        warn!("project registry refresh failed after {operation} for '{project_id}': {error}");
     }
 
     response
@@ -248,19 +271,19 @@ fn finalize_success_response(
 fn map_repository_error(error: ProjectRepositoryError) -> HttpResponse {
     match error {
         ProjectRepositoryError::NotFound { .. } => HttpResponse::NotFound().finish(),
-        ProjectRepositoryError::DuplicateAppid { .. } => {
+        ProjectRepositoryError::DuplicateIngestToken { .. } => {
             HttpResponse::Conflict().body(error.to_string())
         }
         _ => HttpResponse::InternalServerError().body(error.to_string()),
     }
 }
 
-impl From<CreateProjectRequest> for CreateProjectInput {
-    fn from(value: CreateProjectRequest) -> Self {
+impl CreateProjectInput {
+    fn from_request(value: CreateProjectRequest, ingest_token: String) -> Self {
         Self {
-            appid: value.appid,
             name: value.name,
             enabled: value.enabled,
+            ingest_token,
         }
     }
 }
@@ -277,9 +300,10 @@ impl From<UpdateProjectRequest> for UpdateProjectInput {
 impl From<Project> for ProjectResponse {
     fn from(value: Project) -> Self {
         Self {
-            appid: value.appid,
+            id: value.id,
             name: value.name,
             enabled: value.enabled,
+            ingest_token_prefix: value.ingest_token_prefix,
             created_at: value.created_at,
             updated_at: value.updated_at,
         }
@@ -296,7 +320,7 @@ mod tests {
             HttpResponse::Created().finish(),
             Err(ProjectRepositoryError::VersionMetadataMissing),
             "create",
-            "app-1",
+            1,
         );
 
         assert_eq!(response.status(), actix_web::http::StatusCode::CREATED);

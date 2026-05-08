@@ -37,7 +37,7 @@ pub struct ProcessorOutput {
 pub trait ProcessorRuntime: Send + Sync {
     fn process_event(
         &self,
-        appid: &str,
+        project_id: i32,
         event: Value,
         rules: Rules,
         request: ProcessorRequestContext,
@@ -92,7 +92,7 @@ impl ProcessorState {
 impl ProcessorRuntime for ProcessorState {
     fn process_event(
         &self,
-        _appid: &str,
+        _project_id: i32,
         event: Value,
         rules: Rules,
         request: ProcessorRequestContext,
@@ -169,25 +169,25 @@ impl ProcessorRegistryState {
 impl ProcessorRuntime for ProcessorRegistryState {
     fn process_event(
         &self,
-        appid: &str,
+        project_id: i32,
         event: Value,
         rules: Rules,
         request: ProcessorRequestContext,
     ) -> Result<ProcessorOutput> {
         self.current_router()
-            .processor_for_appid(appid)
+            .processor_for_project(project_id)
             .process(event, rules, request)
     }
 }
 
 struct ProcessorRouter {
     default: ProcessorState,
-    projects: HashMap<String, ProcessorState>,
+    projects: HashMap<i32, ProcessorState>,
 }
 
 impl ProcessorRouter {
-    fn processor_for_appid(&self, appid: &str) -> &ProcessorState {
-        self.projects.get(appid).unwrap_or(&self.default)
+    fn processor_for_project(&self, project_id: i32) -> &ProcessorState {
+        self.projects.get(&project_id).unwrap_or(&self.default)
     }
 }
 
@@ -205,8 +205,8 @@ async fn load_processor_router_snapshot(
         }
 
         let mut projects = HashMap::new();
-        for (appid, script) in project_scripts {
-            projects.insert(appid, compile_runtime_script(script)?);
+        for (project_id, script) in project_scripts {
+            projects.insert(project_id, compile_runtime_script(script)?);
         }
 
         return Ok((ProcessorRouter { default, projects }, version_after));

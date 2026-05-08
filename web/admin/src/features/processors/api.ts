@@ -38,7 +38,7 @@ type ProcessorScriptDetailResponse = ProcessorScriptResponse & {
 
 type ProjectProcessorResponse = {
   id?: unknown;
-  appid?: unknown;
+  project_id?: unknown;
   processor_script_id?: unknown;
   enabled?: unknown;
   created_at?: unknown;
@@ -172,7 +172,7 @@ function normalizeProjectProcessorResponse(
 
   return {
     id: normalizePositiveInteger(value.id, "id"),
-    appid: normalizeRequiredString(value.appid, "appid"),
+    project_id: normalizePositiveInteger(value.project_id, "project_id"),
     processor_script_id: normalizePositiveInteger(
       value.processor_script_id,
       "processor_script_id",
@@ -253,10 +253,10 @@ export async function listProjectProcessors(): Promise<ProjectProcessor[]> {
 }
 
 export async function assignProjectProcessor(
-  appid: string,
+  projectId: number,
   payload: AssignProjectProcessorPayload,
 ): Promise<void> {
-  await request(`/api/admin/projects/${encodeURIComponent(appid)}/processor`, {
+  await request(`/api/admin/projects/${projectId}/processor`, {
     method: "PUT",
     headers: {
       "content-type": "application/json",
@@ -265,8 +265,8 @@ export async function assignProjectProcessor(
   });
 }
 
-export async function deleteProjectProcessor(appid: string): Promise<void> {
-  await request(`/api/admin/projects/${encodeURIComponent(appid)}/processor`, {
+export async function deleteProjectProcessor(projectId: number): Promise<void> {
+  await request(`/api/admin/projects/${projectId}/processor`, {
     method: "DELETE",
   });
 }

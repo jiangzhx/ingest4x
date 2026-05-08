@@ -319,9 +319,9 @@ async fn delete_rule(path: Path<(i32, i32)>, repository: Data<RuleRepository>) -
 
 #[utoipa::path(
     get,
-    path = "/api/admin/projects/{appid}/rule-sets",
+    path = "/api/admin/projects/{project_id}/rule-sets",
     tag = "admin.rules",
-    params(("appid" = String, Path, description = "Project appid")),
+    params(("project_id" = i32, Path, description = "Project id")),
     responses(
         (status = 200, description = "List project rule set assignments", body = [ProjectRuleSet]),
         (status = 404, description = "Project not found"),
@@ -329,10 +329,10 @@ async fn delete_rule(path: Path<(i32, i32)>, repository: Data<RuleRepository>) -
     )
 )]
 async fn list_project_rule_sets(
-    appid: Path<String>,
+    project_id: Path<i32>,
     repository: Data<RuleRepository>,
 ) -> HttpResponse {
-    match repository.list_project_rule_sets(&appid).await {
+    match repository.list_project_rule_sets(*project_id).await {
         Ok(assignments) => HttpResponse::Ok().json(assignments),
         Err(error) => map_repository_error(error),
     }
@@ -340,9 +340,9 @@ async fn list_project_rule_sets(
 
 #[utoipa::path(
     put,
-    path = "/api/admin/projects/{appid}/rule-sets",
+    path = "/api/admin/projects/{project_id}/rule-sets",
     tag = "admin.rules",
-    params(("appid" = String, Path, description = "Project appid")),
+    params(("project_id" = i32, Path, description = "Project id")),
     request_body = AssignProjectRuleSetRequest,
     responses(
         (status = 200, description = "Rule set assigned to project", body = ProjectRuleSet),
@@ -351,14 +351,14 @@ async fn list_project_rule_sets(
     )
 )]
 async fn assign_project_rule_set(
-    appid: Path<String>,
+    project_id: Path<i32>,
     repository: Data<RuleRepository>,
     request: Json<AssignProjectRuleSetRequest>,
 ) -> HttpResponse {
     let request = request.into_inner();
     match repository
         .assign_rule_set_to_project(
-            &appid,
+            *project_id,
             CreateProjectRuleSetInput {
                 rule_set_id: request.rule_set_id,
                 enabled: request.enabled,
@@ -373,10 +373,10 @@ async fn assign_project_rule_set(
 
 #[utoipa::path(
     delete,
-    path = "/api/admin/projects/{appid}/rule-sets/{rule_set_id}",
+    path = "/api/admin/projects/{project_id}/rule-sets/{rule_set_id}",
     tag = "admin.rules",
     params(
-        ("appid" = String, Path, description = "Project appid"),
+        ("project_id" = i32, Path, description = "Project id"),
         ("rule_set_id" = i32, Path, description = "Rule set id")
     ),
     responses(
@@ -386,12 +386,12 @@ async fn assign_project_rule_set(
     )
 )]
 async fn delete_project_rule_set(
-    path: Path<(String, i32)>,
+    path: Path<(i32, i32)>,
     repository: Data<RuleRepository>,
 ) -> HttpResponse {
-    let (appid, rule_set_id) = path.into_inner();
+    let (project_id, rule_set_id) = path.into_inner();
     match repository
-        .delete_project_rule_set(&appid, rule_set_id)
+        .delete_project_rule_set(project_id, rule_set_id)
         .await
     {
         Ok(()) => HttpResponse::NoContent().finish(),

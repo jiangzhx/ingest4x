@@ -13,11 +13,11 @@ async fn project_bound_rule_set_compiles_inherited_rule_for_xwhat() {
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-1".to_string(),
             name: "App 1".to_string(),
             enabled: true,
+            ingest_token: "igx_app_1".to_string(),
         })
         .await
         .expect("project should be created");
@@ -72,7 +72,7 @@ fields:
 
     rules
         .assign_rule_set_to_project(
-            "app-1",
+            project.id,
             CreateProjectRuleSetInput {
                 rule_set_id: rule_set.id,
                 enabled: true,
@@ -82,7 +82,7 @@ fields:
         .expect("rule set should be assigned");
 
     let compiled = rules
-        .compile_project_rules("app-1")
+        .compile_project_rules(project.id)
         .await
         .expect("project rules should compile");
 
@@ -163,11 +163,11 @@ async fn nested_common_rule_does_not_create_duplicate_default_event() {
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-1".to_string(),
             name: "App 1".to_string(),
             enabled: true,
+            ingest_token: "igx_app_1".to_string(),
         })
         .await
         .expect("project should be created");
@@ -237,7 +237,7 @@ fields:
 
     rules
         .assign_rule_set_to_project(
-            "app-1",
+            project.id,
             CreateProjectRuleSetInput {
                 rule_set_id: rule_set.id,
                 enabled: true,
@@ -247,7 +247,7 @@ fields:
         .expect("rule set should be assigned");
 
     let compiled = rules
-        .compile_project_rules("app-1")
+        .compile_project_rules(project.id)
         .await
         .expect("project rules should compile without duplicate default");
 
@@ -272,11 +272,11 @@ async fn disabled_common_rule_does_not_contribute_to_child_event() {
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-1".to_string(),
             name: "App 1".to_string(),
             enabled: true,
+            ingest_token: "igx_app_1".to_string(),
         })
         .await
         .expect("project should be created");
@@ -346,7 +346,7 @@ fields:
 
     rules
         .assign_rule_set_to_project(
-            "app-1",
+            project.id,
             CreateProjectRuleSetInput {
                 rule_set_id: rule_set.id,
                 enabled: true,
@@ -356,7 +356,7 @@ fields:
         .expect("rule set should be assigned");
 
     let compiled = rules
-        .compile_project_rules("app-1")
+        .compile_project_rules(project.id)
         .await
         .expect("project rules should compile");
 
@@ -380,11 +380,11 @@ async fn common_rule_without_wildcard_flag_is_not_runtime_default() {
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-1".to_string(),
             name: "App 1".to_string(),
             enabled: true,
+            ingest_token: "igx_app_1".to_string(),
         })
         .await
         .expect("project should be created");
@@ -412,7 +412,7 @@ async fn common_rule_without_wildcard_flag_is_not_runtime_default() {
 
     rules
         .assign_rule_set_to_project(
-            "app-1",
+            project.id,
             CreateProjectRuleSetInput {
                 rule_set_id: rule_set.id,
                 enabled: true,
@@ -422,7 +422,7 @@ async fn common_rule_without_wildcard_flag_is_not_runtime_default() {
         .expect("rule set should be assigned");
 
     let compiled = rules
-        .compile_project_rules("app-1")
+        .compile_project_rules(project.id)
         .await
         .expect("project rules should compile");
 
@@ -603,11 +603,11 @@ async fn assigning_second_rule_set_replaces_project_rule_set() {
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-1".to_string(),
             name: "App 1".to_string(),
             enabled: true,
+            ingest_token: "igx_app_1".to_string(),
         })
         .await
         .expect("project should be created");
@@ -631,7 +631,7 @@ async fn assigning_second_rule_set_replaces_project_rule_set() {
 
     rules
         .assign_rule_set_to_project(
-            "app-1",
+            project.id,
             CreateProjectRuleSetInput {
                 rule_set_id: first_rule_set.id,
                 enabled: true,
@@ -641,7 +641,7 @@ async fn assigning_second_rule_set_replaces_project_rule_set() {
         .expect("first rule set should be assigned");
     rules
         .assign_rule_set_to_project(
-            "app-1",
+            project.id,
             CreateProjectRuleSetInput {
                 rule_set_id: second_rule_set.id,
                 enabled: true,
@@ -651,7 +651,7 @@ async fn assigning_second_rule_set_replaces_project_rule_set() {
         .expect("second rule set should replace first");
 
     let assignments = rules
-        .list_project_rule_sets("app-1")
+        .list_project_rule_sets(project.id)
         .await
         .expect("project rule set should list");
 
@@ -776,11 +776,11 @@ async fn project_rule_set_assignment_delete_and_disabled_assignment_are_respecte
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-1".to_string(),
             name: "App 1".to_string(),
             enabled: true,
+            ingest_token: "igx_app_1".to_string(),
         })
         .await
         .expect("project should be created");
@@ -812,7 +812,7 @@ async fn project_rule_set_assignment_delete_and_disabled_assignment_are_respecte
 
     rules
         .assign_rule_set_to_project(
-            "app-1",
+            project.id,
             CreateProjectRuleSetInput {
                 rule_set_id: rule_set.id,
                 enabled: false,
@@ -822,24 +822,24 @@ async fn project_rule_set_assignment_delete_and_disabled_assignment_are_respecte
         .expect("disabled assignment should be created");
 
     let compiled = rules
-        .compile_project_rules("app-1")
+        .compile_project_rules(project.id)
         .await
         .expect("project rules should compile");
     assert!(!compiled.can_validate("install"));
 
     rules
-        .delete_project_rule_set("app-1", rule_set.id)
+        .delete_project_rule_set(project.id, rule_set.id)
         .await
         .expect("assignment should delete");
 
     let assignments = rules
-        .list_project_rule_sets("app-1")
+        .list_project_rule_sets(project.id)
         .await
         .expect("assignments should list");
     assert!(assignments.is_empty());
 
     let error = rules
-        .delete_project_rule_set("app-1", rule_set.id)
+        .delete_project_rule_set(project.id, rule_set.id)
         .await
         .expect_err("missing assignment should fail");
     assert!(error.to_string().contains("rule set"));

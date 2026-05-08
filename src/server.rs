@@ -513,12 +513,15 @@ async fn import_mock_projects(
 
         repository
             .create_project(CreateProjectInput {
-                appid: appid.clone(),
                 name: attributes
                     .get("name")
                     .cloned()
                     .unwrap_or_else(|| appid.clone()),
                 enabled: true,
+                ingest_token: attributes
+                    .get("ingest_token")
+                    .cloned()
+                    .unwrap_or_else(|| format!("igx_{appid}")),
             })
             .await
             .map_err(|error| std::io::Error::other(error.to_string()))?;

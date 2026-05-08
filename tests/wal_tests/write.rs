@@ -70,6 +70,7 @@ topic = "unused-valid"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .insert_header(("x-test-header", "kept"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
@@ -144,6 +145,7 @@ topic = "unused-valid"
     ingest4x::wal::fail_after_test_writes(0);
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(
             serde_json::to_vec(&json!({
                 "appid": "APPID",
@@ -223,6 +225,7 @@ topic = "unused-valid"
 
     let req = test::TestRequest::get()
         .uri(format!("/ingest?{query}").as_str())
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
     let resp = test::call_service(&app, req).await;
 
@@ -280,6 +283,7 @@ topic = "unused-valid"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload("{not-json")
         .insert_header(("content-type", "application/json"))
         .to_request();
@@ -344,6 +348,7 @@ topic = "unused-valid"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
         .to_request();
@@ -410,6 +415,7 @@ topic = "unused-valid"
 
     let req = test::TestRequest::get()
         .uri(format!("/ingest?{query}").as_str())
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
     let resp = test::call_service(&app, req).await;
 
@@ -469,12 +475,13 @@ topic = "unused-valid"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_missing_token"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
         .to_request();
     let resp = test::call_service(&app, req).await;
 
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     assert!(read_all_records(&wal_dir)
         .expect("read wal records")
         .is_empty());
@@ -535,6 +542,7 @@ topic = "unused-valid"
         });
         let req = test::TestRequest::post()
             .uri("/ingest")
+            .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
             .insert_header(("content-type", "application/json"))
             .to_request();
@@ -602,6 +610,7 @@ topic = "unused-valid"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
         .to_request();
@@ -1262,6 +1271,7 @@ fn test_record(body: &str) -> ingest4x::wal::WalRecord {
         None,
         None,
         BTreeMap::new(),
+        1,
         body.as_bytes().to_vec(),
     )
 }

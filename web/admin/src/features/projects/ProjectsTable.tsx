@@ -9,7 +9,7 @@ type ProjectsTableProps = {
   projects: Project[];
   processorScripts?: ProcessorScript[];
   processorBindings?: ProjectProcessor[];
-  deletingAppid?: string | null;
+  deletingProjectId?: number | null;
   actionsDisabled?: boolean;
   onEdit: (project: Project) => void;
   onDelete: (project: Project) => Promise<void>;
@@ -20,7 +20,7 @@ function projectProcessorLabel(
   scripts: ProcessorScript[],
   bindings: ProjectProcessor[],
 ) {
-  const binding = bindings.find((candidate) => candidate.appid === project.appid);
+  const binding = bindings.find((candidate) => candidate.project_id === project.id);
   const defaultScript =
     scripts.find(
       (candidate) =>
@@ -44,17 +44,24 @@ export function ProjectsTable({
   projects,
   processorScripts = [],
   processorBindings = [],
-  deletingAppid = null,
+  deletingProjectId = null,
   actionsDisabled = false,
   onEdit,
   onDelete,
 }: ProjectsTableProps) {
   const columns: ColumnsType<Project> = [
     {
-      title: "AppID",
-      dataIndex: "appid",
-      key: "appid",
-      width: 220,
+      title: "ID",
+      dataIndex: "id",
+      key: "id",
+      width: 90,
+      render: (value: number) => <Typography.Text code>{value}</Typography.Text>,
+    },
+    {
+      title: "Token",
+      dataIndex: "ingest_token_prefix",
+      key: "ingest_token_prefix",
+      width: 180,
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
     },
     {
@@ -106,7 +113,7 @@ export function ProjectsTable({
       width: 180,
       fixed: "right",
       render: (_, project) => {
-        const isDeleting = deletingAppid === project.appid;
+        const isDeleting = deletingProjectId === project.id;
         const disableRowActions = actionsDisabled && !isDeleting;
         const deleteButtonLabel = isDeleting ? "删除中..." : "删除";
 
@@ -123,8 +130,8 @@ export function ProjectsTable({
               title="删除项目"
               description={
                 isDeleting
-                  ? `正在删除项目 ${project.appid}...`
-                  : `将删除项目 ${project.appid}，该操作不可恢复。`
+                  ? `正在删除项目 ${project.name}...`
+                  : `将删除项目 ${project.name}，该操作不可恢复。`
               }
               okText="删除"
               cancelText="取消"
@@ -149,7 +156,7 @@ export function ProjectsTable({
 
   return (
     <Table<Project>
-      rowKey="appid"
+      rowKey="id"
       columns={columns}
       dataSource={projects}
       pagination={false}

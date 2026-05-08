@@ -70,7 +70,7 @@ struct ProcessorScriptModuleResponse {
 #[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
 struct ProjectProcessorResponse {
     id: i32,
-    appid: String,
+    project_id: i32,
     processor_script_id: i32,
     enabled: bool,
     created_at: i64,
@@ -125,11 +125,11 @@ pub fn configure(cfg: &mut ServiceConfig) {
             web::get().to(list_project_processors),
         )
         .route(
-            "/projects/{appid}/processor",
+            "/projects/{project_id}/processor",
             web::put().to(assign_project_processor),
         )
         .route(
-            "/projects/{appid}/processor",
+            "/projects/{project_id}/processor",
             web::delete().to(delete_project_processor),
         );
 }
@@ -247,21 +247,21 @@ async fn list_project_processors(repository: Data<ProcessorRepository>) -> HttpR
 
 #[utoipa::path(
     put,
-    path = "/api/admin/projects/{appid}/processor",
+    path = "/api/admin/projects/{project_id}/processor",
     tag = "admin.processors",
-    params(("appid" = String, Path, description = "Project appid")),
+    params(("project_id" = i32, Path, description = "Project id")),
     request_body = AssignProjectProcessorRequest,
     responses((status = 204, description = "Project processor assigned"))
 )]
 async fn assign_project_processor(
-    appid: Path<String>,
+    project_id: Path<i32>,
     repository: Data<ProcessorRepository>,
     processor: Data<ProcessorRegistryState>,
     request: Json<AssignProjectProcessorRequest>,
 ) -> HttpResponse {
     let request = request.into_inner();
     match repository
-        .assign_project_processor(&appid, request.processor_script_id, request.enabled)
+        .assign_project_processor(*project_id, request.processor_script_id, request.enabled)
         .await
     {
         Ok(()) => finalize_processor_response(
@@ -275,17 +275,17 @@ async fn assign_project_processor(
 
 #[utoipa::path(
     delete,
-    path = "/api/admin/projects/{appid}/processor",
+    path = "/api/admin/projects/{project_id}/processor",
     tag = "admin.processors",
-    params(("appid" = String, Path, description = "Project appid")),
+    params(("project_id" = i32, Path, description = "Project id")),
     responses((status = 204, description = "Project processor unassigned"))
 )]
 async fn delete_project_processor(
-    appid: Path<String>,
+    project_id: Path<i32>,
     repository: Data<ProcessorRepository>,
     processor: Data<ProcessorRegistryState>,
 ) -> HttpResponse {
-    match repository.delete_project_processor(&appid).await {
+    match repository.delete_project_processor(*project_id).await {
         Ok(()) => finalize_processor_response(
             HttpResponse::NoContent().finish(),
             processor.refresh_if_needed().await,
@@ -431,7 +431,7 @@ impl From<ProjectProcessor> for ProjectProcessorResponse {
     fn from(value: ProjectProcessor) -> Self {
         Self {
             id: value.id,
-            appid: value.appid,
+            project_id: value.project_id,
             processor_script_id: value.processor_script_id,
             enabled: value.enabled,
             created_at: value.created_at,

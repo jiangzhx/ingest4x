@@ -26,8 +26,8 @@ export function rulesQueryKey(ruleSetId: number | null) {
   return ["admin", "rule-sets", ruleSetId, "rules"] as const;
 }
 
-export function projectRuleSetAssignmentsQueryKey(appid: string | null) {
-  return ["admin", "projects", appid, "rule-sets"] as const;
+export function projectRuleSetAssignmentsQueryKey(projectId: number | null) {
+  return ["admin", "projects", projectId, "rule-sets"] as const;
 }
 
 export function useRuleSetsQuery() {
@@ -45,11 +45,11 @@ export function useRulesQuery(ruleSetId: number | null) {
   });
 }
 
-export function useProjectRuleSetAssignmentsQuery(appid: string | null) {
+export function useProjectRuleSetAssignmentsQuery(projectId: number | null) {
   return useQuery({
-    queryKey: projectRuleSetAssignmentsQueryKey(appid),
-    queryFn: () => listProjectRuleSetAssignments(appid ?? ""),
-    enabled: Boolean(appid),
+    queryKey: projectRuleSetAssignmentsQueryKey(projectId),
+    queryFn: () => listProjectRuleSetAssignments(projectId ?? 0),
+    enabled: projectId !== null,
   });
 }
 
@@ -134,29 +134,29 @@ export function useDeleteRuleMutation(ruleSetId: number | null) {
   });
 }
 
-export function useAssignProjectRuleSetMutation(appid: string | null) {
+export function useAssignProjectRuleSetMutation(projectId: number | null) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (payload: AssignProjectRuleSetPayload) =>
-      assignProjectRuleSet(appid ?? "", payload),
+      assignProjectRuleSet(projectId ?? 0, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: projectRuleSetAssignmentsQueryKey(appid),
+        queryKey: projectRuleSetAssignmentsQueryKey(projectId),
       });
     },
   });
 }
 
-export function useDeleteProjectRuleSetAssignmentMutation(appid: string | null) {
+export function useDeleteProjectRuleSetAssignmentMutation(projectId: number | null) {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: (ruleSetId: number) =>
-      deleteProjectRuleSetAssignment(appid ?? "", ruleSetId),
+      deleteProjectRuleSetAssignment(projectId ?? 0, ruleSetId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
-        queryKey: projectRuleSetAssignmentsQueryKey(appid),
+        queryKey: projectRuleSetAssignmentsQueryKey(projectId),
       });
     },
   });

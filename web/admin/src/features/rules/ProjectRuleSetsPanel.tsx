@@ -4,7 +4,7 @@ import type { ProjectRuleSetAssignment, RuleSet } from "./types";
 type ProjectRuleSetsPanelProps = {
   ruleSets: RuleSet[];
   projectName?: string;
-  appid: string | null;
+  projectId: number | null;
   assignments: ProjectRuleSetAssignment[];
   loading?: boolean;
   updatingRuleSetId?: number | null;
@@ -15,7 +15,7 @@ type ProjectRuleSetsPanelProps = {
 export function ProjectRuleSetsPanel({
   ruleSets,
   projectName,
-  appid,
+  projectId,
   assignments,
   loading = false,
   updatingRuleSetId = null,
@@ -39,7 +39,7 @@ export function ProjectRuleSetsPanel({
       <Typography.Title level={4} style={{ margin: 0 }}>
         规则集绑定
       </Typography.Title>
-      {appid ? (
+      {projectId !== null ? (
         <Space.Compact style={{ width: "100%" }}>
           <Select
             placeholder="选择启用规则集"
@@ -64,9 +64,9 @@ export function ProjectRuleSetsPanel({
       ) : (
         <Alert type="info" showIcon message="保存项目后即可绑定规则集" />
       )}
-      {appid ? (
+      {projectId !== null ? (
         <Typography.Text type="secondary">
-          当前项目：{projectName ? `${projectName} (${appid})` : appid}
+          当前项目：{projectName ? `${projectName} (#${projectId})` : `#${projectId}`}
         </Typography.Text>
       ) : null}
       {currentRuleSetName ? (

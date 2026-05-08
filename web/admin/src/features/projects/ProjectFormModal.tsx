@@ -16,9 +16,9 @@ type ProjectFormModalProps = {
 
 function toFormValues(project?: Project | null): ProjectFormValues {
   return {
-    appid: project?.appid ?? "",
     name: project?.name ?? "",
     enabled: project?.enabled ?? true,
+    ingest_token: "",
   };
 }
 
@@ -46,9 +46,9 @@ export function ProjectFormModal({
   const handleOk = async () => {
     const values = await form.validateFields();
     await onSubmit({
-      appid: values.appid.trim(),
       name: values.name.trim(),
       enabled: values.enabled,
+      ingest_token: values.ingest_token?.trim(),
     });
   };
 
@@ -72,17 +72,6 @@ export function ProjectFormModal({
         initialValues={toFormValues(project)}
       >
         <Form.Item<ProjectFormValues>
-          label="AppID"
-          name="appid"
-          rules={[
-            { required: true, message: "请输入项目 AppID" },
-            { whitespace: true, message: "AppID 不能为空" },
-          ]}
-          extra={mode === "create" ? "创建后不可修改。" : "AppID 创建后不可修改。"}
-        >
-          <Input placeholder="例如：my-app" disabled={mode === "edit"} />
-        </Form.Item>
-        <Form.Item<ProjectFormValues>
           label="项目名称"
           name="name"
           rules={[
@@ -92,6 +81,11 @@ export function ProjectFormModal({
         >
           <Input placeholder="请输入项目名称" maxLength={120} />
         </Form.Item>
+        {mode === "create" ? (
+          <Form.Item<ProjectFormValues> label="Ingest Token" name="ingest_token">
+            <Input placeholder="留空自动生成" maxLength={256} />
+          </Form.Item>
+        ) : null}
         <Form.Item<ProjectFormValues>
           label="启用状态"
           name="enabled"

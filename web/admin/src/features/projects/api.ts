@@ -6,9 +6,10 @@ import type {
 } from "./types";
 
 type ProjectResponse = {
-  appid?: unknown;
+  id?: unknown;
   name?: unknown;
   enabled?: unknown;
+  ingest_token_prefix?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
 };
@@ -19,7 +20,7 @@ function invalidProjectData(message: string): Error {
 
 function normalizeRequiredString(
   value: unknown,
-  fieldName: "appid" | "name",
+  fieldName: "name" | "ingest_token_prefix",
 ): string {
   if (typeof value !== "string") {
     throw invalidProjectData(`${fieldName} 缺失或不是字符串`);
@@ -32,6 +33,13 @@ function normalizeRequiredString(
   }
 
   return normalized;
+}
+
+function normalizePositiveInteger(value: unknown, fieldName: "id"): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw invalidProjectData(`${fieldName} 缺失或不是正整数`);
+  }
+  return value;
 }
 
 function normalizeTimestamp(
@@ -55,9 +63,13 @@ export function normalizeProjectResponse(value: ProjectResponse): Project {
   }
 
   return {
-    appid: normalizeRequiredString(value.appid, "appid"),
+    id: normalizePositiveInteger(value.id, "id"),
     name: normalizeRequiredString(value.name, "name"),
     enabled: value.enabled,
+    ingest_token_prefix: normalizeRequiredString(
+      value.ingest_token_prefix,
+      "ingest_token_prefix",
+    ),
     created_at: normalizeTimestamp(value.created_at, "created_at"),
     updated_at: normalizeTimestamp(value.updated_at, "updated_at"),
   };
@@ -92,11 +104,11 @@ export async function createProject(
 }
 
 export async function updateProject(
-  appid: string,
+  projectId: number,
   payload: UpdateProjectPayload,
 ): Promise<Project> {
   const response = await requestJson<ProjectResponse>(
-    `/api/admin/projects/${encodeURIComponent(appid)}`,
+    `/api/admin/projects/${projectId}`,
     {
       method: "PUT",
       headers: {
@@ -109,8 +121,8 @@ export async function updateProject(
   return normalizeProjectResponse(response);
 }
 
-export async function deleteProject(appid: string): Promise<void> {
-  await request(`/api/admin/projects/${encodeURIComponent(appid)}`, {
+export async function deleteProject(projectId: number): Promise<void> {
+  await request(`/api/admin/projects/${projectId}`, {
     method: "DELETE",
   });
 }

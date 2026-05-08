@@ -1,6 +1,7 @@
 use ingest4x::db::init_sqlite_database;
 use ingest4x::repositories::{
-    CreateProjectInput, ProjectRepository, ProjectRepositoryError, UpdateProjectInput,
+    hash_ingest_token, CreateProjectInput, ProjectRepository, ProjectRepositoryError,
+    UpdateProjectInput,
 };
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 
@@ -12,17 +13,17 @@ async fn create_and_list_enabled_projects() {
     let repo = ProjectRepository::new(db);
 
     repo.create_project(CreateProjectInput {
-        appid: "disabled-app".to_string(),
         name: "Disabled".to_string(),
         enabled: false,
+        ingest_token: "igx_disabled_token".to_string(),
     })
     .await
     .expect("disabled project should be created");
 
     repo.create_project(CreateProjectInput {
-        appid: "enabled-app".to_string(),
         name: "Enabled".to_string(),
         enabled: true,
+        ingest_token: "igx_enabled_token".to_string(),
     })
     .await
     .expect("enabled project should be created");
@@ -33,18 +34,34 @@ async fn create_and_list_enabled_projects() {
         .expect("enabled projects should list");
 
     assert_eq!(enabled_projects.len(), 1);
-    assert_eq!(enabled_projects[0].appid, "enabled-app");
+    assert_eq!(enabled_projects[0].name, "Enabled");
     assert!(enabled_projects[0].enabled);
+    assert_eq!(
+        enabled_projects[0].ingest_token_hash,
+        hash_ingest_token("igx_enabled_token")
+    );
+    assert_ne!(enabled_projects[0].ingest_token_hash, "igx_enabled_token");
 
     let all_projects = repo.list_projects().await.expect("projects should list");
     assert_eq!(all_projects.len(), 2);
 
     let loaded = repo
-        .get_project("enabled-app")
+        .find_enabled_project_by_ingest_token("igx_enabled_token")
         .await
         .expect("project lookup should succeed")
         .expect("enabled project should exist");
     assert_eq!(loaded.name, "Enabled");
+
+    assert!(repo
+        .find_enabled_project_by_ingest_token("igx_disabled_token")
+        .await
+        .expect("disabled token lookup should succeed")
+        .is_none());
+    assert!(repo
+        .find_enabled_project_by_ingest_token("igx_missing_token")
+        .await
+        .expect("missing token lookup should succeed")
+        .is_none());
 }
 
 #[tokio::test]
@@ -62,9 +79,9 @@ async fn mutating_projects_bumps_projects_version() {
     );
 
     repo.create_project(CreateProjectInput {
-        appid: "app-1".to_string(),
         name: "Original".to_string(),
         enabled: true,
+        ingest_token: "igx_app_1_token".to_string(),
     })
     .await
     .expect("project should be created");
@@ -76,8 +93,15 @@ async fn mutating_projects_bumps_projects_version() {
         1
     );
 
+    let project_id = repo
+        .find_enabled_project_by_ingest_token("igx_app_1_token")
+        .await
+        .expect("project lookup should succeed")
+        .expect("project should exist")
+        .id;
+
     repo.update_project(
-        "app-1",
+        project_id,
         UpdateProjectInput {
             name: Some("Renamed".to_string()),
             enabled: Some(false),
@@ -93,7 +117,7 @@ async fn mutating_projects_bumps_projects_version() {
         2
     );
 
-    repo.delete_project("app-1")
+    repo.delete_project(project_id)
         .await
         .expect("project should be deleted");
 
@@ -106,16 +130,16 @@ async fn mutating_projects_bumps_projects_version() {
 }
 
 #[tokio::test]
-async fn duplicate_appid_returns_stable_error_and_does_not_bump_version() {
+async fn duplicate_ingest_token_returns_stable_error_and_does_not_bump_version() {
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
     let repo = ProjectRepository::new(db);
 
     repo.create_project(CreateProjectInput {
-        appid: "dup-app".to_string(),
         name: "Original".to_string(),
         enabled: true,
+        ingest_token: "igx_dup_token".to_string(),
     })
     .await
     .expect("initial project should be created");
@@ -127,16 +151,16 @@ async fn duplicate_appid_returns_stable_error_and_does_not_bump_version() {
 
     let error = repo
         .create_project(CreateProjectInput {
-            appid: "dup-app".to_string(),
             name: "Duplicate".to_string(),
             enabled: false,
+            ingest_token: "igx_dup_token".to_string(),
         })
         .await
         .expect_err("duplicate create should fail");
 
     assert!(matches!(
         error,
-        ProjectRepositoryError::DuplicateAppid { ref appid } if appid == "dup-app"
+        ProjectRepositoryError::DuplicateIngestToken { ref ingest_token_prefix } if ingest_token_prefix == "igx_dup_toke..."
     ));
     assert_eq!(
         repo.projects_version()
@@ -160,7 +184,7 @@ async fn update_missing_project_returns_not_found_and_does_not_bump_version() {
 
     let error = repo
         .update_project(
-            "missing-app",
+            404,
             UpdateProjectInput {
                 name: Some("New Name".to_string()),
                 enabled: Some(false),
@@ -171,7 +195,7 @@ async fn update_missing_project_returns_not_found_and_does_not_bump_version() {
 
     assert!(matches!(
         error,
-        ProjectRepositoryError::NotFound { ref appid } if appid == "missing-app"
+        ProjectRepositoryError::NotFound { id } if id == 404
     ));
     assert_eq!(
         repo.projects_version()
@@ -194,13 +218,13 @@ async fn delete_missing_project_returns_not_found_and_does_not_bump_version() {
         .expect("version should load before failed delete");
 
     let error = repo
-        .delete_project("missing-app")
+        .delete_project(404)
         .await
         .expect_err("missing project delete should fail");
 
     assert!(matches!(
         error,
-        ProjectRepositoryError::NotFound { ref appid } if appid == "missing-app"
+        ProjectRepositoryError::NotFound { id } if id == 404
     ));
     assert_eq!(
         repo.projects_version()
@@ -235,9 +259,9 @@ async fn missing_version_metadata_returns_stable_error_for_reads_and_mutations()
 
     let create_error = repo
         .create_project(CreateProjectInput {
-            appid: "create-missing-version".to_string(),
             name: "Create Missing Version".to_string(),
             enabled: true,
+            ingest_token: "igx_create_missing_version".to_string(),
         })
         .await
         .expect_err("create should fail when version metadata is missing");
@@ -247,7 +271,7 @@ async fn missing_version_metadata_returns_stable_error_for_reads_and_mutations()
     ));
 
     let created = repo
-        .get_project("create-missing-version")
+        .find_enabled_project_by_ingest_token("igx_create_missing_version")
         .await
         .expect("project lookup should succeed");
     assert!(created.is_none(), "failed create should be rolled back");
@@ -285,12 +309,19 @@ async fn update_and_delete_return_stable_error_when_version_metadata_is_missing(
     let repo = ProjectRepository::new(db.clone());
 
     repo.create_project(CreateProjectInput {
-        appid: "versioned-app".to_string(),
         name: "Versioned App".to_string(),
         enabled: true,
+        ingest_token: "igx_versioned_app".to_string(),
     })
     .await
     .expect("project should be created before removing version metadata");
+
+    let project_id = repo
+        .find_enabled_project_by_ingest_token("igx_versioned_app")
+        .await
+        .expect("project lookup should succeed")
+        .expect("project should exist")
+        .id;
 
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
@@ -301,7 +332,7 @@ async fn update_and_delete_return_stable_error_when_version_metadata_is_missing(
 
     let update_error = repo
         .update_project(
-            "versioned-app",
+            project_id,
             UpdateProjectInput {
                 name: Some("Updated Name".to_string()),
                 enabled: Some(false),
@@ -315,7 +346,7 @@ async fn update_and_delete_return_stable_error_when_version_metadata_is_missing(
     ));
 
     let loaded = repo
-        .get_project("versioned-app")
+        .get_project(project_id)
         .await
         .expect("project lookup should succeed")
         .expect("project should still exist");
@@ -323,7 +354,7 @@ async fn update_and_delete_return_stable_error_when_version_metadata_is_missing(
     assert!(loaded.enabled);
 
     let delete_error = repo
-        .delete_project("versioned-app")
+        .delete_project(project_id)
         .await
         .expect_err("delete should fail when version metadata is missing");
     assert!(matches!(
@@ -332,7 +363,7 @@ async fn update_and_delete_return_stable_error_when_version_metadata_is_missing(
     ));
 
     assert!(
-        repo.get_project("versioned-app")
+        repo.get_project(project_id)
             .await
             .expect("project lookup should succeed")
             .is_some(),

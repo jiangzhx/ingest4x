@@ -51,6 +51,7 @@ type = "stdout"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .set_json(json!({
             "appid": "APPID",
             "xwhat": "custom_event",
@@ -150,6 +151,7 @@ type = "stdout"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_missing_token"))
         .set_json(json!({
             "appid": "UNKNOWN",
             "xwhat": "custom_event",
@@ -165,9 +167,9 @@ type = "stdout"
     let status_code = resp.status();
     let body = test::read_body(resp).await;
 
-    assert_eq!(status_code, StatusCode::NOT_FOUND);
+    assert_eq!(status_code, StatusCode::UNAUTHORIZED);
     assert_eq!(
         std::str::from_utf8(body.as_ref()).unwrap(),
-        "Project not found"
+        "invalid ingest token"
     );
 }

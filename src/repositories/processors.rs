@@ -67,7 +67,7 @@ pub struct ProcessorScriptModule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectProcessor {
     pub id: i32,
-    pub appid: String,
+    pub project_id: i32,
     pub processor_script_id: i32,
     pub enabled: bool,
     pub created_at: i64,
@@ -99,7 +99,7 @@ pub type ProcessorRepositoryResult<T> = Result<T, ProcessorRepositoryError>;
 
 #[derive(Debug)]
 pub enum ProcessorRepositoryError {
-    ProjectNotFound { appid: String },
+    ProjectNotFound { id: i32 },
     ProcessorScriptNotFound { id: i32 },
     DuplicateProcessorScriptKey { script_key: String },
     ProcessorScriptNotActive { id: i32 },
@@ -116,7 +116,7 @@ pub enum ProcessorRepositoryError {
 impl Display for ProcessorRepositoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ProjectNotFound { appid } => write!(f, "project '{appid}' not found"),
+            Self::ProjectNotFound { id } => write!(f, "project '{id}' not found"),
             Self::ProcessorScriptNotFound { id } => write!(f, "processor script '{id}' not found"),
             Self::DuplicateProcessorScriptKey { script_key } => {
                 write!(f, "processor script_key '{script_key}' already exists")
@@ -284,9 +284,9 @@ impl ProcessorRepository {
         finish_transaction(txn, result).await
     }
 
-    pub async fn assign_default_processor(&self, appid: &str) -> ProcessorRepositoryResult<()> {
+    pub async fn assign_default_processor(&self, project_id: i32) -> ProcessorRepositoryResult<()> {
         let default_script = self.default_processor_script_model().await?;
-        self.assign_project_processor(appid, default_script.id, true)
+        self.assign_project_processor(project_id, default_script.id, true)
             .await
     }
 
@@ -336,13 +336,13 @@ impl ProcessorRepository {
 
     pub async fn assign_project_processor(
         &self,
-        appid: &str,
+        project_id: i32,
         processor_script_id: i32,
         enabled: bool,
     ) -> ProcessorRepositoryResult<()> {
         let txn = self.db.begin().await?;
         let result = async {
-            let project = find_project_by_appid(&txn, appid).await?;
+            let project = find_project_by_id(&txn, project_id).await?;
             let script = find_processor_script_by_id(&txn, processor_script_id).await?;
             if enabled
                 && ProcessorScriptStatus::parse(&script.status)? != ProcessorScriptStatus::Active
@@ -387,10 +387,10 @@ impl ProcessorRepository {
         finish_transaction(txn, result).await
     }
 
-    pub async fn delete_project_processor(&self, appid: &str) -> ProcessorRepositoryResult<()> {
+    pub async fn delete_project_processor(&self, project_id: i32) -> ProcessorRepositoryResult<()> {
         let txn = self.db.begin().await?;
         let result = async {
-            let project = find_project_by_appid(&txn, appid).await?;
+            let project = find_project_by_id(&txn, project_id).await?;
             project_processors::Entity::delete_many()
                 .filter(project_processors::Column::ProjectId.eq(project.id))
                 .exec(&txn)
@@ -421,7 +421,7 @@ impl ProcessorRepository {
             };
             result.push(ProjectProcessor {
                 id: binding.id,
-                appid: project.appid,
+                project_id: project.id,
                 processor_script_id: binding.processor_script_id,
                 enabled: binding.enabled,
                 created_at: binding.created_at,
@@ -439,20 +439,20 @@ impl ProcessorRepository {
         self.runtime_script_from_model(script).await
     }
 
-    pub async fn runtime_script_for_appid(
+    pub async fn runtime_script_for_project(
         &self,
-        appid: &str,
+        project_id: i32,
     ) -> ProcessorRepositoryResult<RuntimeProcessorScript> {
-        let Some(project) = projects::Entity::find()
-            .filter(projects::Column::Appid.eq(appid))
+        if projects::Entity::find_by_id(project_id)
             .one(&self.db)
             .await?
-        else {
+            .is_none()
+        {
             return self.default_runtime_script().await;
-        };
+        }
 
         let binding = project_processors::Entity::find()
-            .filter(project_processors::Column::ProjectId.eq(project.id))
+            .filter(project_processors::Column::ProjectId.eq(project_id))
             .filter(project_processors::Column::Enabled.eq(true))
             .one(&self.db)
             .await?;
@@ -474,7 +474,7 @@ impl ProcessorRepository {
 
     pub async fn list_enabled_runtime_project_processors(
         &self,
-    ) -> ProcessorRepositoryResult<Vec<(String, RuntimeProcessorScript)>> {
+    ) -> ProcessorRepositoryResult<Vec<(i32, RuntimeProcessorScript)>> {
         let bindings = project_processors::Entity::find()
             .filter(project_processors::Column::Enabled.eq(true))
             .order_by_asc(project_processors::Column::Id)
@@ -500,7 +500,7 @@ impl ProcessorRepository {
                 continue;
             };
 
-            processors.push((project.appid, self.runtime_script_from_model(script).await?));
+            processors.push((project.id, self.runtime_script_from_model(script).await?));
         }
 
         Ok(processors)
@@ -600,17 +600,14 @@ fn runtime_script_from_parts(
     })
 }
 
-async fn find_project_by_appid<C>(db: &C, appid: &str) -> ProcessorRepositoryResult<projects::Model>
+async fn find_project_by_id<C>(db: &C, id: i32) -> ProcessorRepositoryResult<projects::Model>
 where
     C: ConnectionTrait,
 {
-    projects::Entity::find()
-        .filter(projects::Column::Appid.eq(appid))
+    projects::Entity::find_by_id(id)
         .one(db)
         .await?
-        .ok_or_else(|| ProcessorRepositoryError::ProjectNotFound {
-            appid: appid.to_string(),
-        })
+        .ok_or(ProcessorRepositoryError::ProjectNotFound { id })
 }
 
 async fn find_processor_script_by_id<C>(

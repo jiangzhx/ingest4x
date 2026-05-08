@@ -64,19 +64,19 @@ const projectProcessorPanelSource = readFileSync(
   "utf8",
 );
 
-test("projects page serializes delete flow around a single deletingAppid", () => {
+test("projects page serializes delete flow around a single deletingProjectId", () => {
   assert.match(
     projectsPageSource,
-    /const \[deletingAppid, setDeletingAppid\] = useState<string \| null>\(null\);/,
+    /const \[deletingProjectId, setDeletingProjectId\] = useState<number \| null>\(null\);/,
   );
-  assert.match(projectsPageSource, /if \(deletingAppid\) \{\s*return;\s*\}/);
+  assert.match(projectsPageSource, /if \(deletingProjectId\) \{\s*return;\s*\}/);
   assert.match(
     projectsPageSource,
-    /setDeletingAppid\(project\.appid\);[\s\S]*await deleteProjectMutation\.mutateAsync\(project\.appid\);[\s\S]*finally \{\s*setDeletingAppid\(null\);\s*\}/,
+    /setDeletingProjectId\(project\.id\);[\s\S]*await deleteProjectMutation\.mutateAsync\(project\.id\);[\s\S]*finally \{\s*setDeletingProjectId\(null\);\s*\}/,
   );
   assert.match(
     projectsPageSource,
-    /<ProjectsTable[\s\S]*deletingAppid=\{deletingAppid\}[\s\S]*actionsDisabled=\{isDeletePending\}/,
+    /<ProjectsTable[\s\S]*deletingProjectId=\{deletingProjectId\}[\s\S]*actionsDisabled=\{isDeletePending\}/,
   );
 });
 
@@ -120,16 +120,18 @@ test("project management owns processor binding and defaults to default", () => 
 test("projects api normalizes valid response payloads at runtime", () => {
   assert.deepEqual(
     normalizeProjectResponse({
-      appid: "  demo-app  ",
+      id: 7,
       name: "  Demo Project ",
       enabled: true,
+      ingest_token_prefix: "igx_demo...",
       created_at: 1700000000.8,
       updated_at: 1700000001.2,
     }),
     {
-      appid: "demo-app",
+      id: 7,
       name: "Demo Project",
       enabled: true,
+      ingest_token_prefix: "igx_demo...",
       created_at: 1700000000,
       updated_at: 1700000001,
     },
@@ -138,18 +140,20 @@ test("projects api normalizes valid response payloads at runtime", () => {
   assert.deepEqual(
     normalizeProjectsResponse([
       {
-        appid: "a",
+        id: 1,
         name: "A",
         enabled: false,
+        ingest_token_prefix: "igx_a",
         created_at: 1,
         updated_at: 2,
       },
     ]),
     [
       {
-        appid: "a",
+        id: 1,
         name: "A",
         enabled: false,
+        ingest_token_prefix: "igx_a",
         created_at: 1,
         updated_at: 2,
       },
@@ -165,9 +169,10 @@ test("projects api rejects invalid response payloads at runtime", () => {
   assert.throws(
     () =>
       normalizeProjectResponse({
-        appid: "demo-app",
+        id: 1,
         name: "Demo Project",
         enabled: "yes",
+        ingest_token_prefix: "igx_demo",
         created_at: 1,
         updated_at: 2,
       }),
@@ -176,20 +181,22 @@ test("projects api rejects invalid response payloads at runtime", () => {
   assert.throws(
     () =>
       normalizeProjectResponse({
-        appid: "   ",
+        id: 1,
         name: "Demo Project",
         enabled: true,
+        ingest_token_prefix: "   ",
         created_at: 1,
         updated_at: 2,
       }),
-    /项目接口响应无效：appid 不能为空/,
+    /项目接口响应无效：ingest_token_prefix 不能为空/,
   );
   assert.throws(
     () =>
       normalizeProjectResponse({
-        appid: "demo-app",
+        id: 1,
         name: "Demo Project",
         enabled: true,
+        ingest_token_prefix: "igx_demo",
         created_at: -1,
         updated_at: 2,
       }),

@@ -147,10 +147,11 @@ pub async fn run(
 }
 
 async fn ensure_test_project(repository: &ProjectRepository) -> std::io::Result<()> {
-    const TEST_APPID: &str = "test_app";
+    const TEST_PROJECT_NAME: &str = "test_app";
+    const TEST_INGEST_TOKEN: &str = "igx_local_test_token";
 
     if repository
-        .get_project(TEST_APPID)
+        .find_enabled_project_by_ingest_token(TEST_INGEST_TOKEN)
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))?
         .is_some()
@@ -160,9 +161,9 @@ async fn ensure_test_project(repository: &ProjectRepository) -> std::io::Result<
 
     repository
         .create_project(CreateProjectInput {
-            appid: TEST_APPID.to_string(),
-            name: TEST_APPID.to_string(),
+            name: TEST_PROJECT_NAME.to_string(),
             enabled: true,
+            ingest_token: TEST_INGEST_TOKEN.to_string(),
         })
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -238,7 +239,7 @@ async fn ensure_default_rule_set_imported(
         .map_err(|error| std::io::Error::other(error.to_string()))?
     {
         let existing = rule_repository
-            .list_project_rule_sets(&project.appid)
+            .list_project_rule_sets(project.id)
             .await
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         if !existing.is_empty() {
@@ -247,7 +248,7 @@ async fn ensure_default_rule_set_imported(
 
         rule_repository
             .assign_rule_set_to_project(
-                &project.appid,
+                project.id,
                 CreateProjectRuleSetInput {
                     rule_set_id: rule_set.id,
                     enabled: true,

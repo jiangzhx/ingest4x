@@ -325,14 +325,14 @@ async fn create_project_state(
     let rule_repository = RuleRepository::new(db);
 
     if !project.is_empty() {
-        repository
+        let project = repository
             .create_project(CreateProjectInput {
-                appid: "APPID".to_string(),
                 name: project
                     .get("name")
                     .cloned()
                     .unwrap_or_else(|| "APPID".to_string()),
                 enabled: true,
+                ingest_token: "igx_test_token".to_string(),
             })
             .await
             .expect("mock project should be created");
@@ -388,7 +388,7 @@ fields:
             .expect("test default rule should be selected as wildcard");
         rule_repository
             .assign_rule_set_to_project(
-                "APPID",
+                project.id,
                 CreateProjectRuleSetInput {
                     rule_set_id: rule_set.id,
                     enabled: true,

@@ -32,12 +32,12 @@ export function useUpdateProjectMutation() {
 
   return useMutation({
     mutationFn: ({
-      appid,
+      projectId,
       payload,
     }: {
-      appid: string;
+      projectId: number;
       payload: UpdateProjectPayload;
-    }) => updateProject(appid, payload),
+    }) => updateProject(projectId, payload),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },
@@ -48,7 +48,7 @@ export function useDeleteProjectMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (appid: string) => deleteProject(appid),
+    mutationFn: (projectId: number) => deleteProject(projectId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: projectsQueryKey });
     },

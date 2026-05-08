@@ -15,8 +15,8 @@ pub use processors::{
     UpdateProcessorScriptStatusInput,
 };
 pub use projects::{
-    CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError,
-    ProjectRepositoryResult, UpdateProjectInput,
+    generate_ingest_token, hash_ingest_token, CreateProjectInput, Project, ProjectRepository,
+    ProjectRepositoryError, ProjectRepositoryResult, UpdateProjectInput,
 };
 pub use rules::{
     CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, ProjectRuleSet, Rule,

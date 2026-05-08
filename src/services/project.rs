@@ -1,4 +1,4 @@
-use crate::repositories::{Project, ProjectRepository, ProjectRepositoryResult};
+use crate::repositories::{hash_ingest_token, Project, ProjectRepository, ProjectRepositoryResult};
 use actix_web::rt::{spawn, task::JoinHandle, time::sleep};
 use futures::lock::Mutex as AsyncMutex;
 use log::error;
@@ -26,11 +26,20 @@ impl ProjectRegistryState {
         })
     }
 
-    pub fn contains(&self, appid: &str) -> bool {
+    pub fn authenticate(&self, ingest_token: &str) -> Option<Project> {
         self.projects
             .read()
             .expect("project registry read lock poisoned")
-            .contains_key(appid)
+            .get(&hash_ingest_token(ingest_token.trim()))
+            .cloned()
+    }
+
+    pub fn contains_project_id(&self, project_id: i32) -> bool {
+        self.projects
+            .read()
+            .expect("project registry read lock poisoned")
+            .values()
+            .any(|project| project.id == project_id)
     }
 
     pub async fn refresh_if_needed(&self) -> ProjectRepositoryResult<bool> {
@@ -94,7 +103,7 @@ async fn load_snapshot(
             return Ok((
                 projects
                     .into_iter()
-                    .map(|project| (project.appid.clone(), project))
+                    .map(|project| (project.ingest_token_hash.clone(), project))
                     .collect(),
                 version_after,
             ));
@@ -118,9 +127,9 @@ mod tests {
 
         repository
             .create_project(CreateProjectInput {
-                appid: "app-a".to_string(),
                 name: "App A".to_string(),
                 enabled: true,
+                ingest_token: "igx_app_a".to_string(),
             })
             .await
             .expect("seed project should be created");
@@ -132,10 +141,11 @@ mod tests {
         );
 
         let older_snapshot = HashMap::from([(
-            "app-b".to_string(),
+            hash_ingest_token("igx_app_b"),
             Project {
                 id: 2,
-                appid: "app-b".to_string(),
+                ingest_token_hash: hash_ingest_token("igx_app_b"),
+                ingest_token_prefix: "igx_app_b".to_string(),
                 name: "App B".to_string(),
                 enabled: true,
                 created_at: 0,
@@ -143,10 +153,11 @@ mod tests {
             },
         )]);
         let newer_snapshot = HashMap::from([(
-            "app-c".to_string(),
+            hash_ingest_token("igx_app_c"),
             Project {
                 id: 3,
-                appid: "app-c".to_string(),
+                ingest_token_hash: hash_ingest_token("igx_app_c"),
+                ingest_token_prefix: "igx_app_c".to_string(),
                 name: "App C".to_string(),
                 enabled: true,
                 created_at: 0,
@@ -180,8 +191,8 @@ mod tests {
             .join()
             .expect("newer snapshot task should finish");
 
-        assert!(!registry.contains("app-b"));
-        assert!(registry.contains("app-c"));
+        assert!(registry.authenticate("igx_app_b").is_none());
+        assert!(registry.authenticate("igx_app_c").is_some());
         assert_eq!(registry.version.load(Ordering::Acquire), 3);
     }
 }

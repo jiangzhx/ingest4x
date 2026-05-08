@@ -20,10 +20,15 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(
-                        ColumnDef::new(Projects::Appid)
+                        ColumnDef::new(Projects::IngestTokenHash)
                             .string()
                             .not_null()
                             .unique_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Projects::IngestTokenPrefix)
+                            .string()
+                            .not_null(),
                     )
                     .col(ColumnDef::new(Projects::Name).string().not_null())
                     .col(ColumnDef::new(Projects::Enabled).boolean().not_null())
@@ -310,7 +315,8 @@ async fn execute_backend_sql(
 enum Projects {
     Table,
     Id,
-    Appid,
+    IngestTokenHash,
+    IngestTokenPrefix,
     Name,
     Enabled,
     CreatedAt,

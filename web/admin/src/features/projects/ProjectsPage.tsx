@@ -50,20 +50,20 @@ export function ProjectsPage() {
   const [modalMode, setModalMode] = useState<"create" | "edit">("create");
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [deletingAppid, setDeletingAppid] = useState<string | null>(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
   const [updatingRuleSetId, setUpdatingRuleSetId] = useState<number | null>(null);
-  const [updatingProcessorAppid, setUpdatingProcessorAppid] =
-    useState<string | null>(null);
-  const editingAppid =
-    isFormOpen && modalMode === "edit" ? editingProject?.appid ?? null : null;
-  const assignmentsQuery = useProjectRuleSetAssignmentsQuery(editingAppid);
-  const assignRuleSetMutation = useAssignProjectRuleSetMutation(editingAppid);
+  const [updatingProcessorProjectId, setUpdatingProcessorProjectId] =
+    useState<number | null>(null);
+  const editingProjectId =
+    isFormOpen && modalMode === "edit" ? editingProject?.id ?? null : null;
+  const assignmentsQuery = useProjectRuleSetAssignmentsQuery(editingProjectId);
+  const assignRuleSetMutation = useAssignProjectRuleSetMutation(editingProjectId);
   const deleteAssignmentMutation =
-    useDeleteProjectRuleSetAssignmentMutation(editingAppid);
+    useDeleteProjectRuleSetAssignmentMutation(editingProjectId);
   const editingProcessorBinding =
-    editingAppid === null
+    editingProjectId === null
       ? null
-      : processorBindings.find((binding) => binding.appid === editingAppid) ??
+      : processorBindings.find((binding) => binding.project_id === editingProjectId) ??
         null;
 
   const resetFormMutationState = () => {
@@ -72,7 +72,7 @@ export function ProjectsPage() {
   };
 
   const handleCreateClick = () => {
-    if (deletingAppid) {
+    if (deletingProjectId) {
       return;
     }
 
@@ -83,7 +83,7 @@ export function ProjectsPage() {
   };
 
   const handleEditClick = (project: Project) => {
-    if (deletingAppid) {
+    if (deletingProjectId) {
       return;
     }
 
@@ -107,13 +107,13 @@ export function ProjectsPage() {
     try {
       if (modalMode === "create") {
         await createProjectMutation.mutateAsync(toCreateProjectPayload(values));
-        message.success(`项目 ${values.appid} 创建成功`);
+        message.success(`项目 ${values.name} 创建成功`);
       } else if (editingProject) {
         await updateProjectMutation.mutateAsync({
-          appid: editingProject.appid,
+          projectId: editingProject.id,
           payload: toUpdateProjectPayload(values),
         });
-        message.success(`项目 ${editingProject.appid} 保存成功`);
+        message.success(`项目 ${editingProject.name} 保存成功`);
       }
 
       setIsFormOpen(false);
@@ -132,21 +132,21 @@ export function ProjectsPage() {
   };
 
   const handleDelete = async (project: Project) => {
-    if (deletingAppid) {
+    if (deletingProjectId) {
       return;
     }
 
-    setDeletingAppid(project.appid);
+    setDeletingProjectId(project.id);
 
     try {
-      await deleteProjectMutation.mutateAsync(project.appid);
-      message.success(`项目 ${project.appid} 删除成功`);
+      await deleteProjectMutation.mutateAsync(project.id);
+      message.success(`项目 ${project.name} 删除成功`);
     } catch (error) {
       message.error(
-        getErrorMessage(error, `删除项目 ${project.appid} 失败，请稍后重试。`),
+        getErrorMessage(error, `删除项目 ${project.name} 失败，请稍后重试。`),
       );
     } finally {
-      setDeletingAppid(null);
+      setDeletingProjectId(null);
     }
   };
 
@@ -178,14 +178,14 @@ export function ProjectsPage() {
   };
 
   const handleAssignProcessor = async (processorScriptId: number) => {
-    if (!editingAppid) {
+    if (editingProjectId === null) {
       return;
     }
 
-    setUpdatingProcessorAppid(editingAppid);
+    setUpdatingProcessorProjectId(editingProjectId);
     try {
       await assignProcessorMutation.mutateAsync({
-        appid: editingAppid,
+        projectId: editingProjectId,
         payload: {
           processor_script_id: processorScriptId,
           enabled: true,
@@ -195,13 +195,13 @@ export function ProjectsPage() {
     } catch (error) {
       message.error(getProcessorErrorMessage(error, "绑定 Processor 失败。"));
     } finally {
-      setUpdatingProcessorAppid(null);
+      setUpdatingProcessorProjectId(null);
     }
   };
 
   const isSubmitting =
     createProjectMutation.isPending || updateProjectMutation.isPending;
-  const isDeletePending = deletingAppid !== null;
+  const isDeletePending = deletingProjectId !== null;
   const formError =
     modalMode === "create"
       ? createProjectMutation.error
@@ -282,7 +282,7 @@ export function ProjectsPage() {
             <Alert
               type="info"
               showIcon
-              message={`正在删除项目 ${deletingAppid}`}
+              message={`正在删除项目 #${deletingProjectId}`}
               description="删除完成前，已临时禁用其他编辑和删除操作。"
             />
           ) : null}
@@ -316,7 +316,7 @@ export function ProjectsPage() {
             projects={projects}
             processorScripts={processorScripts}
             processorBindings={processorBindings}
-            deletingAppid={deletingAppid}
+            deletingProjectId={deletingProjectId}
             actionsDisabled={isDeletePending}
             onEdit={handleEditClick}
             onDelete={handleDelete}
@@ -333,13 +333,13 @@ export function ProjectsPage() {
           <ProjectProcessorPanel
             scripts={processorScripts}
             projectName={editingProject?.name}
-            appid={editingAppid}
+            projectId={editingProjectId}
             binding={editingProcessorBinding}
             loading={
               processorScriptsQuery.isFetching ||
               processorBindingsQuery.isFetching
             }
-            updating={updatingProcessorAppid === editingAppid}
+            updating={updatingProcessorProjectId === editingProjectId}
             onAssign={handleAssignProcessor}
           />
         }
@@ -347,7 +347,7 @@ export function ProjectsPage() {
           <ProjectRuleSetsPanel
             ruleSets={ruleSets}
             projectName={editingProject?.name}
-            appid={editingAppid}
+            projectId={editingProjectId}
             assignments={assignmentsQuery.data ?? []}
             loading={assignmentsQuery.isFetching || ruleSetsQuery.isFetching}
             updatingRuleSetId={updatingRuleSetId}

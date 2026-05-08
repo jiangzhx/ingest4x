@@ -281,20 +281,20 @@ export async function deleteRule(
 }
 
 export async function listProjectRuleSetAssignments(
-  appid: string,
+  projectId: number,
 ): Promise<ProjectRuleSetAssignment[]> {
   const response = await requestJson<ProjectRuleSetAssignmentResponse[]>(
-    `/api/admin/projects/${encodeURIComponent(appid)}/rule-sets`,
+    `/api/admin/projects/${projectId}/rule-sets`,
   );
   return normalizeProjectRuleSetAssignmentsResponse(response);
 }
 
 export async function assignProjectRuleSet(
-  appid: string,
+  projectId: number,
   payload: AssignProjectRuleSetPayload,
 ): Promise<ProjectRuleSetAssignment> {
   const response = await requestJson<ProjectRuleSetAssignmentResponse>(
-    `/api/admin/projects/${encodeURIComponent(appid)}/rule-sets`,
+    `/api/admin/projects/${projectId}/rule-sets`,
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -305,11 +305,11 @@ export async function assignProjectRuleSet(
 }
 
 export async function deleteProjectRuleSetAssignment(
-  appid: string,
+  projectId: number,
   ruleSetId: number,
 ): Promise<void> {
   await request(
-    `/api/admin/projects/${encodeURIComponent(appid)}/rule-sets/${ruleSetId}`,
+    `/api/admin/projects/${projectId}/rule-sets/${ruleSetId}`,
     { method: "DELETE" },
   );
 }

@@ -25,17 +25,17 @@ async fn load_only_keeps_enabled_projects_in_memory() {
 
     repository
         .create_project(CreateProjectInput {
-            appid: "enabled-app".to_string(),
             name: "Enabled".to_string(),
             enabled: true,
+            ingest_token: "igx_enabled_app".to_string(),
         })
         .await
         .expect("enabled project should be created");
     repository
         .create_project(CreateProjectInput {
-            appid: "disabled-app".to_string(),
             name: "Disabled".to_string(),
             enabled: false,
+            ingest_token: "igx_disabled_app".to_string(),
         })
         .await
         .expect("disabled project should be created");
@@ -44,8 +44,8 @@ async fn load_only_keeps_enabled_projects_in_memory() {
         .await
         .expect("registry should load");
 
-    assert!(registry.contains("enabled-app"));
-    assert!(!registry.contains("disabled-app"));
+    assert!(registry.authenticate("igx_enabled_app").is_some());
+    assert!(registry.authenticate("igx_disabled_app").is_none());
 }
 
 #[tokio::test]
@@ -55,11 +55,11 @@ async fn refresh_if_needed_replaces_snapshot_when_version_changes() {
         .expect("sqlite database should initialize");
     let repository = ProjectRepository::new(db);
 
-    repository
+    let app_a = repository
         .create_project(CreateProjectInput {
-            appid: "app-a".to_string(),
             name: "App A".to_string(),
             enabled: true,
+            ingest_token: "igx_app_a".to_string(),
         })
         .await
         .expect("seed project should be created");
@@ -67,12 +67,12 @@ async fn refresh_if_needed_replaces_snapshot_when_version_changes() {
     let registry = ProjectRegistryState::load(repository.clone())
         .await
         .expect("registry should load");
-    assert!(registry.contains("app-a"));
-    assert!(!registry.contains("app-b"));
+    assert!(registry.authenticate("igx_app_a").is_some());
+    assert!(registry.authenticate("igx_app_b").is_none());
 
     repository
         .update_project(
-            "app-a",
+            app_a.id,
             UpdateProjectInput {
                 name: None,
                 enabled: Some(false),
@@ -82,9 +82,9 @@ async fn refresh_if_needed_replaces_snapshot_when_version_changes() {
         .expect("app-a should be disabled");
     repository
         .create_project(CreateProjectInput {
-            appid: "app-b".to_string(),
             name: "App B".to_string(),
             enabled: true,
+            ingest_token: "igx_app_b".to_string(),
         })
         .await
         .expect("app-b should be created");
@@ -98,8 +98,8 @@ async fn refresh_if_needed_replaces_snapshot_when_version_changes() {
         changed,
         "version change should trigger snapshot replacement"
     );
-    assert!(!registry.contains("app-a"));
-    assert!(registry.contains("app-b"));
+    assert!(registry.authenticate("igx_app_a").is_none());
+    assert!(registry.authenticate("igx_app_b").is_some());
 }
 
 #[tokio::test]
@@ -111,9 +111,9 @@ async fn refresh_if_needed_returns_false_when_version_is_unchanged() {
 
     repository
         .create_project(CreateProjectInput {
-            appid: "stable-app".to_string(),
             name: "Stable".to_string(),
             enabled: true,
+            ingest_token: "igx_stable_app".to_string(),
         })
         .await
         .expect("seed project should be created");
@@ -128,7 +128,7 @@ async fn refresh_if_needed_returns_false_when_version_is_unchanged() {
         .expect("refresh should succeed");
 
     assert!(!changed, "unchanged version should not replace snapshot");
-    assert!(registry.contains("stable-app"));
+    assert!(registry.authenticate("igx_stable_app").is_some());
 }
 
 #[actix_rt::test]
@@ -154,28 +154,30 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
         server::configure_app(cfg, app_state.clone());
-        cfg.route("/registry/{appid}", web::get().to(registry_probe));
+        cfg.route("/registry/{token}", web::get().to(registry_probe));
     }))
     .await;
 
     let enabled = test::call_service(
         &app,
         test::TestRequest::get()
-            .uri("/registry/enabled-app")
+            .uri("/registry/igx_enabled_app")
             .to_request(),
     )
     .await;
     let disabled = test::call_service(
         &app,
         test::TestRequest::get()
-            .uri("/registry/disabled-app")
+            .uri("/registry/igx_disabled_app")
             .to_request(),
     )
     .await;
 
     let appid = test::call_service(
         &app,
-        test::TestRequest::get().uri("/registry/APPID").to_request(),
+        test::TestRequest::get()
+            .uri("/registry/igx_APPID")
+            .to_request(),
     )
     .await;
 
@@ -309,14 +311,14 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
         server::configure_private_app(cfg, app_state.clone());
-        cfg.route("/registry/{appid}", web::get().to(registry_probe));
+        cfg.route("/registry/{token}", web::get().to(registry_probe));
     }))
     .await;
 
     let seeded_project = test::call_service(
         &app,
         test::TestRequest::get()
-            .uri("/registry/test_app")
+            .uri("/registry/igx_local_test_token")
             .to_request(),
     )
     .await;
@@ -325,7 +327,7 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
     let assignments = test::call_service(
         &app,
         test::TestRequest::get()
-            .uri("/api/admin/projects/test_app/rule-sets")
+            .uri("/api/admin/projects/1/rule-sets")
             .insert_header((ADMIN_PASSWORD_HEADER, "ingest4x"))
             .to_request(),
     )
@@ -362,10 +364,10 @@ fn test_wal_settings(dir: &Path) -> WalSettings {
 }
 
 async fn registry_probe(
-    appid: web::Path<String>,
+    token: web::Path<String>,
     registry: web::Data<ProjectRegistryState>,
 ) -> HttpResponse {
-    if registry.contains(&appid) {
+    if registry.authenticate(&token).is_some() {
         HttpResponse::Ok().finish()
     } else {
         HttpResponse::NotFound().finish()

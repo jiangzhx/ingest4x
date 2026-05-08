@@ -46,6 +46,7 @@ pub struct WalRecord {
     pub lsn: u64,
     #[serde(default)]
     pub node_id: String,
+    pub project_id: i32,
     pub received_at_ms: u64,
     pub method: String,
     pub path: String,
@@ -465,6 +466,7 @@ pub fn new_record(
     query: Option<String>,
     remote_addr: Option<String>,
     headers: BTreeMap<String, String>,
+    project_id: i32,
     body: Vec<u8>,
 ) -> WalRecord {
     let received_at_ms = now_ms();
@@ -473,6 +475,7 @@ pub fn new_record(
         record_id: format!("wal-{received_at_ms}-{sequence}"),
         lsn: 0,
         node_id: String::new(),
+        project_id,
         received_at_ms,
         method: method.into(),
         path: path.into(),

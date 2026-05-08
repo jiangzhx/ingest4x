@@ -16,11 +16,11 @@ async fn loads_project_bound_processor_script_with_multiple_modules() {
     let projects = ProjectRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-1".to_string(),
             name: "App 1".to_string(),
             enabled: true,
+            ingest_token: "igx_app_1".to_string(),
         })
         .await
         .expect("project should be created");
@@ -60,12 +60,12 @@ fn mark(event) {
         .expect("processor script should be created");
 
     processors
-        .assign_project_processor("app-1", script.id, true)
+        .assign_project_processor(project.id, script.id, true)
         .await
         .expect("project processor should be assigned");
 
     let runtime = processors
-        .runtime_script_for_appid("app-1")
+        .runtime_script_for_project(project.id)
         .await
         .expect("runtime processor should load");
 
@@ -174,11 +174,11 @@ async fn assign_project_processor_requires_active_script() {
     let projects = ProjectRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-draft".to_string(),
             name: "Draft App".to_string(),
             enabled: true,
+            ingest_token: "igx_app_draft".to_string(),
         })
         .await
         .expect("project should be created");
@@ -197,7 +197,7 @@ async fn assign_project_processor_requires_active_script() {
         .expect("draft script should be created");
 
     let error = processors
-        .assign_project_processor("app-draft", script.id, true)
+        .assign_project_processor(project.id, script.id, true)
         .await
         .expect_err("draft script should not be assignable");
 
@@ -215,11 +215,11 @@ async fn update_script_status_rejects_disabling_script_in_use() {
     let projects = ProjectRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
 
-    projects
+    let project = projects
         .create_project(CreateProjectInput {
-            appid: "app-active".to_string(),
             name: "Active App".to_string(),
             enabled: true,
+            ingest_token: "igx_app_active".to_string(),
         })
         .await
         .expect("project should be created");
@@ -237,7 +237,7 @@ async fn update_script_status_rejects_disabling_script_in_use() {
         .await
         .expect("active script should be created");
     processors
-        .assign_project_processor("app-active", script.id, true)
+        .assign_project_processor(project.id, script.id, true)
         .await
         .expect("script should be assigned");
 
@@ -257,7 +257,7 @@ async fn update_script_status_rejects_disabling_script_in_use() {
     ));
 
     processors
-        .delete_project_processor("app-active")
+        .delete_project_processor(project.id)
         .await
         .expect("binding should be removed");
     let disabled = processors

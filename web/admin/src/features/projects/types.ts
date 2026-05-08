@@ -1,21 +1,22 @@
 export interface Project {
-  appid: string;
+  id: number;
   name: string;
   enabled: boolean;
+  ingest_token_prefix: string;
   created_at: number;
   updated_at: number;
 }
 
 export interface ProjectFormValues {
-  appid: string;
   name: string;
   enabled: boolean;
+  ingest_token?: string;
 }
 
 export interface CreateProjectPayload {
-  appid: string;
   name: string;
   enabled: boolean;
+  ingest_token?: string;
 }
 
 export interface UpdateProjectPayload {

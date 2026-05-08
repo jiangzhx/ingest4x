@@ -80,7 +80,7 @@ linger_ms = "0"
     .await;
 
     let input_payload = json!({
-        "appid": "APPID",
+        "appid": "UNRELATED_APPID",
         "xwhat": "custom_event",
         "xcontext": {
             "installid": "iid-1",
@@ -94,6 +94,7 @@ linger_ms = "0"
     let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
     let req = test::TestRequest::get()
         .uri(format!("/ingest?{query}").as_str())
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
@@ -103,6 +104,12 @@ linger_ms = "0"
     assert_eq!(status_code, StatusCode::OK);
     assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
     let records = read_all_records(&wal_dir).expect("read wal records");
+    assert_eq!(records[0].project_id, 1);
+    assert!(!records[0].headers.contains_key("x-ingest-token"));
+    assert!(!records[0]
+        .headers
+        .values()
+        .any(|value| value.contains("igx_APPID")));
     let received_at_ms = records[0].received_at_ms;
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(
@@ -214,6 +221,7 @@ linger_ms = "0"
     let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
     let req = test::TestRequest::get()
         .uri(format!("/ingest?{query}").as_str())
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
@@ -315,16 +323,17 @@ linger_ms = "0"
     let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
     let req = test::TestRequest::get()
         .uri(format!("/ingest?{query}").as_str())
+        .insert_header(("x-ingest-token", "igx_missing_token"))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
     let status_code = resp.status();
     let body = test::read_body(resp).await;
 
-    assert_eq!(status_code, StatusCode::NOT_FOUND);
+    assert_eq!(status_code, StatusCode::UNAUTHORIZED);
     assert_eq!(
         std::str::from_utf8(body.as_ref()).unwrap(),
-        "Project not found"
+        "invalid ingest token"
     );
 }
 

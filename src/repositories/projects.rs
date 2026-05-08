@@ -4,15 +4,18 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
 };
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use uuid::Uuid;
 
 const PROJECTS_VERSION_KEY: &str = "projects_version";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     pub id: i32,
-    pub appid: String,
+    pub ingest_token_hash: String,
+    pub ingest_token_prefix: String,
     pub name: String,
     pub enabled: bool,
     pub created_at: i64,
@@ -21,9 +24,9 @@ pub struct Project {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateProjectInput {
-    pub appid: String,
     pub name: String,
     pub enabled: bool,
+    pub ingest_token: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -36,8 +39,9 @@ pub type ProjectRepositoryResult<T> = Result<T, ProjectRepositoryError>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProjectRepositoryError {
-    NotFound { appid: String },
-    DuplicateAppid { appid: String },
+    NotFound { id: i32 },
+    DuplicateIngestToken { ingest_token_prefix: String },
+    InvalidIngestToken,
     VersionMetadataMissing,
     CorruptedVersion { value: String },
     Database(DbErr),
@@ -46,10 +50,16 @@ pub enum ProjectRepositoryError {
 impl Display for ProjectRepositoryError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotFound { appid } => write!(f, "project '{appid}' not found"),
-            Self::DuplicateAppid { appid } => {
-                write!(f, "project appid '{appid}' already exists")
+            Self::NotFound { id } => write!(f, "project '{id}' not found"),
+            Self::DuplicateIngestToken {
+                ingest_token_prefix,
+            } => {
+                write!(
+                    f,
+                    "project ingest token prefix '{ingest_token_prefix}' already exists"
+                )
             }
+            Self::InvalidIngestToken => write!(f, "ingest token must not be empty"),
             Self::VersionMetadataMissing => write!(f, "projects_version metadata is missing"),
             Self::CorruptedVersion { value } => {
                 write!(f, "projects_version contains invalid value '{value}'")
@@ -88,13 +98,19 @@ impl ProjectRepository {
         &self,
         input: CreateProjectInput,
     ) -> ProjectRepositoryResult<Project> {
+        let token = input.ingest_token.trim();
+        if token.is_empty() {
+            return Err(ProjectRepositoryError::InvalidIngestToken);
+        }
+        let ingest_token_hash = hash_ingest_token(token);
+        let ingest_token_prefix = ingest_token_prefix(token);
         let txn = self.db.begin().await?;
         let result = async {
             let now = current_timestamp();
-            let appid = input.appid.clone();
 
             let project = projects::ActiveModel {
-                appid: Set(input.appid),
+                ingest_token_hash: Set(ingest_token_hash),
+                ingest_token_prefix: Set(ingest_token_prefix.clone()),
                 name: Set(input.name),
                 enabled: Set(input.enabled),
                 created_at: Set(now),
@@ -103,7 +119,7 @@ impl ProjectRepository {
             }
             .insert(&txn)
             .await
-            .map_err(|error| map_write_error(error, &appid))?;
+            .map_err(|error| map_write_error(error, &ingest_token_prefix))?;
 
             bump_projects_version(&txn).await?;
 
@@ -116,12 +132,12 @@ impl ProjectRepository {
 
     pub async fn update_project(
         &self,
-        appid: &str,
+        id: i32,
         input: UpdateProjectInput,
     ) -> ProjectRepositoryResult<Project> {
         let txn = self.db.begin().await?;
         let result = async {
-            let existing = find_project_by_appid(&txn, appid).await?;
+            let existing = find_project_by_id(&txn, id).await?;
             let mut active_model = existing.into_active_model();
 
             if let Some(name) = input.name {
@@ -142,12 +158,12 @@ impl ProjectRepository {
         finish_transaction(txn, result).await
     }
 
-    pub async fn delete_project(&self, appid: &str) -> ProjectRepositoryResult<()> {
+    pub async fn delete_project(&self, id: i32) -> ProjectRepositoryResult<()> {
         let txn = self.db.begin().await?;
         let result = async {
-            find_project_by_appid(&txn, appid).await?;
+            find_project_by_id(&txn, id).await?;
             let delete_result = projects::Entity::delete_many()
-                .filter(projects::Column::Appid.eq(appid))
+                .filter(projects::Column::Id.eq(id))
                 .exec(&txn)
                 .await?;
             debug_assert_eq!(delete_result.rows_affected, 1);
@@ -180,9 +196,23 @@ impl ProjectRepository {
         Ok(projects.into_iter().map(Into::into).collect())
     }
 
-    pub async fn get_project(&self, appid: &str) -> ProjectRepositoryResult<Option<Project>> {
+    pub async fn get_project(&self, id: i32) -> ProjectRepositoryResult<Option<Project>> {
+        let project = projects::Entity::find_by_id(id).one(&self.db).await?;
+
+        Ok(project.map(Into::into))
+    }
+
+    pub async fn find_enabled_project_by_ingest_token(
+        &self,
+        ingest_token: &str,
+    ) -> ProjectRepositoryResult<Option<Project>> {
+        let token = ingest_token.trim();
+        if token.is_empty() {
+            return Ok(None);
+        }
         let project = projects::Entity::find()
-            .filter(projects::Column::Appid.eq(appid))
+            .filter(projects::Column::IngestTokenHash.eq(hash_ingest_token(token)))
+            .filter(projects::Column::Enabled.eq(true))
             .one(&self.db)
             .await?;
 
@@ -194,17 +224,14 @@ impl ProjectRepository {
     }
 }
 
-async fn find_project_by_appid<C>(db: &C, appid: &str) -> ProjectRepositoryResult<projects::Model>
+async fn find_project_by_id<C>(db: &C, id: i32) -> ProjectRepositoryResult<projects::Model>
 where
     C: ConnectionTrait,
 {
-    projects::Entity::find()
-        .filter(projects::Column::Appid.eq(appid))
+    projects::Entity::find_by_id(id)
         .one(db)
         .await?
-        .ok_or_else(|| ProjectRepositoryError::NotFound {
-            appid: appid.to_string(),
-        })
+        .ok_or(ProjectRepositoryError::NotFound { id })
 }
 
 async fn read_projects_version<C>(db: &C) -> ProjectRepositoryResult<u64>
@@ -253,12 +280,32 @@ fn current_timestamp() -> i64 {
     current_timestamp_as_u64() as i64
 }
 
-fn map_write_error(error: DbErr, appid: &str) -> ProjectRepositoryError {
+fn map_write_error(error: DbErr, ingest_token_prefix: &str) -> ProjectRepositoryError {
     match error.sql_err() {
-        Some(SqlErr::UniqueConstraintViolation(_)) => ProjectRepositoryError::DuplicateAppid {
-            appid: appid.to_string(),
-        },
+        Some(SqlErr::UniqueConstraintViolation(_)) => {
+            ProjectRepositoryError::DuplicateIngestToken {
+                ingest_token_prefix: ingest_token_prefix.to_string(),
+            }
+        }
         _ => ProjectRepositoryError::Database(error),
+    }
+}
+
+pub fn generate_ingest_token() -> String {
+    format!("igx_{}", Uuid::new_v4().simple())
+}
+
+pub fn hash_ingest_token(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    format!("{digest:x}")
+}
+
+pub fn ingest_token_prefix(token: &str) -> String {
+    let prefix = token.chars().take(12).collect::<String>();
+    if token.chars().count() > 12 {
+        format!("{prefix}...")
+    } else {
+        prefix
     }
 }
 
@@ -282,7 +329,8 @@ impl From<projects::Model> for Project {
     fn from(value: projects::Model) -> Self {
         Self {
             id: value.id,
-            appid: value.appid,
+            ingest_token_hash: value.ingest_token_hash,
+            ingest_token_prefix: value.ingest_token_prefix,
             name: value.name,
             enabled: value.enabled,
             created_at: value.created_at,

@@ -4,7 +4,7 @@ import type { ProcessorScript, ProjectProcessor } from "./types";
 type ProjectProcessorPanelProps = {
   scripts: ProcessorScript[];
   projectName?: string;
-  appid: string | null;
+  projectId: number | null;
   binding?: ProjectProcessor | null;
   loading?: boolean;
   updating?: boolean;
@@ -26,7 +26,7 @@ export function processorLabel(
 export function ProjectProcessorPanel({
   scripts,
   projectName,
-  appid,
+  projectId,
   binding = null,
   loading = false,
   updating = false,
@@ -53,7 +53,7 @@ export function ProjectProcessorPanel({
       <Typography.Title level={4} style={{ margin: 0 }}>
         Processor 绑定
       </Typography.Title>
-      {appid ? (
+      {projectId !== null ? (
         <Select
           showSearch
           value={value}
@@ -75,9 +75,9 @@ export function ProjectProcessorPanel({
       ) : (
         <Alert type="info" showIcon message="保存项目后即可绑定 Processor" />
       )}
-      {appid ? (
+      {projectId !== null ? (
         <Typography.Text type="secondary">
-          当前项目：{projectName ? `${projectName} (${appid})` : appid}
+          当前项目：{projectName ? `${projectName} (#${projectId})` : `#${projectId}`}
         </Typography.Text>
       ) : null}
       <Space size={8}>

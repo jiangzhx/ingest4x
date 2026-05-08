@@ -36,10 +36,11 @@ export function getErrorMessage(
 export function toCreateProjectPayload(
   project: ProjectFormValues,
 ): CreateProjectPayload {
+  const ingestToken = project.ingest_token?.trim();
   return {
-    appid: project.appid.trim(),
     name: project.name.trim(),
     enabled: project.enabled,
+    ...(ingestToken ? { ingest_token: ingestToken } : {}),
   };
 }
 

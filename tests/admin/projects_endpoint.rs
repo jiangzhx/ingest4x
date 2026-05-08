@@ -58,9 +58,9 @@ async fn create_then_list_projects() {
             with_admin_password(test::TestRequest::post())
                 .uri("/api/admin/projects")
                 .set_json(json!({
-                    "appid": "admin-app",
                     "name": "Admin App",
-                    "enabled": true
+                    "enabled": true,
+                    "ingest_token": "igx_admin_app"
                 }))
                 .to_request(),
         )
@@ -72,9 +72,11 @@ async fn create_then_list_projects() {
         assert_eq!(
             created,
             json!({
-                "appid": "admin-app",
                 "name": "Admin App",
                 "enabled": true,
+                "id": created["id"],
+                "ingest_token": "igx_admin_app",
+                "ingest_token_prefix": "igx_admin_ap...",
                 "created_at": created["created_at"],
                 "updated_at": created["updated_at"]
             })
@@ -92,15 +94,17 @@ async fn create_then_list_projects() {
 
         assert_eq!(list_status, StatusCode::OK);
         let listed = listed.as_array().expect("projects should be an array");
-        assert!(listed.iter().any(|project| project == &created));
         assert!(listed
             .iter()
-            .any(|project| project["appid"] == json!("test_app")));
+            .any(|project| project["id"] == created["id"] && project["ingest_token"].is_null()));
+        assert!(listed
+            .iter()
+            .any(|project| project["name"] == json!("test_app")));
 
         let detail_response = test::call_service(
             &app,
             with_admin_password(test::TestRequest::get())
-                .uri("/api/admin/projects/admin-app")
+                .uri(format!("/api/admin/projects/{}", created["id"]).as_str())
                 .to_request(),
         )
         .await;
@@ -108,7 +112,8 @@ async fn create_then_list_projects() {
         let detailed: Value = test::read_body_json(detail_response).await;
 
         assert_eq!(detail_status, StatusCode::OK);
-        assert_eq!(detailed, created);
+        assert_eq!(detailed["id"], created["id"]);
+        assert!(detailed["ingest_token"].is_null());
     })
     .await;
 }
@@ -117,12 +122,12 @@ async fn create_then_list_projects() {
 async fn update_changes_name_and_enabled() {
     with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
         let app = create_app_with_mock_projects("").await;
-        create_project_for_test(&app, "APPID", "Original Name").await;
+        let project = create_project_for_test(&app, "APPID", "Original Name").await;
 
         let response = test::call_service(
             &app,
             with_admin_password(test::TestRequest::put())
-                .uri("/api/admin/projects/APPID")
+                .uri(format!("/api/admin/projects/{}", project["id"]).as_str())
                 .set_json(json!({
                     "name": "Updated Name",
                     "enabled": false
@@ -134,7 +139,7 @@ async fn update_changes_name_and_enabled() {
         let updated: Value = test::read_body_json(response).await;
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(updated["appid"], "APPID");
+        assert_eq!(updated["id"], project["id"]);
         assert_eq!(updated["name"], "Updated Name");
         assert_eq!(updated["enabled"], false);
     })
@@ -145,12 +150,12 @@ async fn update_changes_name_and_enabled() {
 async fn delete_removes_project() {
     with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
         let app = create_app_with_mock_projects("").await;
-        create_project_for_test(&app, "APPID", "Delete Me").await;
+        let project = create_project_for_test(&app, "APPID", "Delete Me").await;
 
         let delete_response = test::call_service(
             &app,
             with_admin_password(test::TestRequest::delete())
-                .uri("/api/admin/projects/APPID")
+                .uri(format!("/api/admin/projects/{}", project["id"]).as_str())
                 .to_request(),
         )
         .await;
@@ -171,15 +176,15 @@ async fn delete_removes_project() {
         let listed = listed.as_array().expect("projects should be an array");
         assert!(!listed
             .iter()
-            .any(|project| project["appid"] == json!("APPID")));
+            .any(|candidate| candidate["id"] == project["id"]));
         assert!(listed
             .iter()
-            .any(|project| project["appid"] == json!("test_app")));
+            .any(|project| project["name"] == json!("test_app")));
 
         let detail_response = test::call_service(
             &app,
             with_admin_password(test::TestRequest::get())
-                .uri("/api/admin/projects/APPID")
+                .uri(format!("/api/admin/projects/{}", project["id"]).as_str())
                 .to_request(),
         )
         .await;
@@ -189,7 +194,7 @@ async fn delete_removes_project() {
     .await;
 }
 
-async fn create_project_for_test<S>(app: &S, appid: &str, name: &str)
+async fn create_project_for_test<S>(app: &S, appid: &str, name: &str) -> Value
 where
     S: actix_web::dev::Service<
         actix_http::Request,
@@ -202,15 +207,16 @@ where
         with_admin_password(test::TestRequest::post())
             .uri("/api/admin/projects")
             .set_json(json!({
-                "appid": appid,
                 "name": name,
-                "enabled": true
+                "enabled": true,
+                "ingest_token": format!("igx_{appid}")
             }))
             .to_request(),
     )
     .await;
 
     assert_eq!(response.status(), StatusCode::CREATED);
+    test::read_body_json(response).await
 }
 
 #[actix_rt::test]
@@ -230,6 +236,7 @@ async fn admin_create_is_visible_to_ingest_immediately() {
             &public_app,
             test::TestRequest::post()
                 .uri("/ingest")
+                .insert_header(("x-ingest-token", "igx_admin_app"))
                 .set_json(valid_ingest_payload("admin-app"))
                 .to_request(),
         )
@@ -237,10 +244,10 @@ async fn admin_create_is_visible_to_ingest_immediately() {
         let ingest_before_status = ingest_before.status();
         let ingest_before_body = test::read_body(ingest_before).await;
 
-        assert_eq!(ingest_before_status, StatusCode::NOT_FOUND);
+        assert_eq!(ingest_before_status, StatusCode::UNAUTHORIZED);
         assert_eq!(
             std::str::from_utf8(ingest_before_body.as_ref()).unwrap(),
-            "Project not found"
+            "invalid ingest token"
         );
 
         let create_response = test::call_service(
@@ -248,9 +255,9 @@ async fn admin_create_is_visible_to_ingest_immediately() {
             with_admin_password(test::TestRequest::post())
                 .uri("/api/admin/projects")
                 .set_json(json!({
-                    "appid": "admin-app",
                     "name": "Admin App",
-                    "enabled": true
+                    "enabled": true,
+                    "ingest_token": "igx_admin_app"
                 }))
                 .to_request(),
         )
@@ -262,6 +269,7 @@ async fn admin_create_is_visible_to_ingest_immediately() {
             &public_app,
             test::TestRequest::post()
                 .uri("/ingest")
+                .insert_header(("x-ingest-token", "igx_admin_app"))
                 .set_json(valid_ingest_payload("admin-app"))
                 .to_request(),
         )
@@ -295,7 +303,7 @@ async fn openapi_json_includes_admin_projects_paths() {
 
         assert_eq!(status, StatusCode::OK);
         assert!(body["paths"]["/api/admin/projects"].is_object());
-        assert!(body["paths"]["/api/admin/projects/{appid}"].is_object());
+        assert!(body["paths"]["/api/admin/projects/{project_id}"].is_object());
         assert!(body["paths"]["/api/admin/projects"]["post"]["responses"]["400"].is_object());
         assert!(body["paths"]["/api/admin/projects"]["post"]["responses"]["415"].is_null());
         assert_eq!(
@@ -303,15 +311,19 @@ async fn openapi_json_includes_admin_projects_paths() {
             "Repository failure"
         );
         assert!(
-            body["paths"]["/api/admin/projects/{appid}"]["put"]["responses"]["400"].is_object()
+            body["paths"]["/api/admin/projects/{project_id}"]["put"]["responses"]["400"]
+                .is_object()
         );
-        assert!(body["paths"]["/api/admin/projects/{appid}"]["put"]["responses"]["415"].is_null());
+        assert!(
+            body["paths"]["/api/admin/projects/{project_id}"]["put"]["responses"]["415"].is_null()
+        );
         assert_eq!(
-            body["paths"]["/api/admin/projects/{appid}"]["put"]["responses"]["500"]["description"],
+            body["paths"]["/api/admin/projects/{project_id}"]["put"]["responses"]["500"]
+                ["description"],
             "Repository failure"
         );
         assert_eq!(
-            body["paths"]["/api/admin/projects/{appid}"]["delete"]["responses"]["500"]
+            body["paths"]["/api/admin/projects/{project_id}"]["delete"]["responses"]["500"]
                 ["description"],
             "Repository failure"
         );

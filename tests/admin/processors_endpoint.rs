@@ -56,7 +56,7 @@ fn with_admin_password(request: test::TestRequest) -> test::TestRequest {
 async fn admin_can_create_script_and_bind_project_processor() {
     with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
         let app = create_app().await;
-        create_project_for_test(&app, "app-custom").await;
+        let project = create_project_for_test(&app, "app-custom").await;
 
         let before_create = test::call_service(
             &app,
@@ -106,7 +106,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
         let assign = test::call_service(
             &app,
             with_admin_password(test::TestRequest::put())
-                .uri("/api/admin/projects/app-custom/processor")
+                .uri(format!("/api/admin/projects/{}/processor", project["id"]).as_str())
                 .set_json(json!({
                     "processor_script_id": script["id"],
                     "enabled": true
@@ -130,13 +130,13 @@ async fn admin_can_create_script_and_bind_project_processor() {
             .as_array()
             .expect("project processors should be an array")
             .iter()
-            .any(|binding| binding["appid"] == json!("app-custom")
+            .any(|binding| binding["project_id"] == project["id"]
                 && binding["processor_script_id"] == script["id"]));
 
         let probe = test::call_service(
             &app,
             with_admin_password(test::TestRequest::get())
-                .uri("/probe-processors/app-custom")
+                .uri(format!("/probe-processors/{}", project["id"]).as_str())
                 .to_request(),
         )
         .await;
@@ -148,7 +148,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
         let delete = test::call_service(
             &app,
             with_admin_password(test::TestRequest::delete())
-                .uri("/api/admin/projects/app-custom/processor")
+                .uri(format!("/api/admin/projects/{}/processor", project["id"]).as_str())
                 .to_request(),
         )
         .await;
@@ -161,7 +161,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
 async fn admin_rejects_inactive_binding_and_disabling_script_in_use() {
     with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
         let app = create_app().await;
-        create_project_for_test(&app, "app-guarded").await;
+        let project = create_project_for_test(&app, "app-guarded").await;
 
         let draft = create_processor_script(
             &app,
@@ -174,7 +174,7 @@ async fn admin_rejects_inactive_binding_and_disabling_script_in_use() {
         let assign_draft = test::call_service(
             &app,
             with_admin_password(test::TestRequest::put())
-                .uri("/api/admin/projects/app-guarded/processor")
+                .uri(format!("/api/admin/projects/{}/processor", project["id"]).as_str())
                 .set_json(json!({
                     "processor_script_id": draft["id"],
                     "enabled": true
@@ -195,7 +195,7 @@ async fn admin_rejects_inactive_binding_and_disabling_script_in_use() {
         let assign_active = test::call_service(
             &app,
             with_admin_password(test::TestRequest::put())
-                .uri("/api/admin/projects/app-guarded/processor")
+                .uri(format!("/api/admin/projects/{}/processor", project["id"]).as_str())
                 .set_json(json!({
                     "processor_script_id": active["id"],
                     "enabled": true
@@ -222,7 +222,7 @@ async fn admin_rejects_inactive_binding_and_disabling_script_in_use() {
 async fn admin_create_project_persists_default_processor_binding() {
     with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
         let app = create_app().await;
-        create_project_for_test(&app, "app-default").await;
+        let project = create_project_for_test(&app, "app-default").await;
 
         let scripts = test::call_service(
             &app,
@@ -257,7 +257,7 @@ async fn admin_create_project_persists_default_processor_binding() {
             .as_array()
             .expect("project processors should be an array")
             .iter()
-            .any(|binding| binding["appid"] == json!("app-default")
+            .any(|binding| binding["project_id"] == project["id"]
                 && binding["enabled"] == json!(true)
                 && binding["processor_script_id"] == json!(default_script_id)));
     })
@@ -285,7 +285,7 @@ async fn openapi_json_includes_admin_processor_paths() {
             body["paths"]["/api/admin/processor-scripts/{processor_script_id}/status"].is_object()
         );
         assert!(body["paths"]["/api/admin/project-processors"].is_object());
-        assert!(body["paths"]["/api/admin/projects/{appid}/processor"].is_object());
+        assert!(body["paths"]["/api/admin/projects/{project_id}/processor"].is_object());
     })
     .await;
 }
@@ -337,9 +337,9 @@ async fn create_project_for_test(
         with_admin_password(test::TestRequest::post())
             .uri("/api/admin/projects")
             .set_json(json!({
-                "appid": appid,
                 "name": format!("Project {appid}"),
-                "enabled": true
+                "enabled": true,
+                "ingest_token": format!("igx_{appid}")
             }))
             .to_request(),
     )
@@ -348,14 +348,11 @@ async fn create_project_for_test(
     test::read_body_json(response).await
 }
 
-async fn probe_processor(
-    path: Path<String>,
-    processor: Data<ProcessorRegistryState>,
-) -> HttpResponse {
+async fn probe_processor(path: Path<i32>, processor: Data<ProcessorRegistryState>) -> HttpResponse {
     match processor.process_event(
-        &path,
+        *path,
         json!({
-            "appid": path.as_str(),
+            "appid": format!("project-{}", *path),
             "xwhat": "probe",
             "xcontext": {}
         }),

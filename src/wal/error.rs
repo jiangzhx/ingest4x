@@ -29,11 +29,11 @@ pub(crate) enum ReplayIssue {
         appid: Option<String>,
         xwhat: Option<String>,
     },
-    // Project metadata or rules make this appid impossible to process now.
+    // Project metadata or rules make this project impossible to process now.
     Project {
         code: &'static str,
         message: String,
-        appid: String,
+        project_id: i32,
     },
     // Rhai processor execution failed after payload and project checks passed.
     Processor {
@@ -132,12 +132,12 @@ impl ReplayIssue {
         }
     }
 
-    pub(crate) fn unknown_appid(appid: String, xwhat: Option<String>) -> Self {
+    pub(crate) fn unknown_project_id(project_id: i32, _xwhat: Option<String>) -> Self {
         Self::EventPayload {
-            code: "replay_unknown_appid",
-            message: format!("wal record references unknown appid `{appid}`"),
-            appid: Some(appid),
-            xwhat,
+            code: "replay_unknown_project",
+            message: format!("wal record references unknown project `{project_id}`"),
+            appid: None,
+            xwhat: _xwhat,
         }
     }
 
@@ -172,32 +172,32 @@ impl ReplayIssue {
         }
     }
 
-    pub(crate) fn from_rule_repository(appid: &str, error: RuleRepositoryError) -> Self {
+    pub(crate) fn from_rule_repository(project_id: i32, error: RuleRepositoryError) -> Self {
         match error {
-            RuleRepositoryError::ProjectNotFound { appid } => Self::Project {
+            RuleRepositoryError::ProjectNotFound { id } => Self::Project {
                 code: "replay_project_not_found",
-                message: format!("project `{appid}` not found while compiling rules"),
-                appid,
+                message: format!("project `{id}` not found while compiling rules"),
+                project_id: id,
             },
             RuleRepositoryError::InvalidRuleContent { message } => Self::Project {
                 code: "replay_rules_invalid",
                 message,
-                appid: appid.to_string(),
+                project_id,
             },
             RuleRepositoryError::DuplicateRuntimeRule { xwhat } => Self::Project {
                 code: "replay_rules_duplicate_runtime_rule",
                 message: format!("multiple enabled rules matched xwhat `{xwhat}`"),
-                appid: appid.to_string(),
+                project_id,
             },
             RuleRepositoryError::Database(error) => Self::Project {
                 code: "replay_control_plane_unavailable",
                 message: error.to_string(),
-                appid: appid.to_string(),
+                project_id,
             },
             other => Self::Project {
                 code: "replay_rules_invalid",
                 message: other.to_string(),
-                appid: appid.to_string(),
+                project_id,
             },
         }
     }
@@ -243,7 +243,6 @@ impl ReplayIssue {
     pub(crate) fn appid(&self) -> Option<&str> {
         match self {
             Self::EventPayload { appid, .. } => appid.as_deref(),
-            Self::Project { appid, .. } => Some(appid.as_str()),
             _ => None,
         }
     }
@@ -281,17 +280,16 @@ mod tests {
     #[test]
     fn rule_repository_errors_map_to_project_issue_actions() {
         let invalid_rules = ReplayIssue::from_rule_repository(
-            "APPID",
+            42,
             RuleRepositoryError::InvalidRuleContent {
                 message: "bad yaml".to_string(),
             },
         );
         assert_eq!(invalid_rules.code(), "replay_rules_invalid");
         assert_eq!(invalid_rules.action(), ReplayAction::QuarantineRecord);
-        assert_eq!(invalid_rules.appid(), Some("APPID"));
 
         let database_error = ReplayIssue::from_rule_repository(
-            "APPID",
+            42,
             RuleRepositoryError::Database(DbErr::Custom("db down".to_string())),
         );
         assert_eq!(database_error.code(), "replay_control_plane_unavailable");

@@ -109,6 +109,7 @@ linger_ms = "0"
 
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(serde_json::to_vec(&input_payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
         .to_request();
@@ -166,11 +167,11 @@ async fn wal_replay_uses_project_bound_database_processor_script() {
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
     let processor_repository = ProcessorRepository::new(db);
-    project_repository
+    let project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -194,7 +195,7 @@ fn process(event, request) {
         .await
         .expect("processor script should be created");
     processor_repository
-        .assign_project_processor("APPID", script.id, true)
+        .assign_project_processor(project.id, script.id, true)
         .await
         .expect("project processor should be assigned");
 
@@ -259,6 +260,7 @@ linger_ms = "0"
     .await;
     let req = test::TestRequest::post()
         .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(
             serde_json::to_vec(&json!({
                 "appid": "APPID",
@@ -305,11 +307,11 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -471,6 +473,7 @@ linger_ms = "0"
             None,
             None,
             BTreeMap::new(),
+            1,
             b"{not-json".to_vec(),
         ))
         .expect("append invalid json record");
@@ -481,6 +484,7 @@ linger_ms = "0"
             None,
             None,
             BTreeMap::new(),
+            1,
             serde_json::to_vec(&json!({
                 "appid": "APPID",
                 "xwhat": "custom_event",
@@ -536,11 +540,11 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -591,6 +595,7 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
             None,
             None,
             BTreeMap::new(),
+            1,
             b"{not-json".to_vec(),
         ))
         .expect("append invalid json record");
@@ -634,11 +639,11 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -717,11 +722,11 @@ async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -804,11 +809,11 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -882,11 +887,11 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -962,11 +967,11 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -1059,11 +1064,11 @@ async fn wal_replay_rejects_tampered_sink_checkpoint() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -1220,6 +1225,7 @@ linger_ms = "0"
     for installid in ["iid-clean-1", "iid-clean-2"] {
         let req = test::TestRequest::post()
             .uri("/ingest")
+            .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(
                 serde_json::to_vec(&json!({
                     "appid": "APPID",
@@ -1260,11 +1266,11 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -1354,11 +1360,11 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
-    project_repository
+    let _project = project_repository
         .create_project(CreateProjectInput {
-            appid: "APPID".to_string(),
             name: "APPID".to_string(),
             enabled: true,
+            ingest_token: "igx_APPID".to_string(),
         })
         .await
         .expect("project should be created");
@@ -1494,6 +1500,7 @@ fn test_wal_record(payload: Value) -> WalRecord {
         None,
         None,
         BTreeMap::new(),
+        1,
         serde_json::to_vec(&payload).expect("serialize payload"),
     )
 }

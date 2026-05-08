@@ -6,7 +6,8 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     #[sea_orm(unique)]
-    pub appid: String,
+    pub ingest_token_hash: String,
+    pub ingest_token_prefix: String,
     pub name: String,
     pub enabled: bool,
     pub created_at: i64,
