@@ -1,6 +1,7 @@
 use crate::support::jlt::{
     parse_test_data_from_str, repo_scopes, run_scope_from_disk, ExpectedResult,
 };
+use crate::support::sinks::create_default_event_sinks;
 use ingest4x::db::{init_sqlite_database, seed};
 use ingest4x::repositories::{
     CreateProjectInput, ProcessorRepository, ProjectRepository, RuleRepository,
@@ -26,6 +27,7 @@ async fn seeded_rules() -> Rules {
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
+    create_default_event_sinks(&db).await;
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);

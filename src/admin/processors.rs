@@ -231,7 +231,7 @@ async fn validate_processor_script(
     request: Json<ValidateProcessorScriptRequest>,
 ) -> HttpResponse {
     let input = ValidateProcessorScriptInput::from(request.into_inner());
-    match repository.validate_script(input) {
+    match repository.validate_script(input).await {
         Ok(()) => HttpResponse::NoContent().finish(),
         Err(error) => map_repository_error(error),
     }

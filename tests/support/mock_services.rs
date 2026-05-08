@@ -44,7 +44,7 @@ fn process(event, request) {
             error_code: validation["code"]
         };
         event["xcontext"] = xcontext;
-        emit("events_error", event);
+        emit(SINK_EVENTS_ERROR, event);
         return;
     }
 
@@ -75,7 +75,7 @@ fn process(event, request) {
         event["xcontext"] = xcontext;
     }
 
-    emit("events", event);
+    emit(SINK_EVENTS, event);
 }
 "#;
 

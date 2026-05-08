@@ -10,7 +10,7 @@ use crate::settings::{
     default_database_refresh_interval_secs, default_kafka_batch_num_messages,
     default_kafka_delivery_timeout_ms, default_kafka_linger_ms,
     default_kafka_queue_buffering_max_messages, default_kafka_queue_buffering_max_ms,
-    EventSinkConfig, EventsSettings, Settings,
+    AutoOffsetReset, EventSinkConfig, EventsSettings, Settings,
 };
 use crate::utils::events::EventSinkState;
 use crate::utils::prometheus::{
@@ -358,9 +358,10 @@ async fn init_repository_state(
     let rule_repository = RuleRepository::new(db.clone());
     let event_sink_repository = EventSinkRepository::new(db.clone());
     let processor_repository = ProcessorRepository::new(db);
-    seed::run(&repository, &rule_repository, &processor_repository).await?;
     seed_default_delivery_targets(&event_sink_repository).await?;
     import_config_event_sinks(&event_sink_repository, &settings.events).await?;
+    seed_default_event_sinks(&event_sink_repository).await?;
+    seed::run(&repository, &rule_repository, &processor_repository).await?;
     let project_registry = Data::new(
         ProjectRegistryState::load(repository.clone())
             .await
@@ -434,6 +435,57 @@ async fn import_config_event_sinks(
 
         repository
             .create_event_sink(config_event_sink_input(sink_id, target.id, config))
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+    }
+
+    Ok(())
+}
+
+async fn seed_default_event_sinks(repository: &EventSinkRepository) -> std::io::Result<()> {
+    let existing = repository
+        .list_event_sinks()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let missing_sink_ids = ["events", "events_error"]
+        .into_iter()
+        .filter(|sink_id| !existing.iter().any(|sink| sink.sink_id == *sink_id))
+        .collect::<Vec<_>>();
+    if missing_sink_ids.is_empty() {
+        return Ok(());
+    }
+
+    let targets = repository
+        .list_delivery_targets()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let target = match targets
+        .into_iter()
+        .find(|target| target.target_id == "default_stdout")
+    {
+        Some(target) => target,
+        None => repository
+            .create_delivery_target(CreateDeliveryTargetInput {
+                target_id: "default_stdout".to_string(),
+                name: "Default Stdout".to_string(),
+                target_type: DeliveryTargetType::Stdout,
+                config_json: json!({}),
+                enabled: true,
+            })
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    };
+
+    for sink_id in missing_sink_ids {
+        repository
+            .create_event_sink(CreateEventSinkInput {
+                sink_id: sink_id.to_string(),
+                name: sink_id.to_string(),
+                delivery_target_id: target.id,
+                destination_json: json!({}),
+                auto_offset_reset: AutoOffsetReset::Latest,
+                enabled: true,
+            })
             .await
             .map_err(|error| std::io::Error::other(error.to_string()))?;
     }

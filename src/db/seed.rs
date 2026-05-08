@@ -128,9 +128,9 @@ const DEFAULT_PROCESSOR_SCRIPT: &str = r#"
 fn process(event, request) {
     let validation = validate(event);
     if validation["ok"] {
-        emit("events", event);
+        emit(SINK_EVENTS, event);
     } else {
-        emit("events_error", event);
+        emit(SINK_EVENTS_ERROR, event);
     }
 }
 "#;

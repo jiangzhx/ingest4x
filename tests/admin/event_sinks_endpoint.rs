@@ -525,6 +525,12 @@ admin_password = "test-admin-password"
 [database]
 url = "sqlite::memory:"
 
+[events.sink.events]
+type = "stdout"
+
+[events.sink.events_error]
+type = "stdout"
+
 [wal]
 dir = "{}"
 "#,

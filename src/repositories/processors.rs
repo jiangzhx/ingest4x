@@ -1,12 +1,16 @@
 use crate::current_timestamp_as_u64;
 use crate::entities::{
-    app_meta, processor_script_modules, processor_scripts, project_processors, projects,
+    app_meta, event_sinks, processor_script_modules, processor_scripts, project_processors,
+    projects,
 };
 use crate::ingest::processor::ProcessorState;
+use crate::rhai_ctx::sink_target_constant_name;
+use rhai::{ASTNode, Expr, FnCallExpr, Stmt};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
 };
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -200,31 +204,36 @@ impl ProcessorRepository {
         Self { db }
     }
 
-    pub fn validate_script(
+    pub async fn validate_script(
         &self,
         input: ValidateProcessorScriptInput,
     ) -> ProcessorRepositoryResult<()> {
-        validate_script_input(&CreateProcessorScriptInput {
-            script_key: "validation".to_string(),
-            name: "Validation".to_string(),
-            entry_module: input.entry_module,
-            status: ProcessorScriptStatus::Draft,
-            modules: input
-                .modules
-                .into_iter()
-                .map(|module| CreateProcessorScriptModuleInput {
-                    module_name: module.module_name,
-                    source: module.source,
-                })
-                .collect(),
-        })
+        let sink_targets = self.enabled_sink_ids().await?;
+        validate_script_input(
+            &CreateProcessorScriptInput {
+                script_key: "validation".to_string(),
+                name: "Validation".to_string(),
+                entry_module: input.entry_module,
+                status: ProcessorScriptStatus::Draft,
+                modules: input
+                    .modules
+                    .into_iter()
+                    .map(|module| CreateProcessorScriptModuleInput {
+                        module_name: module.module_name,
+                        source: module.source,
+                    })
+                    .collect(),
+            },
+            &sink_targets,
+        )
     }
 
     pub async fn create_script(
         &self,
         input: CreateProcessorScriptInput,
     ) -> ProcessorRepositoryResult<ProcessorScript> {
-        validate_script_input(&input)?;
+        let sink_targets = self.enabled_sink_ids().await?;
+        validate_script_input(&input, &sink_targets)?;
         let txn = self.db.begin().await?;
         let result = async {
             let now = current_timestamp();
@@ -306,6 +315,7 @@ impl ProcessorRepository {
         id: i32,
         input: UpdateProcessorScriptInput,
     ) -> ProcessorRepositoryResult<ProcessorScript> {
+        let sink_targets = self.enabled_sink_ids().await?;
         let txn = self.db.begin().await?;
         let result = async {
             let existing = find_processor_script_by_id(&txn, id).await?;
@@ -327,7 +337,7 @@ impl ProcessorRepository {
                     })
                     .collect(),
             };
-            validate_script_input(&validation_input)?;
+            validate_script_input(&validation_input, &sink_targets)?;
 
             let now = current_timestamp();
             let checksum = script_checksum(&validation_input);
@@ -623,6 +633,15 @@ impl ProcessorRepository {
         read_processor_scripts_version(&self.db).await
     }
 
+    pub async fn enabled_sink_ids(&self) -> ProcessorRepositoryResult<Vec<String>> {
+        let sinks = event_sinks::Entity::find()
+            .filter(event_sinks::Column::Enabled.eq(true))
+            .order_by_asc(event_sinks::Column::SinkId)
+            .all(&self.db)
+            .await?;
+        Ok(sinks.into_iter().map(|sink| sink.sink_id).collect())
+    }
+
     async fn default_processor_script_model(
         &self,
     ) -> ProcessorRepositoryResult<processor_scripts::Model> {
@@ -645,7 +664,10 @@ impl ProcessorRepository {
     }
 }
 
-fn validate_script_input(input: &CreateProcessorScriptInput) -> ProcessorRepositoryResult<()> {
+fn validate_script_input(
+    input: &CreateProcessorScriptInput,
+    sink_targets: &[String],
+) -> ProcessorRepositoryResult<()> {
     validate_module_name(input.entry_module.as_str())?;
     for module in &input.modules {
         validate_module_name(module.module_name.as_str())?;
@@ -665,12 +687,153 @@ fn validate_script_input(input: &CreateProcessorScriptInput) -> ProcessorReposit
         .filter(|module| module.module_name != input.entry_module)
         .map(|module| (module.module_name.clone(), module.source.clone()))
         .collect::<Vec<_>>();
-    ProcessorState::new_with_modules(entry.source.clone(), modules, 10_000).map_err(|error| {
-        ProcessorRepositoryError::InvalidScript {
-            message: label_entry_compile_error(&input.entry_module, error.to_string()),
-        }
+    validate_emit_targets(input, sink_targets)?;
+    ProcessorState::new_with_sink_targets(
+        entry.source.clone(),
+        modules,
+        sink_targets.to_vec(),
+        10_000,
+    )
+    .map_err(|error| ProcessorRepositoryError::InvalidScript {
+        message: label_entry_compile_error(&input.entry_module, error.to_string()),
     })?;
     Ok(())
+}
+
+fn validate_emit_targets(
+    input: &CreateProcessorScriptInput,
+    sink_targets: &[String],
+) -> ProcessorRepositoryResult<()> {
+    let constants = sink_target_constants(sink_targets)?;
+    let allowed_constants = constants.keys().cloned().collect::<HashSet<_>>();
+    for module in &input.modules {
+        let ast = compile_lint_ast(module.source.as_str()).map_err(|error| {
+            ProcessorRepositoryError::InvalidScript {
+                message: format!(
+                    "failed to compile Rhai module `{}`: {error}",
+                    module.module_name
+                ),
+            }
+        })?;
+        lint_emit_targets_in_ast(&module.module_name, &ast, &constants, &allowed_constants)?;
+    }
+    Ok(())
+}
+
+fn compile_lint_ast(source: &str) -> Result<rhai::AST, rhai::ParseError> {
+    let mut engine = rhai::Engine::new();
+    engine.set_max_expr_depths(0, 0);
+    engine.compile(source)
+}
+
+fn sink_target_constants(
+    sink_targets: &[String],
+) -> ProcessorRepositoryResult<HashMap<String, String>> {
+    let mut constants = HashMap::new();
+    for sink_target in sink_targets {
+        let constant_name = sink_target_constant_name(sink_target);
+        if constant_name == "SINK" {
+            return Err(ProcessorRepositoryError::InvalidScript {
+                message: format!("invalid event sink id '{sink_target}' for Rhai constant"),
+            });
+        }
+        if let Some(existing) = constants.insert(constant_name.clone(), sink_target.clone()) {
+            return Err(ProcessorRepositoryError::InvalidScript {
+                message: format!(
+                    "event sink ids '{existing}' and '{sink_target}' both map to Rhai constant `{constant_name}`"
+                ),
+            });
+        }
+    }
+    Ok(constants)
+}
+
+fn lint_emit_targets_in_ast(
+    module_name: &str,
+    ast: &rhai::AST,
+    constants: &HashMap<String, String>,
+    allowed_constants: &HashSet<String>,
+) -> ProcessorRepositoryResult<()> {
+    let mut error = None;
+    ast.walk(&mut |path| {
+        let Some(node) = path.last() else {
+            return true;
+        };
+        match node {
+            ASTNode::Stmt(Stmt::FnCall(call, position))
+            | ASTNode::Expr(Expr::FnCall(call, position))
+                if call.name == "emit" =>
+            {
+                error = lint_emit_call(module_name, call, *position, constants, allowed_constants);
+                error.is_none()
+            }
+            _ => true,
+        }
+    });
+    match error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn lint_emit_call(
+    module_name: &str,
+    call: &FnCallExpr,
+    position: rhai::Position,
+    constants: &HashMap<String, String>,
+    allowed_constants: &HashSet<String>,
+) -> Option<ProcessorRepositoryError> {
+    let Some(target) = call.args.first() else {
+        return Some(invalid_emit_target(
+            module_name,
+            "emit(target, event) requires a sink target constant",
+            position,
+        ));
+    };
+
+    match target {
+        Expr::Variable(variable, _, position) => {
+            let constant_name = variable.1.as_str();
+            if allowed_constants.contains(constant_name) {
+                return None;
+            }
+            Some(invalid_emit_target(
+                module_name,
+                format!("unknown sink target constant `{constant_name}`").as_str(),
+                *position,
+            ))
+        }
+        Expr::StringConstant(sink_target, position) => {
+            let constant_name = sink_target_constant_name(sink_target);
+            let message = if constants.contains_key(&constant_name) {
+                format!(
+                    "emit target must use sink constant `{constant_name}` instead of string literal"
+                )
+            } else {
+                format!("unknown sink target `{sink_target}`")
+            };
+            Some(invalid_emit_target(
+                module_name,
+                message.as_str(),
+                *position,
+            ))
+        }
+        other => Some(invalid_emit_target(
+            module_name,
+            "emit target must be a configured sink constant",
+            other.position(),
+        )),
+    }
+}
+
+fn invalid_emit_target(
+    module_name: &str,
+    message: &str,
+    position: rhai::Position,
+) -> ProcessorRepositoryError {
+    ProcessorRepositoryError::InvalidScript {
+        message: format!("failed to lint Rhai module `{module_name}`: {message} {position}"),
+    }
 }
 
 fn label_entry_compile_error(entry_module: &str, message: String) -> String {

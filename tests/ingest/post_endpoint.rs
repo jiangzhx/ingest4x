@@ -117,10 +117,10 @@ async fn post_ingest_replays_wal_through_rhai_processor_before_kafka_sink() {
 fn process(event, ctx) {
     let validation = validate(event);
     if !validation["ok"] {
-        emit("events_error", event);
+        emit(SINK_EVENTS_ERROR, event);
     } else {
         event["xcontext"]["processor_marker"] = "rhai";
-        emit("events", event);
+        emit(SINK_EVENTS, event);
     }
 }
 "#;

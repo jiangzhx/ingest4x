@@ -278,11 +278,17 @@ async fn build_app_state_seeds_local_kafka_delivery_target_without_toml_sinks() 
     assert_eq!(response.status(), StatusCode::OK);
 
     let sinks: serde_json::Value = test::read_body_json(response).await;
-    assert_eq!(
-        sinks.as_array().expect("sinks should be an array").len(),
-        0,
-        "default target seed should not create event sinks"
-    );
+    let sink_ids = sinks
+        .as_array()
+        .expect("sinks should be an array")
+        .iter()
+        .map(|sink| {
+            sink["sink_id"]
+                .as_str()
+                .expect("sink_id should be a string")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sink_ids, vec!["events", "events_error"]);
 }
 
 #[actix_rt::test]

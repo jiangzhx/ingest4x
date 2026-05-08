@@ -76,7 +76,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
                     "modules": [
                         {
                             "module_name": "main",
-                            "source": "fn process(event, request) { emit(\"custom_events\", event); }"
+                            "source": "fn process(event, request) { emit(SINK_EVENTS, event); }"
                         }
                     ]
                 }))
@@ -94,7 +94,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
                     "modules": [
                         {
                             "module_name": "main",
-                            "source": "fn process(event, request) { emit(\"custom_events\", event);"
+                            "source": "fn process(event, request) { emit(SINK_EVENTS, event);"
                         }
                     ]
                 }))
@@ -119,7 +119,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
                     "modules": [
                         {
                             "module_name": "main",
-                            "source": "fn process(event, request) { emit(\"custom_events\", event); }"
+                            "source": "fn process(event, request) { emit(SINK_EVENTS, event); }"
                         }
                     ]
                 }))
@@ -142,7 +142,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
                     "modules": [
                         {
                             "module_name": "main",
-                            "source": "fn process(event, request) { emit(\"updated_events\", event); }"
+                            "source": "fn process(event, request) { emit(SINK_EVENTS, event); }"
                         }
                     ]
                 }))
@@ -208,7 +208,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
         let probe_status = probe.status();
         let probe: Value = test::read_body_json(probe).await;
         assert_eq!(probe_status, StatusCode::OK);
-        assert_eq!(probe["targets"], json!(["updated_events"]));
+        assert_eq!(probe["targets"], json!(["events"]));
 
         let delete = test::call_service(
             &app,
@@ -233,7 +233,7 @@ async fn admin_rejects_inactive_binding_and_disabling_script_in_use() {
             "draft_pipeline",
             "Draft Pipeline",
             "draft",
-            "fn process(event, request) { emit(\"draft_events\", event); }",
+            "fn process(event, request) { emit(SINK_EVENTS, event); }",
         )
         .await;
         let assign_draft = test::call_service(
@@ -254,7 +254,7 @@ async fn admin_rejects_inactive_binding_and_disabling_script_in_use() {
             "guarded_pipeline",
             "Guarded Pipeline",
             "active",
-            "fn process(event, request) { emit(\"guarded_events\", event); }",
+            "fn process(event, request) { emit(SINK_EVENTS, event); }",
         )
         .await;
         let assign_active = test::call_service(
@@ -468,6 +468,12 @@ admin_password = "test-admin-password"
 
 [database]
 url = "sqlite::memory:"
+
+[events.sink.events]
+type = "stdout"
+
+[events.sink.events_error]
+type = "stdout"
 
 [wal]
 dir = "{}"

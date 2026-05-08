@@ -2,7 +2,7 @@ use crate::rules::Rules;
 use crate::utils::get_host_ip;
 use rhai::packages::Package;
 use rhai::serde::from_dynamic;
-use rhai::{def_package, Dynamic, Engine, EvalAltResult, ImmutableString, Map};
+use rhai::{def_package, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Scope};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -43,6 +43,23 @@ struct ProcessorContext {
 pub struct ProcessorDelivery {
     pub target: String,
     pub event: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SinkTarget {
+    target: String,
+}
+
+impl SinkTarget {
+    pub fn new(target: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+        }
+    }
+
+    pub fn target(&self) -> &str {
+        self.target.as_str()
+    }
 }
 
 thread_local! {
@@ -126,7 +143,35 @@ impl ProcessorRequestContext {
 }
 
 pub(crate) fn register_api(engine: &mut Engine) {
+    engine.register_type_with_name::<SinkTarget>("SinkTarget");
     ProcessorApiPackage::new().register_into_engine(engine);
+}
+
+pub(crate) fn push_sink_target_constants(scope: &mut Scope, sink_targets: &[String]) {
+    for sink_target in sink_targets {
+        scope.push_constant(
+            sink_target_constant_name(sink_target),
+            SinkTarget::new(sink_target.clone()),
+        );
+    }
+}
+
+pub(crate) fn sink_target_constant_name(sink_target: &str) -> String {
+    let mut constant = String::from("SINK_");
+    let mut previous_was_separator = false;
+    for ch in sink_target.chars() {
+        if ch.is_ascii_alphanumeric() {
+            constant.push(ch.to_ascii_uppercase());
+            previous_was_separator = false;
+        } else if !previous_was_separator {
+            constant.push('_');
+            previous_was_separator = true;
+        }
+    }
+    while constant.ends_with('_') {
+        constant.pop();
+    }
+    constant
 }
 
 pub(crate) fn enter_processor_context(rules: Rules, event_name: String) -> ProcessorContextGuard {
@@ -203,8 +248,8 @@ fn validate(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
     Ok(output)
 }
 
-fn emit(target: &str, event: Dynamic) -> Result<(), Box<EvalAltResult>> {
-    if target.trim().is_empty() {
+fn emit(target: SinkTarget, event: Dynamic) -> Result<(), Box<EvalAltResult>> {
+    if target.target().trim().is_empty() {
         warn!("processor emit ignored empty sink target");
         return Ok(());
     }
@@ -225,7 +270,7 @@ fn emit(target: &str, event: Dynamic) -> Result<(), Box<EvalAltResult>> {
             )
         })?;
         context.deliveries.borrow_mut().push(ProcessorDelivery {
-            target: target.to_string(),
+            target: target.target().to_string(),
             event,
         });
         Ok(())

@@ -4,10 +4,9 @@ fn process(event, request) {
     let validation = validate(event);
     if !validation["ok"] {
         event = custom::attach_reject_process_info(event, request, validation["error"], validation["code"]);
-        emit("events_error", event);
+        emit(SINK_EVENTS_ERROR, event);
     } else {
         event = custom::normalize_event(event, request);
-        emit("events", event);
-        emit("events2", event);
-    }
+        emit(SINK_EVENTS, event);
+            }
 }

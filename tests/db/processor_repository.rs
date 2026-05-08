@@ -1,14 +1,45 @@
 use ingest4x::db::{init_sqlite_database, seed};
 use ingest4x::ingest::processor::{ProcessorRequestContext, ProcessorState};
 use ingest4x::repositories::{
-    CreateProcessorScriptInput, CreateProcessorScriptModuleInput, CreateProjectInput,
+    CreateDeliveryTargetInput, CreateEventSinkInput, CreateProcessorScriptInput,
+    CreateProcessorScriptModuleInput, CreateProjectInput, DeliveryTargetType, EventSinkRepository,
     ProcessorRepository, ProcessorRepositoryError, ProcessorScriptStatus, ProjectRepository,
     RuleRepository, UpdateProcessorScriptInput, UpdateProcessorScriptModuleInput,
     UpdateProcessorScriptStatusInput, ValidateProcessorScriptInput,
     ValidateProcessorScriptModuleInput,
 };
 use ingest4x::rules::Rules;
+use ingest4x::settings::AutoOffsetReset;
 use serde_json::json;
+
+async fn create_stdout_sink(repository: &EventSinkRepository, sink_id: &str) {
+    let target = repository
+        .create_delivery_target(CreateDeliveryTargetInput {
+            target_id: format!("{sink_id}_target"),
+            name: format!("{sink_id} target"),
+            target_type: DeliveryTargetType::Stdout,
+            config_json: json!({}),
+            enabled: true,
+        })
+        .await
+        .expect("delivery target should be created");
+    repository
+        .create_event_sink(CreateEventSinkInput {
+            sink_id: sink_id.to_string(),
+            name: sink_id.to_string(),
+            delivery_target_id: target.id,
+            destination_json: json!({}),
+            auto_offset_reset: AutoOffsetReset::Earliest,
+            enabled: true,
+        })
+        .await
+        .expect("event sink should be created");
+}
+
+async fn create_default_sinks(repository: &EventSinkRepository) {
+    create_stdout_sink(repository, "events").await;
+    create_stdout_sink(repository, "events_error").await;
+}
 
 #[tokio::test]
 async fn loads_project_bound_processor_script_with_multiple_modules() {
@@ -16,7 +47,9 @@ async fn loads_project_bound_processor_script_with_multiple_modules() {
         .await
         .expect("sqlite database should initialize");
     let projects = ProjectRepository::new(db.clone());
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     let project = projects
         .create_project(CreateProjectInput {
@@ -41,7 +74,7 @@ import "custom" as custom;
 
 fn process(event, request) {
     event = custom::mark(event);
-    emit("events", event);
+    emit(SINK_EVENTS, event);
 }
 "#
                     .to_string(),
@@ -108,7 +141,9 @@ async fn seed_creates_minimal_default_processor_script() {
         .expect("sqlite database should initialize");
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db.clone());
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     seed::run(&projects, &rules, &processors)
         .await
@@ -123,10 +158,10 @@ async fn seed_creates_minimal_default_processor_script() {
     assert_eq!(runtime.entry_module, "main");
     assert_eq!(runtime.modules.len(), 1);
     assert!(runtime.entry_source.contains("validate(event)"));
-    assert!(runtime.entry_source.contains("emit(\"events\", event)"));
+    assert!(runtime.entry_source.contains("emit(SINK_EVENTS, event)"));
     assert!(runtime
         .entry_source
-        .contains("emit(\"events_error\", event)"));
+        .contains("emit(SINK_EVENTS_ERROR, event)"));
 }
 
 #[tokio::test]
@@ -134,7 +169,9 @@ async fn create_script_rejects_duplicate_script_key() {
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     let input = CreateProcessorScriptInput {
         script_key: "custom_pipeline".to_string(),
@@ -143,7 +180,7 @@ async fn create_script_rejects_duplicate_script_key() {
         status: ProcessorScriptStatus::Active,
         modules: vec![CreateProcessorScriptModuleInput {
             module_name: "main".to_string(),
-            source: r#"fn process(event, request) { emit("events", event); }"#.to_string(),
+            source: r#"fn process(event, request) { emit(SINK_EVENTS, event); }"#.to_string(),
         }],
     };
 
@@ -173,16 +210,19 @@ async fn validate_script_rejects_invalid_rhai_without_persisting() {
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     let error = processors
         .validate_script(ValidateProcessorScriptInput {
             entry_module: "main".to_string(),
             modules: vec![ValidateProcessorScriptModuleInput {
                 module_name: "main".to_string(),
-                source: r#"fn process(event, request) { emit("events", event);"#.to_string(),
+                source: r#"fn process(event, request) { emit(SINK_EVENTS, event);"#.to_string(),
             }],
         })
+        .await
         .expect_err("invalid Rhai script should be rejected");
 
     assert!(matches!(
@@ -198,11 +238,54 @@ async fn validate_script_rejects_invalid_rhai_without_persisting() {
 }
 
 #[tokio::test]
+async fn validate_script_allows_complex_module_expressions_like_runtime_compile() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let sinks = EventSinkRepository::new(db.clone());
+    let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
+    let nested_expression = format!("{}event{}", "(".repeat(96), ")".repeat(96));
+
+    processors
+        .validate_script(ValidateProcessorScriptInput {
+            entry_module: "main".to_string(),
+            modules: vec![
+                ValidateProcessorScriptModuleInput {
+                    module_name: "main".to_string(),
+                    source: r#"
+import "custom" as custom;
+
+fn process(event, request) {
+    emit(SINK_EVENTS, custom::pass(event));
+}
+"#
+                    .to_string(),
+                },
+                ValidateProcessorScriptModuleInput {
+                    module_name: "custom".to_string(),
+                    source: format!(
+                        r#"
+fn pass(event) {{
+    return {nested_expression};
+}}
+"#
+                    ),
+                },
+            ],
+        })
+        .await
+        .expect("validation should match runtime expression depth limits");
+}
+
+#[tokio::test]
 async fn validate_script_reports_invalid_module_name_for_module_source() {
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     let error = processors
         .validate_script(ValidateProcessorScriptInput {
@@ -214,7 +297,7 @@ async fn validate_script_reports_invalid_module_name_for_module_source() {
 
 fn process(event, request) {
     event = custom::mark(event);
-    emit("events", event);
+    emit(SINK_EVENTS, event);
 }"#
                     .to_string(),
                 },
@@ -224,6 +307,7 @@ fn process(event, request) {
                 },
             ],
         })
+        .await
         .expect_err("invalid module source should be rejected");
 
     assert!(matches!(
@@ -234,11 +318,98 @@ fn process(event, request) {
 }
 
 #[tokio::test]
+async fn validate_script_rejects_string_emit_targets() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let sinks = EventSinkRepository::new(db.clone());
+    let processors = ProcessorRepository::new(db);
+    create_stdout_sink(&sinks, "events").await;
+
+    let error = processors
+        .validate_script(ValidateProcessorScriptInput {
+            entry_module: "main".to_string(),
+            modules: vec![ValidateProcessorScriptModuleInput {
+                module_name: "main".to_string(),
+                source: r#"fn process(event, request) { emit("events", event); }"#.to_string(),
+            }],
+        })
+        .await
+        .expect_err("string emit target should be rejected");
+
+    assert!(matches!(
+        error,
+        ProcessorRepositoryError::InvalidScript { .. }
+    ));
+    assert!(error.to_string().contains("Rhai module `main`"));
+    assert!(error.to_string().contains("SINK_EVENTS"));
+}
+
+#[tokio::test]
+async fn processor_runtime_resolves_sink_target_constants() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let sinks = EventSinkRepository::new(db.clone());
+    let processors = ProcessorRepository::new(db);
+    create_stdout_sink(&sinks, "events").await;
+
+    let script = processors
+        .create_script(CreateProcessorScriptInput {
+            script_key: "constant_pipeline".to_string(),
+            name: "Constant pipeline".to_string(),
+            entry_module: "main".to_string(),
+            status: ProcessorScriptStatus::Active,
+            modules: vec![CreateProcessorScriptModuleInput {
+                module_name: "main".to_string(),
+                source: r#"fn process(event, request) { emit(SINK_EVENTS, event); }"#.to_string(),
+            }],
+        })
+        .await
+        .expect("constant target script should be created");
+    let (_, modules) = processors
+        .get_script(script.id)
+        .await
+        .expect("script should load")
+        .expect("script should exist");
+    let entry_source = modules
+        .iter()
+        .find(|module| module.module_name == "main")
+        .expect("entry module should exist")
+        .source
+        .clone();
+    let sink_targets = processors
+        .enabled_sink_ids()
+        .await
+        .expect("sink ids should load");
+    let processor =
+        ProcessorState::new_with_sink_targets(entry_source, Vec::new(), sink_targets, 10_000)
+            .expect("processor should compile with sink constants");
+
+    let output = processor
+        .process(
+            json!({
+                "appid": "app-1",
+                "xwhat": "constant_event",
+                "xcontext": {}
+            }),
+            Rules::default(),
+            ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+        )
+        .expect("processor should run");
+
+    assert_eq!(output.deliveries.len(), 1);
+    assert_eq!(output.deliveries[0].target, "events");
+}
+
+#[tokio::test]
 async fn update_script_replaces_modules_and_increments_version() {
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     let script = processors
         .create_script(CreateProcessorScriptInput {
@@ -248,7 +419,7 @@ async fn update_script_replaces_modules_and_increments_version() {
             status: ProcessorScriptStatus::Draft,
             modules: vec![CreateProcessorScriptModuleInput {
                 module_name: "main".to_string(),
-                source: r#"fn process(event, request) { emit("events", event); }"#.to_string(),
+                source: r#"fn process(event, request) { emit(SINK_EVENTS, event); }"#.to_string(),
             }],
         })
         .await
@@ -269,7 +440,7 @@ import "custom" as custom;
 
 fn process(event, request) {
     event = custom::mark(event);
-    emit("updated_events", event);
+    emit(SINK_EVENTS, event);
 }
 "#
                         .to_string(),
@@ -313,7 +484,9 @@ async fn assign_project_processor_requires_active_script() {
         .await
         .expect("sqlite database should initialize");
     let projects = ProjectRepository::new(db.clone());
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     let project = projects
         .create_project(CreateProjectInput {
@@ -331,7 +504,7 @@ async fn assign_project_processor_requires_active_script() {
             status: ProcessorScriptStatus::Draft,
             modules: vec![CreateProcessorScriptModuleInput {
                 module_name: "main".to_string(),
-                source: r#"fn process(event, request) { emit("events", event); }"#.to_string(),
+                source: r#"fn process(event, request) { emit(SINK_EVENTS, event); }"#.to_string(),
             }],
         })
         .await
@@ -354,7 +527,9 @@ async fn update_script_status_rejects_disabling_script_in_use() {
         .await
         .expect("sqlite database should initialize");
     let projects = ProjectRepository::new(db.clone());
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
+    create_default_sinks(&sinks).await;
 
     let project = projects
         .create_project(CreateProjectInput {
@@ -372,7 +547,7 @@ async fn update_script_status_rejects_disabling_script_in_use() {
             status: ProcessorScriptStatus::Active,
             modules: vec![CreateProcessorScriptModuleInput {
                 module_name: "main".to_string(),
-                source: r#"fn process(event, request) { emit("events", event); }"#.to_string(),
+                source: r#"fn process(event, request) { emit(SINK_EVENTS, event); }"#.to_string(),
             }],
         })
         .await

@@ -1,4 +1,6 @@
-use crate::rhai_ctx::{enter_processor_context, register_api, ProcessorDelivery};
+use crate::rhai_ctx::{
+    enter_processor_context, push_sink_target_constants, register_api, ProcessorDelivery,
+};
 use crate::rules::Rules;
 use crate::settings::default_processor_max_operations;
 use anyhow::{anyhow, Result};
@@ -18,6 +20,7 @@ use crate::repositories::{ProcessorRepository, RuntimeProcessorScript};
 pub use crate::rhai_ctx::ProcessorRequestContext;
 
 const DEFAULT_RHAI_PROCESSOR_PATH: &str = "pipeline/main.rhai";
+const DEFAULT_SINK_TARGETS: &[&str] = &["events", "events_error"];
 
 #[derive(Clone)]
 pub struct ProcessorState {
@@ -47,9 +50,10 @@ pub trait ProcessorRuntime: Send + Sync {
 impl ProcessorState {
     pub fn from_default_entry() -> Result<Self> {
         let script = read_processor_script(DEFAULT_RHAI_PROCESSOR_PATH)?;
-        Self::new_with_modules(
+        Self::new_with_sink_targets(
             script.entry,
             script.modules,
+            default_sink_targets(),
             default_processor_max_operations(),
         )
     }
@@ -63,7 +67,16 @@ impl ProcessorState {
         modules: Vec<(String, String)>,
         max_operations: u64,
     ) -> Result<Self> {
-        let (engine, ast) = compile_script(&script, modules, max_operations)?;
+        Self::new_with_sink_targets(script, modules, default_sink_targets(), max_operations)
+    }
+
+    pub fn new_with_sink_targets(
+        script: String,
+        modules: Vec<(String, String)>,
+        sink_targets: Vec<String>,
+        max_operations: u64,
+    ) -> Result<Self> {
+        let (engine, ast) = compile_script(&script, modules, &sink_targets, max_operations)?;
         Ok(Self { engine, ast })
     }
 
@@ -196,7 +209,9 @@ async fn load_processor_router_snapshot(
 ) -> Result<(ProcessorRouter, u64)> {
     loop {
         let version_before = repository.processor_scripts_version().await?;
-        let default = compile_runtime_script(repository.default_runtime_script().await?)?;
+        let sink_targets = repository.enabled_sink_ids().await?;
+        let default =
+            compile_runtime_script(repository.default_runtime_script().await?, &sink_targets)?;
         let project_scripts = repository.list_enabled_runtime_project_processors().await?;
         let version_after = repository.processor_scripts_version().await?;
 
@@ -206,17 +221,21 @@ async fn load_processor_router_snapshot(
 
         let mut projects = HashMap::new();
         for (project_id, script) in project_scripts {
-            projects.insert(project_id, compile_runtime_script(script)?);
+            projects.insert(project_id, compile_runtime_script(script, &sink_targets)?);
         }
 
         return Ok((ProcessorRouter { default, projects }, version_after));
     }
 }
 
-fn compile_runtime_script(script: RuntimeProcessorScript) -> Result<ProcessorState> {
-    ProcessorState::new_with_modules(
+fn compile_runtime_script(
+    script: RuntimeProcessorScript,
+    sink_targets: &[String],
+) -> Result<ProcessorState> {
+    ProcessorState::new_with_sink_targets(
         script.entry_source.clone(),
         script.resolver_modules(),
+        sink_targets.to_vec(),
         default_processor_max_operations(),
     )
 }
@@ -224,18 +243,25 @@ fn compile_runtime_script(script: RuntimeProcessorScript) -> Result<ProcessorSta
 fn compile_script(
     script: &str,
     modules: Vec<(String, String)>,
+    sink_targets: &[String],
     max_operations: u64,
 ) -> Result<(Arc<Engine>, AST)> {
     let mut engine = Engine::new();
     engine.set_max_operations(max_operations);
     engine.set_max_expr_depths(0, 0);
     register_api(&mut engine);
-    register_script_modules(&mut engine, modules)?;
-    let ast = engine.compile_into_self_contained(&Scope::new(), script)?;
+    let mut scope = Scope::new();
+    push_sink_target_constants(&mut scope, sink_targets);
+    register_script_modules(&mut engine, &scope, modules)?;
+    let ast = engine.compile_into_self_contained(&scope, script)?;
     Ok((Arc::new(engine), ast))
 }
 
-fn register_script_modules(engine: &mut Engine, modules: Vec<(String, String)>) -> Result<()> {
+fn register_script_modules(
+    engine: &mut Engine,
+    scope: &Scope,
+    modules: Vec<(String, String)>,
+) -> Result<()> {
     if modules.is_empty() {
         return Ok(());
     }
@@ -243,14 +269,21 @@ fn register_script_modules(engine: &mut Engine, modules: Vec<(String, String)>) 
     let mut resolver = StaticModuleResolver::new();
     for (name, script) in modules {
         let ast = engine
-            .compile(script)
+            .compile_with_scope(scope, script)
             .map_err(|err| anyhow!("failed to compile Rhai module `{name}`: {err}"))?;
-        let module = Module::eval_ast_as_new(Scope::new(), &ast, engine)
+        let module = Module::eval_ast_as_new(scope.clone(), &ast, engine)
             .map_err(|err| anyhow!("failed to initialize Rhai module `{name}`: {err}"))?;
         resolver.insert(name, module);
     }
     engine.set_module_resolver(resolver);
     Ok(())
+}
+
+fn default_sink_targets() -> Vec<String> {
+    DEFAULT_SINK_TARGETS
+        .iter()
+        .map(|target| (*target).to_string())
+        .collect()
 }
 
 fn parse_processor_output(deliveries: Vec<ProcessorDelivery>) -> Result<ProcessorOutput> {
@@ -363,7 +396,7 @@ import "custom" as custom;
 
 fn process(event, request) {
     event = custom::custom_step(event);
-    emit("stdout", event);
+    emit(SINK_STDOUT, event);
 }
 "#,
         )
@@ -385,7 +418,13 @@ fn custom_step(event) {
         assert!(script.entry.contains("fn process"));
         assert_eq!(script.modules[0].0, "custom");
         assert!(script.modules[0].1.contains("fn custom_step"));
-        compile_script(&script.entry, script.modules, 10_000).expect("compiled processor modules");
+        compile_script(
+            &script.entry,
+            script.modules,
+            &["stdout".to_string()],
+            10_000,
+        )
+        .expect("compiled processor modules");
     }
 
     #[test]
@@ -422,7 +461,7 @@ fn process(event, request) {
         let processor = ProcessorState::new(
             r#"
 fn main(event, request) {
-    emit("stdout", event);
+    emit(SINK_STDOUT, event);
 }
 "#
             .to_string(),
@@ -448,16 +487,18 @@ fn main(event, request) {
 
     #[test]
     fn processor_collects_emit_deliveries_per_event() {
-        let processor = ProcessorState::new(
+        let processor = ProcessorState::new_with_sink_targets(
             r#"
 fn process(event, request) {
-    emit("kafka_raw", event);
+    emit(SINK_KAFKA_RAW, event);
     event["xcontext"]["normalized"] = true;
-    emit("kafka_valid", event);
-    emit("kafka_raw", event);
+    emit(SINK_KAFKA_VALID, event);
+    emit(SINK_KAFKA_RAW, event);
 }
 "#
             .to_string(),
+            Vec::new(),
+            vec!["kafka_raw".to_string(), "kafka_valid".to_string()],
             10_000,
         )
         .expect("processor should compile");

@@ -19,9 +19,9 @@ const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
 export const DEFAULT_PROCESSOR_SOURCE = `fn process(event, request) {
     let validation = validate(event);
     if validation["ok"] {
-        emit("events", event);
+        emit(SINK_EVENTS, event);
     } else {
-        emit("events_error", event);
+        emit(SINK_EVENTS_ERROR, event);
     }
 }`;
 

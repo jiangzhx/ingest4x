@@ -6,7 +6,8 @@ use base64::Engine;
 use ingest4x::db::init_sqlite_database;
 use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{
-    CreateProcessorScriptInput, CreateProcessorScriptModuleInput, CreateProjectInput,
+    CreateDeliveryTargetInput, CreateEventSinkInput, CreateProcessorScriptInput,
+    CreateProcessorScriptModuleInput, CreateProjectInput, DeliveryTargetType, EventSinkRepository,
     ProcessorRepository, ProcessorScriptStatus, ProjectRepository, RuleRepository,
 };
 use ingest4x::server;
@@ -166,6 +167,35 @@ async fn wal_replay_uses_project_bound_database_processor_script() {
         .await
         .expect("sqlite database should initialize");
     let project_repository = ProjectRepository::new(db.clone());
+    let event_sink_repository = EventSinkRepository::new(db.clone());
+    let target = event_sink_repository
+        .create_delivery_target(CreateDeliveryTargetInput {
+            target_id: "events_target".to_string(),
+            name: "events target".to_string(),
+            target_type: DeliveryTargetType::Kafka,
+            config_json: json!({
+                "bootstrap_servers": kafka.bootstrap_servers,
+                "delivery_timeout_ms": "5000",
+                "queue_buffering_max_ms": "0",
+                "batch_num_messages": "1",
+                "queue_buffering_max_messages": "300",
+                "linger_ms": "0"
+            }),
+            enabled: true,
+        })
+        .await
+        .expect("events target should be created");
+    event_sink_repository
+        .create_event_sink(CreateEventSinkInput {
+            sink_id: "events".to_string(),
+            name: "events".to_string(),
+            delivery_target_id: target.id,
+            destination_json: json!({ "topic": kafka.topic }),
+            auto_offset_reset: AutoOffsetReset::Earliest,
+            enabled: true,
+        })
+        .await
+        .expect("events sink should be created");
     let processor_repository = ProcessorRepository::new(db);
     let project = project_repository
         .create_project(CreateProjectInput {
@@ -186,7 +216,7 @@ async fn wal_replay_uses_project_bound_database_processor_script() {
                 source: r#"
 fn process(event, request) {
     event["xcontext"]["processor_marker"] = "project-db";
-    emit("events", event);
+    emit(SINK_EVENTS, event);
 }
 "#
                 .to_string(),
@@ -350,17 +380,15 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
         ]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
                 event["xwhat"] = "mutated_event";
-                emit("kafka_mutated", event);
+                emit(SINK_KAFKA_MUTATED, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["kafka_mutated"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -556,17 +584,15 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("stdout", event);
+                emit(SINK_STDOUT, event);
 
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["stdout"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -741,16 +767,14 @@ async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
         ]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("sink_a", event);
+                emit(SINK_SINK_A, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["sink_a"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -825,16 +849,14 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
         sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Latest))]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("stdout", event);
+                emit(SINK_STDOUT, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["stdout"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -903,16 +925,14 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
         sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Latest))]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("stdout", event);
+                emit(SINK_STDOUT, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["stdout"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -983,17 +1003,15 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
         sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("stdout", event);
-                emit("missing_sink", event);
+                emit(SINK_STDOUT, event);
+                emit(SINK_MISSING_SINK, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["stdout", "missing_sink"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -1092,16 +1110,14 @@ async fn wal_replay_rejects_tampered_sink_checkpoint() {
         )]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("kafka_valid", event);
+                emit(SINK_KAFKA_VALID, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["kafka_valid"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -1294,16 +1310,14 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         )]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("kafka_valid", event);
+                emit(SINK_KAFKA_VALID, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["kafka_valid"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -1376,16 +1390,14 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
     })
     .expect("event sinks should initialize");
-    let processor = ProcessorState::new(
+    let processor = processor_with_sinks(
         r#"
             fn process(event, request) {
-                emit("stdout", event);
+                emit(SINK_STDOUT, event);
             }
-        "#
-        .to_string(),
-        10_000,
-    )
-    .expect("processor should initialize");
+        "#,
+        &["stdout"],
+    );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
@@ -1491,6 +1503,19 @@ async fn read_message_payload(consumer: &StreamConsumer) -> String {
 
 fn parse_json_message(line: &str) -> Value {
     serde_json::from_str(line).expect("event sink message should be valid json")
+}
+
+fn processor_with_sinks(script: &str, sink_targets: &[&str]) -> ProcessorState {
+    ProcessorState::new_with_sink_targets(
+        script.to_string(),
+        Vec::new(),
+        sink_targets
+            .iter()
+            .map(|target| (*target).to_string())
+            .collect(),
+        10_000,
+    )
+    .expect("processor should initialize")
 }
 
 fn test_wal_record(payload: Value) -> WalRecord {
