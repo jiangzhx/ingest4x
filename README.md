@@ -39,11 +39,12 @@ cargo build --release
 
 ### 3. 使用完整示例配置启动
 
-`ingest4x.example.toml` 是完整示例配置：MySQL 存储项目和规则元数据，WAL 作为 ACK 持久化边界，Kafka 作为 replay 后的事件 sink。启动前先准备：
+`ingest4x.example.toml` 是完整示例配置：MySQL 存储项目、规则和 sink 元数据，WAL 作为 ACK 持久化边界。启动前先准备：
 
 - MySQL 数据库：`CREATE DATABASE ingest4x CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`
-- Kafka topics：`ingest4x-events`、`ingest4x-events-error`
-- 按本机环境修改 `database.url`、`events.sink.*.bootstrap_servers`、`management.admin_password` 和 `wal.dir`
+- 如果要使用默认的 Local Kafka delivery target，启动本机 Kafka：`127.0.0.1:9092`
+- 按本机环境修改 `database.url`、`management.admin_password` 和 `wal.dir`
+- 系统初始化会自动创建一个指向 `127.0.0.1:9092` 的 `Local Kafka` delivery target；Event Sink 通过管理后台或管理 API 创建
 
 ```bash
 cargo run --bin ingest4x -- \
@@ -72,7 +73,8 @@ curl -X POST http://127.0.0.1:8090/ingest \
 - 需要启动 MySQL 和 Kafka
 - `appid` 校验来自 MySQL-backed `ProjectRegistryState`
 - 请求成功返回只表示事件已经写入并持久化到 WAL
-- 下游 Kafka 投递由 WAL replay 负责
+- 下游投递由 WAL replay 负责
+- 可以通过管理 API 动态创建、禁用或删除 delivery target / event sink，runtime 会刷新 router，不需要重启服务
 - `8090` 是接入面端口，只承载 `/` 与 `/ingest`
 
 ### 4. 理解 `/ingest` 的处理逻辑
@@ -84,8 +86,21 @@ curl -X POST http://127.0.0.1:8090/ingest \
 3. 检查 payload 大小
 4. 将原始请求写入 WAL，`no_sync = false` 时等待 WAL 持久化后 ACK
 5. 后台 WAL replay 读取 record，执行 Rhai processor 和业务 rules
-6. replay 按 processor emit 的目标写入 `[events.sink.*]`，例如 Kafka 或 stdout
+6. replay 按 processor emit 的目标写入 DB 中的 `event_sinks`，例如 Kafka 或 stdout
 7. 每个 sink 使用 `wal/checkpoints/<sink>.json` 记录自己的 replay 位点；没有可用 checkpoint 时按该 sink 的 `auto_offset_reset` 决定从当前 WAL 最早还是最新位置开始
+
+配置文件不再要求 `[events.sink.*]`。服务初始化时会确保 DB 中有一个默认的 `Local Kafka` delivery target，业务事件的 emit 目标请通过管理后台或管理 API 创建为 `event_sinks`。
+
+管理 API 的 sink 入口：
+
+- `GET /api/admin/delivery-targets`
+- `POST /api/admin/delivery-targets`
+- `PUT /api/admin/delivery-targets/{id}`
+- `DELETE /api/admin/delivery-targets/{id}`
+- `GET /api/admin/event-sinks`
+- `POST /api/admin/event-sinks`
+- `PUT /api/admin/event-sinks/{id}`
+- `DELETE /api/admin/event-sinks/{id}`
 
 ### 5. 管理后台与 API 文档
 

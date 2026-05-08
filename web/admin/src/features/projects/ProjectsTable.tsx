@@ -1,18 +1,49 @@
 import { Button, Empty, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { processorLabel } from "../processors/ProjectProcessorPanel";
+import type { ProcessorScript, ProjectProcessor } from "../processors/types";
 import type { Project } from "./types";
 import { formatProjectTimestamp } from "./utils";
 
 type ProjectsTableProps = {
   projects: Project[];
+  processorScripts?: ProcessorScript[];
+  processorBindings?: ProjectProcessor[];
   deletingAppid?: string | null;
   actionsDisabled?: boolean;
   onEdit: (project: Project) => void;
   onDelete: (project: Project) => Promise<void>;
 };
 
+function projectProcessorLabel(
+  project: Project,
+  scripts: ProcessorScript[],
+  bindings: ProjectProcessor[],
+) {
+  const binding = bindings.find((candidate) => candidate.appid === project.appid);
+  const defaultScript =
+    scripts.find(
+      (candidate) =>
+        candidate.script_key === "default" && candidate.status === "active",
+    ) ?? null;
+  const scriptId =
+    binding && binding.enabled ? binding.processor_script_id : defaultScript?.id;
+  if (scriptId === undefined) {
+    return <Tag>-</Tag>;
+  }
+
+  const script = scripts.find((candidate) => candidate.id === scriptId);
+  if (script?.script_key === "default") {
+    return <Tag>default</Tag>;
+  }
+
+  return <Tag color="blue">{processorLabel(scriptId, scripts)}</Tag>;
+}
+
 export function ProjectsTable({
   projects,
+  processorScripts = [],
+  processorBindings = [],
   deletingAppid = null,
   actionsDisabled = false,
   onEdit,
@@ -39,6 +70,13 @@ export function ProjectsTable({
       width: 140,
       render: (enabled: boolean) =>
         enabled ? <Tag color="success">已启用</Tag> : <Tag>已停用</Tag>,
+    },
+    {
+      title: "Processor",
+      key: "processor",
+      width: 180,
+      render: (_, project) =>
+        projectProcessorLabel(project, processorScripts, processorBindings),
     },
     {
       title: "创建时间",
@@ -123,7 +161,7 @@ export function ProjectsTable({
           />
         ),
       }}
-      scroll={{ x: 1120 }}
+      scroll={{ x: 1300 }}
     />
   );
 }

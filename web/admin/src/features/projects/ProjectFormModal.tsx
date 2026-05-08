@@ -8,6 +8,7 @@ type ProjectFormModalProps = {
   mode: "create" | "edit";
   project?: Project | null;
   confirmLoading?: boolean;
+  processorSection?: ReactNode;
   ruleSetsSection?: ReactNode;
   onCancel: () => void;
   onSubmit: (values: ProjectFormValues) => Promise<void>;
@@ -26,6 +27,7 @@ export function ProjectFormModal({
   mode,
   project,
   confirmLoading = false,
+  processorSection,
   ruleSetsSection,
   onCancel,
   onSubmit,
@@ -98,9 +100,11 @@ export function ProjectFormModal({
           <Switch checkedChildren="已启用" unCheckedChildren="已停用" />
         </Form.Item>
       </Form>
-      {mode === "edit" && ruleSetsSection ? (
+      {mode === "edit" && (processorSection || ruleSetsSection) ? (
         <>
           <Divider />
+          {processorSection}
+          {processorSection && ruleSetsSection ? <Divider /> : null}
           {ruleSetsSection}
         </>
       ) : null}

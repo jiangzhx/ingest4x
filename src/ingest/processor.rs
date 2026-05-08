@@ -2,14 +2,19 @@ use crate::rhai_ctx::{enter_processor_context, register_api, ProcessorDelivery};
 use crate::rules::Rules;
 use crate::settings::default_processor_max_operations;
 use anyhow::{anyhow, Result};
+use futures::lock::Mutex as AsyncMutex;
 use rhai::module_resolvers::StaticModuleResolver;
 use rhai::serde::to_dynamic;
 use rhai::{Dynamic, Engine, Module, Scope, AST};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::RwLock;
 
+use crate::repositories::{ProcessorRepository, RuntimeProcessorScript};
 pub use crate::rhai_ctx::ProcessorRequestContext;
 
 const DEFAULT_RHAI_PROCESSOR_PATH: &str = "pipeline/main.rhai";
@@ -29,6 +34,16 @@ pub struct ProcessorOutput {
     pub deliveries: Vec<ProcessorDelivery>,
 }
 
+pub trait ProcessorRuntime: Send + Sync {
+    fn process_event(
+        &self,
+        appid: &str,
+        event: Value,
+        rules: Rules,
+        request: ProcessorRequestContext,
+    ) -> Result<ProcessorOutput>;
+}
+
 impl ProcessorState {
     pub fn from_default_entry() -> Result<Self> {
         let script = read_processor_script(DEFAULT_RHAI_PROCESSOR_PATH)?;
@@ -43,7 +58,7 @@ impl ProcessorState {
         Self::new_with_modules(script, Vec::new(), max_operations)
     }
 
-    fn new_with_modules(
+    pub fn new_with_modules(
         script: String,
         modules: Vec<(String, String)>,
         max_operations: u64,
@@ -72,6 +87,138 @@ impl ProcessorState {
             .map_err(|err| anyhow!(err.to_string()))?;
         parse_processor_output(processor_context.deliveries())
     }
+}
+
+impl ProcessorRuntime for ProcessorState {
+    fn process_event(
+        &self,
+        _appid: &str,
+        event: Value,
+        rules: Rules,
+        request: ProcessorRequestContext,
+    ) -> Result<ProcessorOutput> {
+        self.process(event, rules, request)
+    }
+}
+
+#[derive(Clone)]
+pub struct ProcessorRegistryState {
+    router: Arc<RwLock<Arc<ProcessorRouter>>>,
+    repository: Option<ProcessorRepository>,
+    version: Arc<AtomicU64>,
+    refresh_lock: Arc<AsyncMutex<()>>,
+}
+
+impl ProcessorRegistryState {
+    pub fn from_processor(processor: ProcessorState) -> Self {
+        Self {
+            router: Arc::new(RwLock::new(Arc::new(ProcessorRouter {
+                default: processor,
+                projects: HashMap::new(),
+            }))),
+            repository: None,
+            version: Arc::new(AtomicU64::new(0)),
+            refresh_lock: Arc::new(AsyncMutex::new(())),
+        }
+    }
+
+    pub async fn load(repository: ProcessorRepository) -> Result<Self> {
+        let (router, version) = load_processor_router_snapshot(&repository).await?;
+        Ok(Self {
+            router: Arc::new(RwLock::new(Arc::new(router))),
+            repository: Some(repository),
+            version: Arc::new(AtomicU64::new(version)),
+            refresh_lock: Arc::new(AsyncMutex::new(())),
+        })
+    }
+
+    pub async fn refresh_if_needed(&self) -> Result<bool> {
+        let Some(repository) = self.repository.as_ref() else {
+            return Ok(false);
+        };
+
+        let _guard = self.refresh_lock.lock().await;
+        let current_version = self.version.load(Ordering::Acquire);
+        let latest_version = repository.processor_scripts_version().await?;
+        if latest_version == current_version {
+            return Ok(false);
+        }
+
+        let (router, version) = load_processor_router_snapshot(repository).await?;
+        if version <= self.version.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+
+        let mut guard = self
+            .router
+            .write()
+            .expect("processor router write lock poisoned");
+        *guard = Arc::new(router);
+        self.version.store(version, Ordering::Release);
+        Ok(true)
+    }
+
+    fn current_router(&self) -> Arc<ProcessorRouter> {
+        self.router
+            .read()
+            .expect("processor router read lock poisoned")
+            .clone()
+    }
+}
+
+impl ProcessorRuntime for ProcessorRegistryState {
+    fn process_event(
+        &self,
+        appid: &str,
+        event: Value,
+        rules: Rules,
+        request: ProcessorRequestContext,
+    ) -> Result<ProcessorOutput> {
+        self.current_router()
+            .processor_for_appid(appid)
+            .process(event, rules, request)
+    }
+}
+
+struct ProcessorRouter {
+    default: ProcessorState,
+    projects: HashMap<String, ProcessorState>,
+}
+
+impl ProcessorRouter {
+    fn processor_for_appid(&self, appid: &str) -> &ProcessorState {
+        self.projects.get(appid).unwrap_or(&self.default)
+    }
+}
+
+async fn load_processor_router_snapshot(
+    repository: &ProcessorRepository,
+) -> Result<(ProcessorRouter, u64)> {
+    loop {
+        let version_before = repository.processor_scripts_version().await?;
+        let default = compile_runtime_script(repository.default_runtime_script().await?)?;
+        let project_scripts = repository.list_enabled_runtime_project_processors().await?;
+        let version_after = repository.processor_scripts_version().await?;
+
+        if version_before != version_after {
+            continue;
+        }
+
+        let mut projects = HashMap::new();
+        for (appid, script) in project_scripts {
+            projects.insert(appid, compile_runtime_script(script)?);
+        }
+
+        return Ok((ProcessorRouter { default, projects }, version_after));
+    }
+}
+
+fn compile_runtime_script(script: RuntimeProcessorScript) -> Result<ProcessorState> {
+    ProcessorState::new_with_modules(
+        script.entry_source.clone(),
+        script.resolver_modules(),
+        default_processor_max_operations(),
+    )
 }
 
 fn compile_script(

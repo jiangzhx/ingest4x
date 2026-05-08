@@ -22,14 +22,10 @@ fn example_settings_loads_mysql_kafka_wal_profile() {
         Some("mysql://root:root@127.0.0.1:3306/ingest4x")
     );
     assert_eq!(settings.wal.dir, "./wal");
-    assert!(matches!(
-        settings.events.sink.get("events"),
-        Some(EventSinkConfig::Kafka { topic, .. }) if topic == "ingest4x-events"
-    ));
-    assert!(matches!(
-        settings.events.sink.get("events_error"),
-        Some(EventSinkConfig::Kafka { topic, .. }) if topic == "ingest4x-events-error"
-    ));
+    assert!(
+        settings.events.sink.is_empty(),
+        "example config should rely on DB-managed sinks instead of [events.sink.*]"
+    );
 }
 
 #[test]

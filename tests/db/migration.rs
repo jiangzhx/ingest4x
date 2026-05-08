@@ -27,6 +27,8 @@ async fn migrator_creates_current_sqlite_schema() {
 
     for expected in [
         "app_meta",
+        "delivery_targets",
+        "event_sinks",
         "project_rule_sets",
         "projects",
         "rule_sets",
@@ -51,4 +53,17 @@ async fn migrator_creates_current_sqlite_schema() {
         .expect("projects version value");
 
     assert_eq!(version, "0");
+
+    let event_sinks_version = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT value FROM app_meta WHERE key = 'event_sinks_version'",
+        ))
+        .await
+        .expect("event sinks metadata should query")
+        .expect("event sinks version metadata should exist")
+        .try_get::<String>("", "value")
+        .expect("event sinks version value");
+
+    assert_eq!(event_sinks_version, "0");
 }

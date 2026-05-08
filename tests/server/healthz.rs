@@ -1,3 +1,4 @@
+use crate::support::mock_services::build_app_state_with_test_processor;
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use ingest4x::server;
@@ -45,7 +46,7 @@ type = "stdout"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let public_app = test::init_service(App::new().configure(|cfg| {
@@ -137,7 +138,7 @@ type = "stdout"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let mut app_state = server::build_app_state(settings)
+    let mut app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let registry = Registry::new();
@@ -246,7 +247,7 @@ type = "stdout"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let mut app_state = server::build_app_state(settings)
+    let mut app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let registry = Registry::new();
@@ -342,7 +343,7 @@ type = "stdout"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let mut app_state = server::build_app_state(settings)
+    let mut app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let registry = Registry::new();
@@ -434,7 +435,7 @@ type = "stdout"
             .expect("settings should load"),
     );
 
-    let error = match server::build_app_state(settings).await {
+    let error = match build_app_state_with_test_processor(settings).await {
         Ok(_) => panic!("app state should reject WAL without enough disk space"),
         Err(error) => error,
     };

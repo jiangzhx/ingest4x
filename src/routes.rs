@@ -44,7 +44,11 @@ fn register_management_app_data(cfg: &mut ServiceConfig, state: &AppState) {
     cfg.app_data(Data::new(state.settings.clone()))
         .app_data(state.project_repository.clone())
         .app_data(state.rule_repository.clone())
+        .app_data(state.event_sink_repository.clone())
+        .app_data(state.processor_repository.clone())
+        .app_data(state.event_sinks.clone())
         .app_data(state.project_registry.clone())
+        .app_data(state.processor.clone())
         .app_data(state.wal.clone());
     if let Some(wal_metrics) = state.wal_metrics.clone() {
         cfg.app_data(wal_metrics);

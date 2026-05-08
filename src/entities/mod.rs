@@ -1,4 +1,9 @@
 pub mod app_meta;
+pub mod delivery_targets;
+pub mod event_sinks;
+pub mod processor_script_modules;
+pub mod processor_scripts;
+pub mod project_processors;
 pub mod project_rule_sets;
 pub mod projects;
 pub mod rule_sets;

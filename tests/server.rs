@@ -1,3 +1,5 @@
+mod support;
+
 #[path = "server/healthz.rs"]
 mod healthz;
 #[path = "server/index_endpoint.rs"]

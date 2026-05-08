@@ -2,7 +2,9 @@ use crate::support::jlt::{
     parse_test_data_from_str, repo_scopes, run_scope_from_disk, ExpectedResult,
 };
 use ingest4x::db::{init_sqlite_database, seed};
-use ingest4x::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
+use ingest4x::repositories::{
+    CreateProjectInput, ProcessorRepository, ProjectRepository, RuleRepository,
+};
 use ingest4x::rules::Rules;
 
 #[tokio::test]
@@ -25,7 +27,8 @@ async fn seeded_rules() -> Rules {
         .await
         .expect("sqlite database should initialize");
     let projects = ProjectRepository::new(db.clone());
-    let rules = RuleRepository::new(db);
+    let rules = RuleRepository::new(db.clone());
+    let processors = ProcessorRepository::new(db);
 
     projects
         .create_project(CreateProjectInput {
@@ -35,7 +38,9 @@ async fn seeded_rules() -> Rules {
         })
         .await
         .expect("project should be created");
-    seed::run(&projects, &rules).await.expect("seed should run");
+    seed::run(&projects, &rules, &processors)
+        .await
+        .expect("seed should run");
 
     rules
         .compile_project_rules("APPID")

@@ -8,11 +8,22 @@ export function HomePage() {
         Admin Console
       </Typography.Title>
       <Typography.Paragraph style={{ marginBottom: 0 }}>
-        当前只提供管理后台基础壳，后续任务会补齐登录和项目管理页面。
+        管理项目、规则、事件投递 sink 和 Rhai processor。
       </Typography.Paragraph>
-      <Button type="primary">
-        <Link to="/projects">进入项目页占位</Link>
-      </Button>
+      <Space>
+        <Button type="primary">
+          <Link to="/projects">项目管理</Link>
+        </Button>
+        <Button>
+          <Link to="/rules">规则管理</Link>
+        </Button>
+        <Button>
+          <Link to="/sinks">Sink 管理</Link>
+        </Button>
+        <Button>
+          <Link to="/processors">Processor 管理</Link>
+        </Button>
+      </Space>
     </Space>
   );
 }

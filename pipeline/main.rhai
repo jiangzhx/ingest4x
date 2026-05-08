@@ -8,5 +8,6 @@ fn process(event, request) {
     } else {
         event = custom::normalize_event(event, request);
         emit("events", event);
+        emit("events2", event);
     }
 }

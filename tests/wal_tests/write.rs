@@ -1,3 +1,4 @@
+use crate::support::mock_services::build_app_state_with_test_processor;
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use base64::engine::general_purpose::STANDARD;
@@ -50,7 +51,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -132,7 +133,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -201,7 +202,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -269,7 +270,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -323,7 +324,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -387,7 +388,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -450,7 +451,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -514,7 +515,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -582,7 +583,7 @@ topic = "unused-valid"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {

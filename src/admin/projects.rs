@@ -1,5 +1,6 @@
+use crate::ingest::processor::ProcessorRegistryState as ProcessorRuntimeState;
 use crate::repositories::{
-    CreateProjectInput, CreateProjectRuleSetInput, Project, ProjectRepository,
+    CreateProjectInput, CreateProjectRuleSetInput, ProcessorRepository, Project, ProjectRepository,
     ProjectRepositoryError, RuleRepository, UpdateProjectInput,
 };
 use crate::services::ProjectRegistryState;
@@ -117,7 +118,9 @@ async fn get_project(appid: Path<String>, repository: Data<ProjectRepository>) -
 async fn create_project(
     repository: Data<ProjectRepository>,
     rule_repository: Data<RuleRepository>,
+    processor_repository: Data<ProcessorRepository>,
     registry: Data<ProjectRegistryState>,
+    processor: Data<ProcessorRuntimeState>,
     request: Json<CreateProjectRequest>,
 ) -> HttpResponse {
     match repository
@@ -127,6 +130,12 @@ async fn create_project(
         Ok(project) => {
             let appid = project.appid.clone();
             assign_default_rule_set_to_project(&rule_repository, &appid).await;
+            if let Err(error) = processor_repository.assign_default_processor(&appid).await {
+                return HttpResponse::InternalServerError().body(error.to_string());
+            }
+            if let Err(error) = processor.refresh_if_needed().await {
+                warn!("processor registry refresh failed after create for '{appid}': {error}");
+            }
             finalize_success_response(
                 HttpResponse::Created().json(ProjectResponse::from(project)),
                 registry.refresh_if_needed().await,

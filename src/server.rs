@@ -1,10 +1,18 @@
 use crate::db::{init_database, seed};
-use crate::ingest::processor::ProcessorState;
-use crate::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
+use crate::ingest::processor::{ProcessorRegistryState, ProcessorState};
+use crate::repositories::{
+    CreateDeliveryTargetInput, CreateEventSinkInput, CreateProjectInput, DeliveryTargetType,
+    EventSinkRepository, ProcessorRepository, ProjectRepository, RuleRepository,
+};
 use crate::routes;
 use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
-use crate::settings::{default_database_refresh_interval_secs, Settings};
-use crate::utils::events::{init_event_sinks, EventSinkState};
+use crate::settings::{
+    default_database_refresh_interval_secs, default_kafka_batch_num_messages,
+    default_kafka_delivery_timeout_ms, default_kafka_linger_ms,
+    default_kafka_queue_buffering_max_messages, default_kafka_queue_buffering_max_ms,
+    EventSinkConfig, EventsSettings, Settings,
+};
+use crate::utils::events::EventSinkState;
 use crate::utils::prometheus::{
     init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
 };
@@ -13,6 +21,7 @@ use crate::wal::WalWriter;
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{App, HttpResponse, HttpServer};
 use prometheus::Registry;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,8 +58,10 @@ pub struct AppState {
     pub(crate) event_sinks: Data<EventSinkState>,
     pub(crate) project_repository: Data<ProjectRepository>,
     pub(crate) rule_repository: Data<RuleRepository>,
+    pub(crate) event_sink_repository: Data<EventSinkRepository>,
+    pub(crate) processor_repository: Data<ProcessorRepository>,
     pub(crate) project_registry: Data<ProjectRegistryState>,
-    pub(crate) processor: Data<ProcessorState>,
+    pub(crate) processor: Data<ProcessorRegistryState>,
     pub(crate) wal: Data<WalWriter>,
     pub(crate) wal_metrics: Option<Data<WalPrometheusMetrics>>,
     pub(crate) ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
@@ -62,6 +73,14 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
     register_wal_prometheus_metrics(&shared_registry, &mut app_state)?;
     spawn_project_registry_refresh_loop(
         app_state.project_registry.clone(),
+        project_registry_refresh_interval(&settings),
+    );
+    spawn_event_sink_refresh_loop(
+        app_state.event_sinks.clone(),
+        project_registry_refresh_interval(&settings),
+    );
+    spawn_processor_refresh_loop(
+        app_state.processor.clone(),
         project_registry_refresh_interval(&settings),
     );
     spawn_wal_replay_loop(app_state.clone());
@@ -98,14 +117,66 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
 }
 
 pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppState> {
-    let event_sinks = init_event_sinks(&settings.events).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
-    })?;
-    let (project_repository, rule_repository, project_registry) =
-        init_project_state(settings.clone()).await?;
-    let processor = Data::new(ProcessorState::from_default_entry().map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
-    })?);
+    let (
+        project_repository,
+        rule_repository,
+        event_sink_repository,
+        processor_repository,
+        project_registry,
+    ) = init_repository_state(settings.clone()).await?;
+    let processor = ProcessorRegistryState::load(processor_repository.get_ref().clone())
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    build_app_state_from_parts(
+        settings,
+        project_repository,
+        rule_repository,
+        event_sink_repository,
+        processor_repository,
+        project_registry,
+        processor,
+    )
+    .await
+}
+
+pub async fn build_app_state_with_processor(
+    settings: Arc<Settings>,
+    processor: ProcessorState,
+) -> std::io::Result<AppState> {
+    let (
+        project_repository,
+        rule_repository,
+        event_sink_repository,
+        processor_repository,
+        project_registry,
+    ) = init_repository_state(settings.clone()).await?;
+    build_app_state_from_parts(
+        settings,
+        project_repository,
+        rule_repository,
+        event_sink_repository,
+        processor_repository,
+        project_registry,
+        ProcessorRegistryState::from_processor(processor),
+    )
+    .await
+}
+
+async fn build_app_state_from_parts(
+    settings: Arc<Settings>,
+    project_repository: Data<ProjectRepository>,
+    rule_repository: Data<RuleRepository>,
+    event_sink_repository: Data<EventSinkRepository>,
+    processor_repository: Data<ProcessorRepository>,
+    project_registry: Data<ProjectRegistryState>,
+    processor: ProcessorRegistryState,
+) -> std::io::Result<AppState> {
+    let event_sinks = Data::new(
+        EventSinkState::load(event_sink_repository.get_ref().clone())
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    );
+    let processor = Data::new(processor);
     let sink_names = event_sinks.sink_names();
     let wal = Data::new(
         WalWriter::new_for_active_sinks(&settings.wal, &sink_names)
@@ -119,6 +190,8 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
         event_sinks,
         project_repository,
         rule_repository,
+        event_sink_repository,
+        processor_repository,
         project_registry,
         processor,
         wal,
@@ -139,7 +212,8 @@ pub fn register_wal_prometheus_metrics(
         WalPrometheusMetrics::register(registry)
             .map_err(|error| std::io::Error::other(error.to_string()))?,
     );
-    metrics.observe(&state.settings, state.wal.get_ref());
+    let sink_names = state.event_sinks.sink_names();
+    metrics.observe(&state.settings, state.wal.get_ref(), &sink_names);
     state.wal_metrics = Some(metrics);
     state.ingest_metrics = Some(ingest_metrics);
     Ok(())
@@ -163,13 +237,14 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
         event_sinks: &state.event_sinks,
         project_registry: &state.project_registry,
         rule_repository: &state.rule_repository,
-        processor: &state.processor,
+        processor: state.processor.get_ref(),
         checkpoint: state.settings.wal.checkpoint.clone(),
     })
     .await?;
 
     if let Some(metrics) = state.wal_metrics.as_ref() {
-        metrics.observe(&state.settings, state.wal.get_ref());
+        let sink_names = state.event_sinks.sink_names();
+        metrics.observe(&state.settings, state.wal.get_ref(), &sink_names);
     }
 
     Ok(replayed)
@@ -190,7 +265,8 @@ fn spawn_wal_replay_loop(state: AppState) {
                 Err(error) => {
                     if let Some(metrics) = state.wal_metrics.as_ref() {
                         metrics.inc_replay_errors();
-                        metrics.observe(&state.settings, state.wal.get_ref());
+                        let sink_names = state.event_sinks.sink_names();
+                        metrics.observe(&state.settings, state.wal.get_ref(), &sink_names);
                     }
                     let retry_delay = wal_replay_retry_delay(consecutive_errors);
                     consecutive_errors = consecutive_errors.saturating_add(1);
@@ -204,6 +280,36 @@ fn spawn_wal_replay_loop(state: AppState) {
             }
         }
     });
+}
+
+fn spawn_event_sink_refresh_loop(
+    event_sinks: Data<EventSinkState>,
+    interval: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+
+            if let Err(error) = event_sinks.refresh_if_needed().await {
+                warn!("refresh event sink router snapshot failed: {error}");
+            }
+        }
+    })
+}
+
+fn spawn_processor_refresh_loop(
+    processor: Data<ProcessorRegistryState>,
+    interval: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+
+            if let Err(error) = processor.refresh_if_needed().await {
+                warn!("refresh processor router snapshot failed: {error}");
+            }
+        }
+    })
 }
 
 fn wal_replay_retry_delay(consecutive_errors: u32) -> Duration {
@@ -226,11 +332,13 @@ mod tests {
     }
 }
 
-async fn init_project_state(
+async fn init_repository_state(
     settings: Arc<Settings>,
 ) -> std::io::Result<(
     Data<ProjectRepository>,
     Data<RuleRepository>,
+    Data<EventSinkRepository>,
+    Data<ProcessorRepository>,
     Data<ProjectRegistryState>,
 )> {
     let db = match settings.database.as_ref() {
@@ -247,8 +355,12 @@ async fn init_project_state(
         import_mock_projects(&repository, &default_mock_projects()).await?;
     }
 
-    let rule_repository = RuleRepository::new(db);
-    seed::run(&repository, &rule_repository).await?;
+    let rule_repository = RuleRepository::new(db.clone());
+    let event_sink_repository = EventSinkRepository::new(db.clone());
+    let processor_repository = ProcessorRepository::new(db);
+    seed::run(&repository, &rule_repository, &processor_repository).await?;
+    seed_default_delivery_targets(&event_sink_repository).await?;
+    import_config_event_sinks(&event_sink_repository, &settings.events).await?;
     let project_registry = Data::new(
         ProjectRegistryState::load(repository.clone())
             .await
@@ -258,8 +370,136 @@ async fn init_project_state(
     Ok((
         Data::new(repository),
         Data::new(rule_repository),
+        Data::new(event_sink_repository),
+        Data::new(processor_repository),
         project_registry,
     ))
+}
+
+async fn seed_default_delivery_targets(repository: &EventSinkRepository) -> std::io::Result<()> {
+    let existing = repository
+        .list_delivery_targets()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if existing
+        .iter()
+        .any(|target| target.target_id == "local_kafka")
+    {
+        return Ok(());
+    }
+
+    repository
+        .create_delivery_target(CreateDeliveryTargetInput {
+            target_id: "local_kafka".to_string(),
+            name: "Local Kafka".to_string(),
+            target_type: DeliveryTargetType::Kafka,
+            config_json: json!({
+                "bootstrap_servers": "127.0.0.1:9092",
+                "delivery_timeout_ms": default_kafka_delivery_timeout_ms(),
+                "queue_buffering_max_ms": default_kafka_queue_buffering_max_ms(),
+                "batch_num_messages": default_kafka_batch_num_messages(),
+                "queue_buffering_max_messages": default_kafka_queue_buffering_max_messages(),
+                "linger_ms": default_kafka_linger_ms()
+            }),
+            enabled: true,
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    Ok(())
+}
+
+async fn import_config_event_sinks(
+    repository: &EventSinkRepository,
+    settings: &EventsSettings,
+) -> std::io::Result<()> {
+    if settings.sink.is_empty() {
+        return Ok(());
+    }
+
+    let existing = repository
+        .list_event_sinks()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if !existing.is_empty() {
+        return Ok(());
+    }
+
+    for (sink_id, config) in &settings.sink {
+        let target_id = format!("{sink_id}_target");
+        let target = repository
+            .create_delivery_target(config_delivery_target_input(sink_id, &target_id, config))
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+        repository
+            .create_event_sink(config_event_sink_input(sink_id, target.id, config))
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+    }
+
+    Ok(())
+}
+
+fn config_delivery_target_input(
+    sink_id: &str,
+    target_id: &str,
+    config: &EventSinkConfig,
+) -> CreateDeliveryTargetInput {
+    match config {
+        EventSinkConfig::Kafka {
+            bootstrap_servers,
+            topic: _,
+            auto_offset_reset: _,
+            delivery_timeout_ms,
+            queue_buffering_max_ms,
+            batch_num_messages,
+            queue_buffering_max_messages,
+            linger_ms,
+        } => CreateDeliveryTargetInput {
+            target_id: target_id.to_string(),
+            name: format!("{sink_id} target"),
+            target_type: DeliveryTargetType::Kafka,
+            config_json: json!({
+                "bootstrap_servers": bootstrap_servers,
+                "delivery_timeout_ms": delivery_timeout_ms,
+                "queue_buffering_max_ms": queue_buffering_max_ms,
+                "batch_num_messages": batch_num_messages,
+                "queue_buffering_max_messages": queue_buffering_max_messages,
+                "linger_ms": linger_ms
+            }),
+            enabled: true,
+        },
+        EventSinkConfig::Stdout {
+            auto_offset_reset: _,
+        } => CreateDeliveryTargetInput {
+            target_id: target_id.to_string(),
+            name: format!("{sink_id} target"),
+            target_type: DeliveryTargetType::Stdout,
+            config_json: json!({}),
+            enabled: true,
+        },
+    }
+}
+
+fn config_event_sink_input(
+    sink_id: &str,
+    delivery_target_id: i32,
+    config: &EventSinkConfig,
+) -> CreateEventSinkInput {
+    let destination_json = match config {
+        EventSinkConfig::Kafka { topic, .. } => json!({ "topic": topic }),
+        EventSinkConfig::Stdout { .. } => json!({}),
+    };
+
+    CreateEventSinkInput {
+        sink_id: sink_id.to_string(),
+        name: sink_id.to_string(),
+        delivery_target_id,
+        destination_json,
+        auto_offset_reset: config.auto_offset_reset(),
+        enabled: true,
+    }
 }
 
 async fn import_mock_projects(

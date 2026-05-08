@@ -1,4 +1,4 @@
-use crate::ingest::processor::{ProcessorRequestContext, ProcessorState};
+use crate::ingest::processor::{ProcessorRequestContext, ProcessorRuntime};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
 use crate::settings::{AutoOffsetReset, CheckpointSettings};
@@ -30,7 +30,7 @@ pub struct WalReplayContext<'a> {
     pub event_sinks: &'a EventSinkState,
     pub project_registry: &'a ProjectRegistryState,
     pub rule_repository: &'a RuleRepository,
-    pub processor: &'a ProcessorState,
+    pub processor: &'a dyn ProcessorRuntime,
     pub checkpoint: CheckpointSettings,
 }
 
@@ -398,7 +398,7 @@ async fn process_record(
         .map_err(|error| ReplayIssue::from_rule_repository(&appid, error))?;
     let output = context
         .processor
-        .process(json.clone(), rules, request_context(record))
+        .process_event(&appid, json.clone(), rules, request_context(record))
         .map_err(ReplayIssue::processor_runtime_failed)?;
 
     Ok(output.deliveries)

@@ -1,10 +1,14 @@
+use crate::support::mock_services::build_app_state_with_test_processor;
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ingest4x::db::init_sqlite_database;
 use ingest4x::ingest::processor::ProcessorState;
-use ingest4x::repositories::{CreateProjectInput, ProjectRepository, RuleRepository};
+use ingest4x::repositories::{
+    CreateProcessorScriptInput, CreateProcessorScriptModuleInput, CreateProjectInput,
+    ProcessorRepository, ProcessorScriptStatus, ProjectRepository, RuleRepository,
+};
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
@@ -85,7 +89,7 @@ linger_ms = "0"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -145,6 +149,142 @@ linger_ms = "0"
     );
     assert!(checkpoint["updated_at"].is_number());
     assert!(checkpoint["checksum"].as_u64().unwrap_or(0) > 0);
+}
+
+#[actix_rt::test]
+async fn wal_replay_uses_project_bound_database_processor_script() {
+    let temp = tempdir().expect("temp dir");
+    let db_path = temp.path().join("ingest4x.db");
+    let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let wal_dir = temp.path().join("wal");
+    let config_path = temp.path().join("wal-replay-db-processor.toml");
+    let kafka = create_kafka_config("wal-replay-db-processor");
+    let consumer = create_consumer(&kafka, "wal-replay-db-processor-topic", &kafka.topic);
+
+    let db = init_sqlite_database(&db_url)
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    let processor_repository = ProcessorRepository::new(db);
+    project_repository
+        .create_project(CreateProjectInput {
+            appid: "APPID".to_string(),
+            name: "APPID".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("project should be created");
+    let script = processor_repository
+        .create_script(CreateProcessorScriptInput {
+            script_key: "project_pipeline".to_string(),
+            name: "Project pipeline".to_string(),
+            entry_module: "main".to_string(),
+            status: ProcessorScriptStatus::Active,
+            modules: vec![CreateProcessorScriptModuleInput {
+                module_name: "main".to_string(),
+                source: r#"
+fn process(event, request) {
+    event["xcontext"]["processor_marker"] = "project-db";
+    emit("events", event);
+}
+"#
+                .to_string(),
+            }],
+        })
+        .await
+        .expect("processor script should be created");
+    processor_repository
+        .assign_project_processor("APPID", script.id, true)
+        .await
+        .expect("project processor should be assigned");
+
+    fs::write(
+        &config_path,
+        format!(
+            r#"
+[ingest]
+bind_address = "127.0.0.1:8090"
+
+[management]
+bind_address = "127.0.0.1:18090"
+
+[database]
+url = "{}"
+
+[wal]
+dir = "{}"
+
+[events.sink.events]
+type = "kafka"
+auto_offset_reset = "earliest"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
+
+[events.sink.events_error]
+type = "kafka"
+auto_offset_reset = "earliest"
+bootstrap_servers = "{}"
+topic = "{}"
+delivery_timeout_ms = "5000"
+queue_buffering_max_ms = "0"
+batch_num_messages = "1"
+queue_buffering_max_messages = "300"
+linger_ms = "0"
+"#,
+            db_url,
+            wal_dir.display(),
+            kafka.bootstrap_servers,
+            kafka.topic,
+            kafka.bootstrap_servers,
+            kafka.error_topic
+        ),
+    )
+    .expect("write config");
+
+    let settings = Arc::new(
+        Settings::init_with_file(config_path.to_str().expect("config path"))
+            .expect("settings should load"),
+    );
+    let app_state = server::build_app_state(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_app(cfg, app_state.clone());
+    }))
+    .await;
+    let req = test::TestRequest::post()
+        .uri("/ingest")
+        .set_payload(
+            serde_json::to_vec(&json!({
+                "appid": "APPID",
+                "xwhat": "custom_event",
+                "xcontext": {
+                    "installid": "iid-db-processor",
+                    "os": "ios",
+                    "idfa": "idfa-db-processor"
+                }
+            }))
+            .expect("serialize payload"),
+        )
+        .insert_header(("content-type", "application/json"))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    assert_eq!(
+        server::replay_wal_once(&app_state)
+            .await
+            .expect("replay wal"),
+        1
+    );
+
+    let emitted = parse_json_message(read_message_payload(&consumer).await.as_str());
+    assert_eq!(emitted["xcontext"]["processor_marker"], json!("project-db"));
 }
 
 #[actix_rt::test]
@@ -355,7 +495,7 @@ linger_ms = "0"
         .expect("append valid record");
     drop(writer);
 
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let (quarantine_logs, _guard) = install_quarantine_capture();
@@ -1069,7 +1209,7 @@ linger_ms = "0"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {

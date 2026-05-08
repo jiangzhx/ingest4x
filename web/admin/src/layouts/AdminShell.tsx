@@ -18,6 +18,14 @@ const menuItems = [
     key: "/rules",
     label: <Link to="/rules">规则管理</Link>,
   },
+  {
+    key: "/sinks",
+    label: <Link to="/sinks">Sink 管理</Link>,
+  },
+  {
+    key: "/processors",
+    label: <Link to="/processors">Processor 管理</Link>,
+  },
 ];
 
 export function AdminShell({ children }: PropsWithChildren) {

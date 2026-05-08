@@ -1,5 +1,6 @@
 use crate::services::ProjectRegistryState;
 use crate::settings::{default_max_event_bytes, Settings};
+use crate::utils::events::EventSinkState;
 use crate::utils::get_ip;
 use crate::utils::prometheus::{IngestPrometheusMetrics, WalPrometheusMetrics};
 use crate::wal::{new_record, WalWriter};
@@ -19,6 +20,7 @@ pub async fn ingest(
     body: web::Bytes,
     query_params: Query<HashMap<String, String>>,
     project_registry: Data<ProjectRegistryState>,
+    event_sinks: Data<EventSinkState>,
     wal: Data<WalWriter>,
     wal_metrics: Option<Data<WalPrometheusMetrics>>,
     ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
@@ -50,6 +52,7 @@ pub async fn ingest(
         payload.appid.as_str(),
         payload.event_name.as_str(),
         &wal,
+        &event_sinks.sink_names(),
         settings.as_ref().map(Data::get_ref).map(Arc::as_ref),
         wal_metrics.as_ref().map(Data::get_ref),
         ingest_metrics.as_ref().map(Data::get_ref),
@@ -190,6 +193,7 @@ async fn append_wal_record(
     appid: &str,
     event_name: &str,
     wal: &WalWriter,
+    active_sink_names: &[String],
     settings: Option<&Settings>,
     wal_metrics: Option<&WalPrometheusMetrics>,
     ingest_metrics: Option<&IngestPrometheusMetrics>,
@@ -207,7 +211,7 @@ async fn append_wal_record(
     match wal.append_async(record).await {
         Ok(_) => {
             if let (Some(metrics), Some(settings)) = (wal_metrics, settings) {
-                metrics.observe(settings, wal);
+                metrics.observe(settings, wal, active_sink_names);
             }
             observe_ingest_event(ingest_metrics, appid, event_name, "wal_appended", started);
             HttpResponse::Ok().body("200")
@@ -217,7 +221,7 @@ async fn append_wal_record(
             if let Some(metrics) = wal_metrics {
                 metrics.inc_append_errors();
                 if let Some(settings) = settings {
-                    metrics.observe(settings, wal);
+                    metrics.observe(settings, wal, active_sink_names);
                 }
             }
             observe_ingest_event(

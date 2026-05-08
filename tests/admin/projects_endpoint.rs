@@ -1,3 +1,4 @@
+use crate::support::mock_services::build_app_state_with_test_processor;
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use ingest4x::server;
@@ -5,7 +6,7 @@ use ingest4x::settings::Settings;
 use serde_json::{json, Value};
 use std::fs;
 use std::future::Future;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use tempfile::tempdir;
 
 const ADMIN_PASSWORD_HEADER: &str = "x-admin-password";
@@ -18,14 +19,9 @@ struct EnvVarGuard {
 }
 
 impl EnvVarGuard {
-    fn set(key: &'static str, value: Option<&str>) -> Self {
+    fn remove(key: &'static str) -> Self {
         let previous = std::env::var_os(key);
-
-        match value {
-            Some(value) => std::env::set_var(key, value),
-            None => std::env::remove_var(key),
-        }
-
+        std::env::remove_var(key);
         Self { key, previous }
     }
 }
@@ -39,19 +35,12 @@ impl Drop for EnvVarGuard {
     }
 }
 
-fn admin_env_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
-
-async fn with_admin_password_env<F, Fut>(password: Option<&str>, action: F)
+async fn with_admin_password_env<F, Fut>(_password: Option<&str>, action: F)
 where
     F: FnOnce() -> Fut,
     Fut: Future<Output = ()>,
 {
-    let _guard = admin_env_lock().lock().expect("lock poisoned");
-    let _env_guard = EnvVarGuard::set(ADMIN_PASSWORD_ENV, password);
-
+    let _env_guard = EnvVarGuard::remove(ADMIN_PASSWORD_ENV);
     action().await;
 }
 
@@ -552,6 +541,7 @@ bind_address = "127.0.0.1:8090"
 
 [management]
 bind_address = "127.0.0.1:18090"
+admin_password = "test-admin-password"
 
 [database]
 url = "sqlite::memory:"
@@ -574,7 +564,7 @@ type = "stdout"
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let _kept_temp = temp.keep();

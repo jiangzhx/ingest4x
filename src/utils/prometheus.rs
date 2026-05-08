@@ -149,13 +149,12 @@ impl WalPrometheusMetrics {
         Ok(metrics)
     }
 
-    pub fn observe(&self, settings: &Settings, wal: &WalWriter) {
+    pub fn observe(&self, settings: &Settings, wal: &WalWriter, sink_names: &[String]) {
         self.enabled.set(1.0);
         self.no_sync.set(bool_value(settings.wal.no_sync));
         self.min_free_bytes.set(settings.wal.min_free_bytes as f64);
 
-        let sink_names = settings.events.sink.keys().cloned().collect::<Vec<_>>();
-        match wal.snapshot_for_sinks(&sink_names) {
+        match wal.snapshot_for_sinks(sink_names) {
             Ok(snapshot) => {
                 self.node_info.reset();
                 self.node_info

@@ -29,6 +29,67 @@ use std::path::Path;
 use std::sync::Arc;
 use tempfile::{tempdir, TempDir};
 
+pub const TEST_PROCESSOR_SCRIPT: &str = r#"
+fn process(event, request) {
+    let validation = validate(event);
+    if !validation["ok"] {
+        if !event.contains("xcontext") || event["xcontext"] == () {
+            event["xcontext"] = #{};
+        }
+        let xcontext = event["xcontext"];
+        xcontext["process_info"] = #{
+            receive_time: request.received_at_ms(),
+            ingest4x_version: ingest4x_version(),
+            reason: validation["error"],
+            error_code: validation["code"]
+        };
+        event["xcontext"] = xcontext;
+        emit("events_error", event);
+        return;
+    }
+
+    if !event.contains("xwhen") || event["xwhen"] == () {
+        event["xwhen"] = request.received_at_ms();
+    }
+    if event.contains("xcontext") && event["xcontext"] != () {
+        let xcontext = event["xcontext"];
+        if xcontext.contains("os") && xcontext["os"] != () {
+            xcontext["os"] = xcontext["os"].to_lower();
+            if !xcontext.contains("platform") || xcontext["platform"] == () {
+                xcontext["platform"] = xcontext["os"];
+            }
+        }
+        if xcontext.contains("currencytype") && xcontext["currencytype"] != () {
+            xcontext["currencytype"] = xcontext["currencytype"].to_upper();
+        }
+        if !xcontext.contains("ip") || xcontext["ip"] == () {
+            let ip = request.ip();
+            if ip != () {
+                xcontext["ip"] = ip;
+            }
+        }
+        xcontext["process_info"] = #{
+            receive_time: request.received_at_ms(),
+            ingest4x_version: ingest4x_version()
+        };
+        event["xcontext"] = xcontext;
+    }
+
+    emit("events", event);
+}
+"#;
+
+pub fn test_processor_state() -> ProcessorState {
+    ProcessorState::new(TEST_PROCESSOR_SCRIPT.to_string(), 10_000)
+        .expect("test processor should initialize")
+}
+
+pub async fn build_app_state_with_test_processor(
+    settings: Arc<Settings>,
+) -> std::io::Result<server::AppState> {
+    server::build_app_state_with_processor(settings, test_processor_state()).await
+}
+
 pub struct TestService {
     pub bootstrap_servers: String,
     pub topic: String,
@@ -68,7 +129,7 @@ pub async fn create_configured_app(
         wal: test_wal_settings(wal_dir.path()),
         events: stdout_events_settings(),
     });
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
 
@@ -149,7 +210,7 @@ async fn create_app_with_project_event_settings_and_processor(
     let processor = match processor_script {
         Some(script) => ProcessorState::new(script.to_string(), 10_000)
             .expect("test processor should initialize"),
-        None => ProcessorState::from_default_entry().expect("processor should initialize"),
+        None => test_processor_state(),
     };
     let processor = Data::new(processor);
     let wal_settings = test_wal_settings(wal_dir.path());
@@ -189,7 +250,7 @@ pub async fn replay_once(testservice: &TestService) -> anyhow::Result<usize> {
         event_sinks: &testservice.event_sinks,
         project_registry: &testservice.project_registry,
         rule_repository: &testservice.rule_repository,
-        processor: &testservice.processor,
+        processor: testservice.processor.get_ref(),
         checkpoint: testservice.checkpoint.clone(),
     })
     .await

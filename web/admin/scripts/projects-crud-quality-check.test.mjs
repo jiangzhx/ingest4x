@@ -51,6 +51,18 @@ const projectsPageSource = readFileSync(
   new URL("../src/features/projects/ProjectsPage.tsx", import.meta.url),
   "utf8",
 );
+const projectsTableSource = readFileSync(
+  new URL("../src/features/projects/ProjectsTable.tsx", import.meta.url),
+  "utf8",
+);
+const projectFormSource = readFileSync(
+  new URL("../src/features/projects/ProjectFormModal.tsx", import.meta.url),
+  "utf8",
+);
+const projectProcessorPanelSource = readFileSync(
+  new URL("../src/features/processors/ProjectProcessorPanel.tsx", import.meta.url),
+  "utf8",
+);
 
 test("projects page serializes delete flow around a single deletingAppid", () => {
   assert.match(
@@ -85,6 +97,24 @@ test("projects page resets create and update mutation state when modal lifecycle
     projectsPageSource,
     /const handleCloseModal = \(\) => \{[\s\S]*resetFormMutationState\(\);[\s\S]*setIsFormOpen\(false\);/,
   );
+});
+
+test("project management owns processor binding and defaults to default", () => {
+  assert.match(projectsPageSource, /useProcessorScriptsQuery\(\)/);
+  assert.match(projectsPageSource, /useProjectProcessorsQuery\(\)/);
+  assert.match(projectsPageSource, /useAssignProjectProcessorMutation\(\)/);
+  assert.doesNotMatch(projectsPageSource, /useDeleteProjectProcessorMutation\(\)/);
+  assert.match(projectsPageSource, /<ProjectProcessorPanel/);
+  assert.match(
+    projectsPageSource,
+    /<ProjectsTable[\s\S]*processorScripts=\{processorScripts\}[\s\S]*processorBindings=\{processorBindings\}/,
+  );
+  assert.match(projectsTableSource, /<Tag>default<\/Tag>/);
+  assert.match(projectFormSource, /processorSection/);
+  assert.match(projectProcessorPanelSource, /script_key === "default"/);
+  assert.match(projectProcessorPanelSource, /status === "active"/);
+  assert.doesNotMatch(projectProcessorPanelSource, /__default__/);
+  assert.doesNotMatch(projectProcessorPanelSource, /onUseDefault/);
 });
 
 test("projects api normalizes valid response payloads at runtime", () => {

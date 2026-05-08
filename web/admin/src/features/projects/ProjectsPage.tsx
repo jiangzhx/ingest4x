@@ -1,5 +1,12 @@
 import { useState } from "react";
 import { App, Alert, Button, Result, Space, Spin, Typography } from "antd";
+import { ProjectProcessorPanel } from "../processors/ProjectProcessorPanel";
+import {
+  useAssignProjectProcessorMutation,
+  useProcessorScriptsQuery,
+  useProjectProcessorsQuery,
+} from "../processors/hooks";
+import { getErrorMessage as getProcessorErrorMessage } from "../processors/utils";
 import {
   useAssignProjectRuleSetMutation,
   useDeleteProjectRuleSetAssignmentMutation,
@@ -7,9 +14,7 @@ import {
   useRuleSetsQuery,
 } from "../rules/hooks";
 import { ProjectRuleSetsPanel } from "../rules/ProjectRuleSetsPanel";
-import {
-  getErrorMessage as getRuleErrorMessage,
-} from "../rules/utils";
+import { getErrorMessage as getRuleErrorMessage } from "../rules/utils";
 import {
   useCreateProjectMutation,
   useDeleteProjectMutation,
@@ -32,8 +37,13 @@ export function ProjectsPage() {
   const updateProjectMutation = useUpdateProjectMutation();
   const deleteProjectMutation = useDeleteProjectMutation();
   const ruleSetsQuery = useRuleSetsQuery();
+  const processorScriptsQuery = useProcessorScriptsQuery();
+  const processorBindingsQuery = useProjectProcessorsQuery();
+  const assignProcessorMutation = useAssignProjectProcessorMutation();
   const projects = projectsQuery.data ?? [];
   const ruleSets = ruleSetsQuery.data ?? [];
+  const processorScripts = processorScriptsQuery.data ?? [];
+  const processorBindings = processorBindingsQuery.data ?? [];
   const hasLoadedProjects = projectsQuery.data !== undefined;
   const showInitialError = projectsQuery.isError && !hasLoadedProjects;
   const showRefreshError = projectsQuery.isError && hasLoadedProjects;
@@ -42,12 +52,19 @@ export function ProjectsPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [deletingAppid, setDeletingAppid] = useState<string | null>(null);
   const [updatingRuleSetId, setUpdatingRuleSetId] = useState<number | null>(null);
+  const [updatingProcessorAppid, setUpdatingProcessorAppid] =
+    useState<string | null>(null);
   const editingAppid =
     isFormOpen && modalMode === "edit" ? editingProject?.appid ?? null : null;
   const assignmentsQuery = useProjectRuleSetAssignmentsQuery(editingAppid);
   const assignRuleSetMutation = useAssignProjectRuleSetMutation(editingAppid);
   const deleteAssignmentMutation =
     useDeleteProjectRuleSetAssignmentMutation(editingAppid);
+  const editingProcessorBinding =
+    editingAppid === null
+      ? null
+      : processorBindings.find((binding) => binding.appid === editingAppid) ??
+        null;
 
   const resetFormMutationState = () => {
     createProjectMutation.reset();
@@ -160,6 +177,28 @@ export function ProjectsPage() {
     }
   };
 
+  const handleAssignProcessor = async (processorScriptId: number) => {
+    if (!editingAppid) {
+      return;
+    }
+
+    setUpdatingProcessorAppid(editingAppid);
+    try {
+      await assignProcessorMutation.mutateAsync({
+        appid: editingAppid,
+        payload: {
+          processor_script_id: processorScriptId,
+          enabled: true,
+        },
+      });
+      message.success("Processor 绑定成功");
+    } catch (error) {
+      message.error(getProcessorErrorMessage(error, "绑定 Processor 失败。"));
+    } finally {
+      setUpdatingProcessorAppid(null);
+    }
+  };
+
   const isSubmitting =
     createProjectMutation.isPending || updateProjectMutation.isPending;
   const isDeletePending = deletingAppid !== null;
@@ -188,8 +227,15 @@ export function ProjectsPage() {
             onClick={() => {
               void projectsQuery.refetch();
               void ruleSetsQuery.refetch();
+              void processorScriptsQuery.refetch();
+              void processorBindingsQuery.refetch();
             }}
-            loading={projectsQuery.isFetching || ruleSetsQuery.isFetching}
+            loading={
+              projectsQuery.isFetching ||
+              ruleSetsQuery.isFetching ||
+              processorScriptsQuery.isFetching ||
+              processorBindingsQuery.isFetching
+            }
           >
             刷新
           </Button>
@@ -256,8 +302,20 @@ export function ProjectsPage() {
               description={getErrorMessage(projectsQuery.error)}
             />
           ) : null}
+          {processorScriptsQuery.isError || processorBindingsQuery.isError ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Processor 绑定信息刷新失败"
+              description={getProcessorErrorMessage(
+                processorScriptsQuery.error ?? processorBindingsQuery.error,
+              )}
+            />
+          ) : null}
           <ProjectsTable
             projects={projects}
+            processorScripts={processorScripts}
+            processorBindings={processorBindings}
             deletingAppid={deletingAppid}
             actionsDisabled={isDeletePending}
             onEdit={handleEditClick}
@@ -271,6 +329,20 @@ export function ProjectsPage() {
         mode={modalMode}
         project={editingProject}
         confirmLoading={isSubmitting}
+        processorSection={
+          <ProjectProcessorPanel
+            scripts={processorScripts}
+            projectName={editingProject?.name}
+            appid={editingAppid}
+            binding={editingProcessorBinding}
+            loading={
+              processorScriptsQuery.isFetching ||
+              processorBindingsQuery.isFetching
+            }
+            updating={updatingProcessorAppid === editingAppid}
+            onAssign={handleAssignProcessor}
+          />
+        }
         ruleSetsSection={
           <ProjectRuleSetsPanel
             ruleSets={ruleSets}

@@ -1,48 +1,122 @@
+use crate::repositories::{DeliveryTargetType, EventSinkRepository, RuntimeEventSink};
 use crate::rhai_ctx::ProcessorDelivery;
 use crate::settings::{AutoOffsetReset, EventSinkConfig, EventsSettings};
 use crate::utils::kafka::KafkaProducer;
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
+use futures::lock::Mutex as AsyncMutex;
 use rdkafka::config::ClientConfig;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::RwLock;
 
 #[derive(Clone)]
 pub struct EventSinkState {
-    router: Arc<EventRouter>,
+    router: Arc<RwLock<Arc<EventRouter>>>,
+    repository: Option<EventSinkRepository>,
+    version: Arc<AtomicU64>,
+    refresh_lock: Arc<AsyncMutex<()>>,
 }
 
 impl EventSinkState {
     pub async fn send_deliveries(&self, deliveries: &[ProcessorDelivery]) -> Result<()> {
-        self.router.send_deliveries(deliveries).await
+        let router = self.current_router();
+        router.send_deliveries(deliveries).await
     }
 
     pub async fn send_delivery(&self, delivery: &ProcessorDelivery) -> Result<()> {
-        self.router.send_delivery(delivery).await
+        let router = self.current_router();
+        router.send_delivery(delivery).await
     }
 
     pub fn sink_names(&self) -> Vec<String> {
-        self.router.sink_names()
+        self.current_router().sink_names()
     }
 
     pub fn contains_sink(&self, name: &str) -> bool {
-        self.router.contains_sink(name)
+        self.current_router().contains_sink(name)
     }
 
     pub fn auto_offset_reset(&self, name: &str) -> Option<AutoOffsetReset> {
-        self.router.auto_offset_reset(name)
+        self.current_router().auto_offset_reset(name)
     }
 
     pub async fn check_alive(&self) -> Result<()> {
-        self.router.check_alive().await
+        let router = self.current_router();
+        router.check_alive().await
+    }
+
+    pub async fn load(repository: EventSinkRepository) -> Result<Self> {
+        let (router, version) = load_router_snapshot(&repository).await?;
+
+        Ok(Self {
+            router: Arc::new(RwLock::new(Arc::new(router))),
+            repository: Some(repository),
+            version: Arc::new(AtomicU64::new(version)),
+            refresh_lock: Arc::new(AsyncMutex::new(())),
+        })
+    }
+
+    pub async fn refresh_if_needed(&self) -> Result<bool> {
+        let Some(repository) = self.repository.as_ref() else {
+            return Ok(false);
+        };
+
+        let _guard = self.refresh_lock.lock().await;
+        let current_version = self.version.load(Ordering::Acquire);
+        let latest_version = repository.event_sinks_version().await?;
+
+        if latest_version == current_version {
+            return Ok(false);
+        }
+
+        let (router, version) = load_router_snapshot(repository).await?;
+        if version <= self.version.load(Ordering::Acquire) {
+            return Ok(false);
+        }
+
+        let mut guard = self
+            .router
+            .write()
+            .expect("event sink router write lock poisoned");
+        *guard = Arc::new(router);
+        self.version.store(version, Ordering::Release);
+
+        Ok(true)
+    }
+
+    fn current_router(&self) -> Arc<EventRouter> {
+        self.router
+            .read()
+            .expect("event sink router read lock poisoned")
+            .clone()
     }
 }
 
 pub fn init_event_sinks(settings: &EventsSettings) -> Result<Data<EventSinkState>> {
     Ok(Data::new(EventSinkState {
-        router: Arc::new(EventRouter::from_settings(settings)?),
+        router: Arc::new(RwLock::new(Arc::new(EventRouter::from_settings(settings)?))),
+        repository: None,
+        version: Arc::new(AtomicU64::new(0)),
+        refresh_lock: Arc::new(AsyncMutex::new(())),
     }))
+}
+
+async fn load_router_snapshot(repository: &EventSinkRepository) -> Result<(EventRouter, u64)> {
+    loop {
+        let version_before = repository.event_sinks_version().await?;
+        let runtime_sinks = repository.list_enabled_runtime_sinks().await?;
+        let version_after = repository.event_sinks_version().await?;
+
+        if version_before == version_after {
+            return Ok((
+                EventRouter::from_runtime_sinks(runtime_sinks)?,
+                version_after,
+            ));
+        }
+    }
 }
 
 struct EventRouter {
@@ -64,6 +138,22 @@ impl EventRouter {
                 EventSinkEntry {
                     sink: EventSink::from_config(config)?,
                     auto_offset_reset: config.auto_offset_reset(),
+                },
+            );
+        }
+
+        Ok(Self { sinks })
+    }
+
+    fn from_runtime_sinks(runtime_sinks: Vec<RuntimeEventSink>) -> Result<Self> {
+        let mut sinks = HashMap::new();
+
+        for runtime_sink in runtime_sinks {
+            sinks.insert(
+                runtime_sink.sink_id.clone(),
+                EventSinkEntry {
+                    auto_offset_reset: runtime_sink.auto_offset_reset,
+                    sink: EventSink::from_runtime_sink(&runtime_sink)?,
                 },
             );
         }
@@ -194,6 +284,42 @@ impl EventSink {
         }
     }
 
+    fn from_runtime_sink(sink: &RuntimeEventSink) -> Result<Self> {
+        match sink.target.target_type {
+            DeliveryTargetType::Kafka => {
+                let bootstrap_servers =
+                    required_string(&sink.target.config_json, "bootstrap_servers")?;
+                let delivery_timeout_ms =
+                    required_string(&sink.target.config_json, "delivery_timeout_ms")?;
+                let queue_buffering_max_ms =
+                    required_string(&sink.target.config_json, "queue_buffering_max_ms")?;
+                let batch_num_messages =
+                    required_string(&sink.target.config_json, "batch_num_messages")?;
+                let queue_buffering_max_messages =
+                    required_string(&sink.target.config_json, "queue_buffering_max_messages")?;
+                let linger_ms = required_string(&sink.target.config_json, "linger_ms")?;
+                let topic = required_string(&sink.destination_json, "topic")?;
+
+                let producer = KafkaProducer::new(
+                    ClientConfig::new()
+                        .set("bootstrap.servers", bootstrap_servers)
+                        .set("queue.buffering.max.ms", queue_buffering_max_ms)
+                        .set("delivery.timeout.ms", delivery_timeout_ms)
+                        .set("batch.num.messages", batch_num_messages)
+                        .set("queue.buffering.max.messages", queue_buffering_max_messages)
+                        .set("linger.ms", linger_ms)
+                        .set("compression.type", "snappy")
+                        .clone(),
+                );
+                Ok(Self::Kafka {
+                    producer,
+                    topic: topic.to_string(),
+                })
+            }
+            DeliveryTargetType::Stdout => Ok(Self::Stdout),
+        }
+    }
+
     async fn check_alive(&self) -> Result<()> {
         match self {
             Self::Kafka { producer, .. } => producer
@@ -203,6 +329,14 @@ impl EventSink {
             Self::Stdout => Ok(()),
         }
     }
+}
+
+fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow!("missing required string field `{field}`"))
 }
 
 #[cfg(test)]

@@ -9,8 +9,10 @@ import {
 import { AdminShell } from "../layouts/AdminShell";
 import { hasAdminPassword } from "../features/auth/storage";
 import { LoginPage } from "../features/auth/LoginPage";
+import { ProcessorsPage } from "../features/processors/ProcessorsPage";
 import { ProjectsPage } from "../features/projects/ProjectsPage";
 import { RulesPage } from "../features/rules/RulesPage";
+import { SinksPage } from "../features/sinks/SinksPage";
 import { HomePage } from "../pages/HomePage";
 
 const rootRoute = createRootRoute({
@@ -54,6 +56,18 @@ const rulesRoute = createRoute({
   component: RulesPage,
 });
 
+const sinksRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/sinks",
+  component: SinksPage,
+});
+
+const processorsRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/processors",
+  component: ProcessorsPage,
+});
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
@@ -62,7 +76,13 @@ const loginRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   loginRoute,
-  shellRoute.addChildren([indexRoute, projectsRoute, rulesRoute]),
+  shellRoute.addChildren([
+    indexRoute,
+    projectsRoute,
+    rulesRoute,
+    sinksRoute,
+    processorsRoute,
+  ]),
 ]);
 
 export const router = createRouter({

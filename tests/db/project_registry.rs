@@ -1,3 +1,4 @@
+use crate::support::mock_services::build_app_state_with_test_processor;
 use actix_http::StatusCode;
 use actix_web::{test, web, App, HttpResponse};
 use ingest4x::db::init_sqlite_database;
@@ -148,7 +149,7 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
         events: test_events_settings(),
     });
 
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -204,9 +205,82 @@ async fn build_app_state_allows_database_config_for_registry_backed_ingest() {
         events: test_events_settings(),
     });
 
-    server::build_app_state(settings)
+    build_app_state_with_test_processor(settings)
         .await
         .expect("database-backed ingest should initialize registry lookup");
+}
+
+#[actix_rt::test]
+async fn build_app_state_seeds_local_kafka_delivery_target_without_toml_sinks() {
+    let temp = tempdir().expect("temp dir");
+    let settings = Arc::new(Settings {
+        ingest: IngestSettings {
+            bind_address: "127.0.0.1:8090".to_string(),
+            max_event_bytes: ingest4x::settings::default_max_event_bytes(),
+        },
+        logging: Default::default(),
+        management: ManagementSettings {
+            bind_address: "127.0.0.1:18090".to_string(),
+            admin_password: Some("ingest4x".to_string()),
+        },
+        database: Some(DatabaseSettings {
+            url: "sqlite::memory:".to_string(),
+            refresh_interval_secs: 3,
+        }),
+        wal: test_wal_settings(temp.path()),
+        events: EventsSettings::default(),
+    });
+
+    let app_state = build_app_state_with_test_processor(settings)
+        .await
+        .expect("build app state");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_private_app(cfg, app_state.clone());
+    }))
+    .await;
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/delivery-targets")
+            .insert_header((ADMIN_PASSWORD_HEADER, "ingest4x"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let targets: serde_json::Value = test::read_body_json(response).await;
+    let local_kafka = targets
+        .as_array()
+        .expect("targets should be an array")
+        .iter()
+        .find(|target| target["target_id"] == "local_kafka")
+        .expect("local kafka delivery target should be seeded");
+
+    assert_eq!(local_kafka["name"], "Local Kafka");
+    assert_eq!(local_kafka["target_type"], "kafka");
+    assert_eq!(local_kafka["enabled"], true);
+    assert_eq!(
+        local_kafka["config_json"]["bootstrap_servers"],
+        "127.0.0.1:9092"
+    );
+
+    let response = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/api/admin/event-sinks")
+            .insert_header((ADMIN_PASSWORD_HEADER, "ingest4x"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let sinks: serde_json::Value = test::read_body_json(response).await;
+    assert_eq!(
+        sinks.as_array().expect("sinks should be an array").len(),
+        0,
+        "default target seed should not create event sinks"
+    );
 }
 
 #[actix_rt::test]
@@ -230,7 +304,7 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
         events: test_events_settings(),
     });
 
-    let app_state = server::build_app_state(settings)
+    let app_state = build_app_state_with_test_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
