@@ -7,6 +7,7 @@ type ProcessorScriptsTableProps = {
   scripts: ProcessorScript[];
   updatingScriptId?: number | null;
   onView: (script: ProcessorScript) => void;
+  onEdit: (script: ProcessorScript) => void;
   onStatusChange: (script: ProcessorScript) => Promise<void>;
 };
 
@@ -24,6 +25,7 @@ export function ProcessorScriptsTable({
   scripts,
   updatingScriptId = null,
   onView,
+  onEdit,
   onStatusChange,
 }: ProcessorScriptsTableProps) {
   const columns: ColumnsType<ProcessorScript> = [
@@ -88,7 +90,7 @@ export function ProcessorScriptsTable({
     {
       title: "操作",
       key: "actions",
-      width: 190,
+      width: 250,
       fixed: "right",
       render: (_, script) => {
         const isActive = script.status === "active";
@@ -98,6 +100,9 @@ export function ProcessorScriptsTable({
           <Space>
             <Button size="small" onClick={() => onView(script)}>
               查看
+            </Button>
+            <Button size="small" onClick={() => onEdit(script)}>
+              编辑
             </Button>
             <Button
               size="small"

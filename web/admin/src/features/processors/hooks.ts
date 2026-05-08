@@ -6,12 +6,16 @@ import {
   getProcessorScript,
   listProcessorScripts,
   listProjectProcessors,
+  updateProcessorScript,
   updateProcessorScriptStatus,
+  validateProcessorScript,
 } from "./api";
 import type {
   AssignProjectProcessorPayload,
   CreateProcessorScriptPayload,
+  UpdateProcessorScriptPayload,
   UpdateProcessorScriptStatusPayload,
+  ValidateProcessorScriptPayload,
 } from "./types";
 
 export const processorScriptsQueryKey = ["admin", "processor-scripts"] as const;
@@ -49,6 +53,34 @@ export function useCreateProcessorScriptMutation() {
       await queryClient.invalidateQueries({ queryKey: processorScriptsQueryKey });
       await queryClient.invalidateQueries({ queryKey: projectProcessorsQueryKey });
     },
+  });
+}
+
+export function useUpdateProcessorScriptMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      payload,
+    }: {
+      id: number;
+      payload: UpdateProcessorScriptPayload;
+    }) => updateProcessorScript(id, payload),
+    onSuccess: async (_script, variables) => {
+      await queryClient.invalidateQueries({ queryKey: processorScriptsQueryKey });
+      await queryClient.invalidateQueries({
+        queryKey: [...processorScriptsQueryKey, variables.id],
+      });
+      await queryClient.invalidateQueries({ queryKey: projectProcessorsQueryKey });
+    },
+  });
+}
+
+export function useValidateProcessorScriptMutation() {
+  return useMutation({
+    mutationFn: (payload: ValidateProcessorScriptPayload) =>
+      validateProcessorScript(payload),
   });
 }
 

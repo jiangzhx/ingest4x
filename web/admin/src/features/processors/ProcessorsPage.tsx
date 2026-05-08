@@ -7,21 +7,40 @@ import {
   useCreateProcessorScriptMutation,
   useProcessorScriptDetailQuery,
   useProcessorScriptsQuery,
+  useUpdateProcessorScriptMutation,
   useUpdateProcessorScriptStatusMutation,
+  useValidateProcessorScriptMutation,
 } from "./hooks";
 import type { ProcessorScript, ProcessorScriptFormValues } from "./types";
-import { getErrorMessage, toCreateProcessorScriptPayload } from "./utils";
+import {
+  getErrorMessage,
+  toCreateProcessorScriptPayload,
+  toProcessorScriptFormValues,
+  toUpdateProcessorScriptPayload,
+  toValidateProcessorScriptPayload,
+} from "./utils";
 
 export function ProcessorsPage() {
   const { message } = App.useApp();
   const scriptsQuery = useProcessorScriptsQuery();
   const createScriptMutation = useCreateProcessorScriptMutation();
+  const updateScriptMutation = useUpdateProcessorScriptMutation();
+  const validateScriptMutation = useValidateProcessorScriptMutation();
   const updateStatusMutation = useUpdateProcessorScriptStatusMutation();
   const scripts = scriptsQuery.data ?? [];
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [viewingScript, setViewingScript] = useState<ProcessorScript | null>(null);
+  const [editingScript, setEditingScript] = useState<ProcessorScript | null>(null);
   const [updatingScriptId, setUpdatingScriptId] = useState<number | null>(null);
-  const detailQuery = useProcessorScriptDetailQuery(viewingScript?.id ?? null);
+  const [scriptValidationError, setScriptValidationError] = useState<string | null>(
+    null,
+  );
+  const selectedScript = viewingScript ?? editingScript;
+  const detailQuery = useProcessorScriptDetailQuery(selectedScript?.id ?? null);
+  const editingDetail =
+    editingScript !== null && detailQuery.data?.id === editingScript.id
+      ? detailQuery.data
+      : null;
   const isInitialLoading = scriptsQuery.isLoading;
   const showInitialError = scriptsQuery.isError && scriptsQuery.data === undefined;
 
@@ -33,9 +52,51 @@ export function ProcessorsPage() {
     try {
       await createScriptMutation.mutateAsync(toCreateProcessorScriptPayload(values));
       message.success(`Processor script ${values.script_key} 创建成功`);
+      setScriptValidationError(null);
       setIsCreateOpen(false);
     } catch (error) {
       message.error(getErrorMessage(error, "创建 processor script 失败。"));
+      throw error;
+    }
+  };
+
+  const handleValidateScript = async (
+    values: ProcessorScriptFormValues,
+    options: { notify?: boolean } = {},
+  ) => {
+    setScriptValidationError(null);
+    try {
+      await validateScriptMutation.mutateAsync(
+        toValidateProcessorScriptPayload(values),
+      );
+      if (options.notify) {
+        message.success("Rhai 脚本语法校验通过");
+      }
+    } catch (error) {
+      setScriptValidationError(
+        getErrorMessage(error, "Rhai 脚本语法校验失败。"),
+      );
+      throw error;
+    }
+  };
+
+  const handleUpdateScript = async (values: ProcessorScriptFormValues) => {
+    if (editingScript === null) {
+      return;
+    }
+
+    try {
+      const updated = await updateScriptMutation.mutateAsync({
+        id: editingScript.id,
+        payload: toUpdateProcessorScriptPayload(values),
+      });
+      message.success(
+        `Processor script ${editingScript.script_key} 已更新到 v${updated.version}`,
+      );
+      setScriptValidationError(null);
+      setEditingScript(null);
+    } catch (error) {
+      message.error(getErrorMessage(error, "更新 processor script 失败。"));
       throw error;
     }
   };
@@ -79,7 +140,13 @@ export function ProcessorsPage() {
           >
             刷新
           </Button>
-          <Button type="primary" onClick={() => setIsCreateOpen(true)}>
+          <Button
+            type="primary"
+            onClick={() => {
+              setScriptValidationError(null);
+              setIsCreateOpen(true);
+            }}
+          >
             新建 Script
           </Button>
         </Space>
@@ -124,6 +191,11 @@ export function ProcessorsPage() {
             scripts={scripts}
             updatingScriptId={updatingScriptId}
             onView={(script) => setViewingScript(script)}
+            onEdit={(script) => {
+              setScriptValidationError(null);
+              setViewingScript(null);
+              setEditingScript(script);
+            }}
             onStatusChange={handleStatusChange}
           />
         </>
@@ -138,16 +210,45 @@ export function ProcessorsPage() {
         />
       ) : null}
 
+      {updateScriptMutation.isError ? (
+        <Alert
+          showIcon
+          type="error"
+          message="更新失败"
+          description={getErrorMessage(updateScriptMutation.error)}
+        />
+      ) : null}
+
       <ProcessorScriptFormModal
-        open={isCreateOpen}
-        confirmLoading={createScriptMutation.isPending}
+        open={isCreateOpen || editingScript !== null}
+        mode={editingScript === null ? "create" : "edit"}
+        initialValues={
+          editingDetail === null
+            ? undefined
+            : toProcessorScriptFormValues(editingDetail)
+        }
+        confirmLoading={
+          createScriptMutation.isPending || updateScriptMutation.isPending
+        }
+        validateLoading={validateScriptMutation.isPending}
+        validationError={scriptValidationError}
+        loading={editingScript !== null && detailQuery.isLoading}
         onCancel={() => {
-          if (!createScriptMutation.isPending) {
+          if (
+            !createScriptMutation.isPending &&
+            !updateScriptMutation.isPending &&
+            !validateScriptMutation.isPending
+          ) {
             createScriptMutation.reset();
+            updateScriptMutation.reset();
+            validateScriptMutation.reset();
+            setScriptValidationError(null);
             setIsCreateOpen(false);
+            setEditingScript(null);
           }
         }}
-        onSubmit={handleCreateScript}
+        onValidate={handleValidateScript}
+        onSubmit={editingScript === null ? handleCreateScript : handleUpdateScript}
       />
       <ProcessorScriptDetailModal
         open={viewingScript !== null}

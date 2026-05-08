@@ -3,7 +3,9 @@ use ingest4x::ingest::processor::{ProcessorRequestContext, ProcessorState};
 use ingest4x::repositories::{
     CreateProcessorScriptInput, CreateProcessorScriptModuleInput, CreateProjectInput,
     ProcessorRepository, ProcessorRepositoryError, ProcessorScriptStatus, ProjectRepository,
-    RuleRepository, UpdateProcessorScriptStatusInput,
+    RuleRepository, UpdateProcessorScriptInput, UpdateProcessorScriptModuleInput,
+    UpdateProcessorScriptStatusInput, ValidateProcessorScriptInput,
+    ValidateProcessorScriptModuleInput,
 };
 use ingest4x::rules::Rules;
 use serde_json::json;
@@ -164,6 +166,145 @@ async fn create_script_rejects_duplicate_script_key() {
         ProcessorRepositoryError::DuplicateProcessorScriptKey { ref script_key }
             if script_key == "custom_pipeline"
     ));
+}
+
+#[tokio::test]
+async fn validate_script_rejects_invalid_rhai_without_persisting() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let processors = ProcessorRepository::new(db);
+
+    let error = processors
+        .validate_script(ValidateProcessorScriptInput {
+            entry_module: "main".to_string(),
+            modules: vec![ValidateProcessorScriptModuleInput {
+                module_name: "main".to_string(),
+                source: r#"fn process(event, request) { emit("events", event);"#.to_string(),
+            }],
+        })
+        .expect_err("invalid Rhai script should be rejected");
+
+    assert!(matches!(
+        error,
+        ProcessorRepositoryError::InvalidScript { .. }
+    ));
+    assert!(error.to_string().contains("Rhai module `main`"));
+    let scripts = processors
+        .list_scripts()
+        .await
+        .expect("list scripts should still work");
+    assert!(scripts.is_empty());
+}
+
+#[tokio::test]
+async fn validate_script_reports_invalid_module_name_for_module_source() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let processors = ProcessorRepository::new(db);
+
+    let error = processors
+        .validate_script(ValidateProcessorScriptInput {
+            entry_module: "main".to_string(),
+            modules: vec![
+                ValidateProcessorScriptModuleInput {
+                    module_name: "main".to_string(),
+                    source: r#"import "custom" as custom;
+
+fn process(event, request) {
+    event = custom::mark(event);
+    emit("events", event);
+}"#
+                    .to_string(),
+                },
+                ValidateProcessorScriptModuleInput {
+                    module_name: "custom".to_string(),
+                    source: r#"fn mark(event) { let broken = ; return event; }"#.to_string(),
+                },
+            ],
+        })
+        .expect_err("invalid module source should be rejected");
+
+    assert!(matches!(
+        error,
+        ProcessorRepositoryError::InvalidScript { .. }
+    ));
+    assert!(error.to_string().contains("Rhai module `custom`"));
+}
+
+#[tokio::test]
+async fn update_script_replaces_modules_and_increments_version() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let processors = ProcessorRepository::new(db);
+
+    let script = processors
+        .create_script(CreateProcessorScriptInput {
+            script_key: "editable_pipeline".to_string(),
+            name: "Editable pipeline".to_string(),
+            entry_module: "main".to_string(),
+            status: ProcessorScriptStatus::Draft,
+            modules: vec![CreateProcessorScriptModuleInput {
+                module_name: "main".to_string(),
+                source: r#"fn process(event, request) { emit("events", event); }"#.to_string(),
+            }],
+        })
+        .await
+        .expect("script should be created");
+
+    let updated = processors
+        .update_script(
+            script.id,
+            UpdateProcessorScriptInput {
+                name: "Updated pipeline".to_string(),
+                entry_module: "main".to_string(),
+                status: ProcessorScriptStatus::Active,
+                modules: vec![
+                    UpdateProcessorScriptModuleInput {
+                        module_name: "main".to_string(),
+                        source: r#"
+import "custom" as custom;
+
+fn process(event, request) {
+    event = custom::mark(event);
+    emit("updated_events", event);
+}
+"#
+                        .to_string(),
+                    },
+                    UpdateProcessorScriptModuleInput {
+                        module_name: "custom".to_string(),
+                        source: r#"
+fn mark(event) {
+    event["xcontext"]["processor_marker"] = "updated";
+    return event;
+}
+"#
+                        .to_string(),
+                    },
+                ],
+            },
+        )
+        .await
+        .expect("script should be updated");
+
+    assert_eq!(updated.id, script.id);
+    assert_eq!(updated.script_key, "editable_pipeline");
+    assert_eq!(updated.name, "Updated pipeline");
+    assert_eq!(updated.version, 2);
+    assert_eq!(updated.status, ProcessorScriptStatus::Active);
+    assert_ne!(updated.checksum, script.checksum);
+    assert!(updated.activated_at.is_some());
+
+    let (_, modules) = processors
+        .get_script(script.id)
+        .await
+        .expect("detail should load")
+        .expect("script should exist");
+    assert_eq!(modules.len(), 2);
+    assert!(modules.iter().any(|module| module.module_name == "custom"));
 }
 
 #[tokio::test]

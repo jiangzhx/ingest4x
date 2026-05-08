@@ -1,6 +1,9 @@
 import type {
   CreateProcessorScriptPayload,
+  ProcessorScriptDetail,
   ProcessorScriptFormValues,
+  UpdateProcessorScriptPayload,
+  ValidateProcessorScriptPayload,
 } from "./types";
 
 const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
@@ -63,5 +66,58 @@ export function toCreateProcessorScriptPayload(
     entry_module: values.entry_module.trim(),
     status: values.status,
     modules,
+  };
+}
+
+export function toUpdateProcessorScriptPayload(
+  values: ProcessorScriptFormValues,
+): UpdateProcessorScriptPayload {
+  const modules = values.modules.map((module) => ({
+    module_name: module.module_name.trim(),
+    source: module.source,
+  }));
+
+  if (modules.length === 0) {
+    throw new Error("至少需要一个 Rhai module");
+  }
+
+  return {
+    name: values.name.trim(),
+    entry_module: values.entry_module.trim(),
+    status: values.status,
+    modules,
+  };
+}
+
+export function toValidateProcessorScriptPayload(
+  values: ProcessorScriptFormValues,
+): ValidateProcessorScriptPayload {
+  const modules = values.modules.map((module) => ({
+    module_name: module.module_name.trim(),
+    source: module.source,
+  }));
+
+  if (modules.length === 0) {
+    throw new Error("至少需要一个 Rhai module");
+  }
+
+  return {
+    entry_module: values.entry_module.trim(),
+    modules,
+  };
+}
+
+export function toProcessorScriptFormValues(
+  detail: ProcessorScriptDetail,
+): ProcessorScriptFormValues {
+  return {
+    script_key: detail.script_key,
+    name: detail.name,
+    entry_module: detail.entry_module,
+    status: detail.status,
+    modules: detail.modules.map((module) => ({
+      module_name: module.module_name,
+      source: module.source,
+    })),
   };
 }

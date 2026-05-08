@@ -11,8 +11,9 @@ pub use event_sinks::{
 pub use processors::{
     CreateProcessorScriptInput, CreateProcessorScriptModuleInput, ProcessorRepository,
     ProcessorRepositoryError, ProcessorRepositoryResult, ProcessorScript, ProcessorScriptModule,
-    ProcessorScriptStatus, ProjectProcessor, RuntimeProcessorScript,
-    UpdateProcessorScriptStatusInput,
+    ProcessorScriptStatus, ProjectProcessor, RuntimeProcessorScript, UpdateProcessorScriptInput,
+    UpdateProcessorScriptModuleInput, UpdateProcessorScriptStatusInput,
+    ValidateProcessorScriptInput, ValidateProcessorScriptModuleInput,
 };
 pub use projects::{
     generate_ingest_token, hash_ingest_token, CreateProjectInput, Project, ProjectRepository,

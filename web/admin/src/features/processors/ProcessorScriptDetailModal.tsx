@@ -1,4 +1,5 @@
 import { Modal, Space, Tabs, Typography } from "antd";
+import { RhaiEditor } from "./RhaiEditor";
 import type { ProcessorScriptDetail } from "./types";
 import { formatProcessorTimestamp } from "./utils";
 
@@ -20,15 +21,7 @@ export function ProcessorScriptDetailModal({
       key: module.module_name,
       label: module.module_name,
       children: (
-        <Typography.Paragraph
-          style={{
-            margin: 0,
-            whiteSpace: "pre-wrap",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-          }}
-        >
-          {module.source}
-        </Typography.Paragraph>
+        <RhaiEditor value={module.source} height="360px" readOnly />
       ),
     })) ?? [];
 

@@ -67,6 +67,46 @@ async fn admin_can_create_script_and_bind_project_processor() {
         .await;
         assert_eq!(before_create.status(), StatusCode::OK);
 
+        let validate_script = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::post())
+                .uri("/api/admin/processor-scripts/validate")
+                .set_json(json!({
+                    "entry_module": "main",
+                    "modules": [
+                        {
+                            "module_name": "main",
+                            "source": "fn process(event, request) { emit(\"custom_events\", event); }"
+                        }
+                    ]
+                }))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(validate_script.status(), StatusCode::NO_CONTENT);
+
+        let invalid_script = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::post())
+                .uri("/api/admin/processor-scripts/validate")
+                .set_json(json!({
+                    "entry_module": "main",
+                    "modules": [
+                        {
+                            "module_name": "main",
+                            "source": "fn process(event, request) { emit(\"custom_events\", event);"
+                        }
+                    ]
+                }))
+                .to_request(),
+        )
+        .await;
+        let invalid_status = invalid_script.status();
+        let invalid_body = String::from_utf8(test::read_body(invalid_script).await.to_vec())
+            .expect("invalid syntax response should be utf8");
+        assert_eq!(invalid_status, StatusCode::BAD_REQUEST);
+        assert!(!invalid_body.trim().is_empty());
+
         let create_script = test::call_service(
             &app,
             with_admin_password(test::TestRequest::post())
@@ -90,6 +130,31 @@ async fn admin_can_create_script_and_bind_project_processor() {
         assert_eq!(create_status, StatusCode::CREATED);
         let script: Value = test::read_body_json(create_script).await;
         assert_eq!(script["script_key"], "custom_pipeline");
+
+        let update_script = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::put())
+                .uri(format!("/api/admin/processor-scripts/{}", script["id"]).as_str())
+                .set_json(json!({
+                    "name": "Custom Pipeline Updated",
+                    "entry_module": "main",
+                    "status": "active",
+                    "modules": [
+                        {
+                            "module_name": "main",
+                            "source": "fn process(event, request) { emit(\"updated_events\", event); }"
+                        }
+                    ]
+                }))
+                .to_request(),
+        )
+        .await;
+        let update_status = update_script.status();
+        let updated_script: Value = test::read_body_json(update_script).await;
+        assert_eq!(update_status, StatusCode::OK);
+        assert_eq!(updated_script["script_key"], "custom_pipeline");
+        assert_eq!(updated_script["name"], "Custom Pipeline Updated");
+        assert_eq!(updated_script["version"], json!(2));
 
         let detail = test::call_service(
             &app,
@@ -143,7 +208,7 @@ async fn admin_can_create_script_and_bind_project_processor() {
         let probe_status = probe.status();
         let probe: Value = test::read_body_json(probe).await;
         assert_eq!(probe_status, StatusCode::OK);
-        assert_eq!(probe["targets"], json!(["custom_events"]));
+        assert_eq!(probe["targets"], json!(["updated_events"]));
 
         let delete = test::call_service(
             &app,
@@ -281,6 +346,8 @@ async fn openapi_json_includes_admin_processor_paths() {
 
         assert_eq!(status, StatusCode::OK);
         assert!(body["paths"]["/api/admin/processor-scripts"].is_object());
+        assert!(body["paths"]["/api/admin/processor-scripts/validate"].is_object());
+        assert!(body["paths"]["/api/admin/processor-scripts/{processor_script_id}"].is_object());
         assert!(
             body["paths"]["/api/admin/processor-scripts/{processor_script_id}/status"].is_object()
         );

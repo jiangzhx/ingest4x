@@ -35,6 +35,32 @@ pub struct CreateProcessorScriptInput {
     pub modules: Vec<CreateProcessorScriptModuleInput>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateProcessorScriptModuleInput {
+    pub module_name: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateProcessorScriptInput {
+    pub name: String,
+    pub entry_module: String,
+    pub status: ProcessorScriptStatus,
+    pub modules: Vec<UpdateProcessorScriptModuleInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidateProcessorScriptModuleInput {
+    pub module_name: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidateProcessorScriptInput {
+    pub entry_module: String,
+    pub modules: Vec<ValidateProcessorScriptModuleInput>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpdateProcessorScriptStatusInput {
     pub status: ProcessorScriptStatus,
@@ -174,6 +200,26 @@ impl ProcessorRepository {
         Self { db }
     }
 
+    pub fn validate_script(
+        &self,
+        input: ValidateProcessorScriptInput,
+    ) -> ProcessorRepositoryResult<()> {
+        validate_script_input(&CreateProcessorScriptInput {
+            script_key: "validation".to_string(),
+            name: "Validation".to_string(),
+            entry_module: input.entry_module,
+            status: ProcessorScriptStatus::Draft,
+            modules: input
+                .modules
+                .into_iter()
+                .map(|module| CreateProcessorScriptModuleInput {
+                    module_name: module.module_name,
+                    source: module.source,
+                })
+                .collect(),
+        })
+    }
+
     pub async fn create_script(
         &self,
         input: CreateProcessorScriptInput,
@@ -253,6 +299,73 @@ impl ProcessorRepository {
             .collect::<Vec<_>>();
 
         Ok(Some((script.try_into()?, modules)))
+    }
+
+    pub async fn update_script(
+        &self,
+        id: i32,
+        input: UpdateProcessorScriptInput,
+    ) -> ProcessorRepositoryResult<ProcessorScript> {
+        let txn = self.db.begin().await?;
+        let result = async {
+            let existing = find_processor_script_by_id(&txn, id).await?;
+            if input.status != ProcessorScriptStatus::Active {
+                ensure_processor_script_can_be_disabled(&txn, &existing).await?;
+            }
+
+            let validation_input = CreateProcessorScriptInput {
+                script_key: existing.script_key.clone(),
+                name: input.name.clone(),
+                entry_module: input.entry_module.clone(),
+                status: input.status,
+                modules: input
+                    .modules
+                    .iter()
+                    .map(|module| CreateProcessorScriptModuleInput {
+                        module_name: module.module_name.clone(),
+                        source: module.source.clone(),
+                    })
+                    .collect(),
+            };
+            validate_script_input(&validation_input)?;
+
+            let now = current_timestamp();
+            let checksum = script_checksum(&validation_input);
+            let mut active_model = existing.into_active_model();
+            active_model.name = Set(input.name);
+            active_model.entry_module = Set(input.entry_module);
+            active_model.status = Set(input.status.as_str().to_string());
+            active_model.version = Set(active_model.version.unwrap() + 1);
+            active_model.checksum = Set(checksum);
+            active_model.updated_at = Set(now);
+            if input.status == ProcessorScriptStatus::Active {
+                active_model.activated_at = Set(Some(now));
+            }
+
+            let script = active_model.update(&txn).await?;
+            processor_script_modules::Entity::delete_many()
+                .filter(processor_script_modules::Column::ProcessorScriptId.eq(script.id))
+                .exec(&txn)
+                .await?;
+            for module in input.modules {
+                processor_script_modules::ActiveModel {
+                    processor_script_id: Set(script.id),
+                    module_name: Set(module.module_name),
+                    source: Set(module.source),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                    ..Default::default()
+                }
+                .insert(&txn)
+                .await?;
+            }
+
+            bump_processor_scripts_version(&txn).await?;
+            script.try_into()
+        }
+        .await;
+
+        finish_transaction(txn, result).await
     }
 
     pub async fn update_script_status(
@@ -554,10 +667,18 @@ fn validate_script_input(input: &CreateProcessorScriptInput) -> ProcessorReposit
         .collect::<Vec<_>>();
     ProcessorState::new_with_modules(entry.source.clone(), modules, 10_000).map_err(|error| {
         ProcessorRepositoryError::InvalidScript {
-            message: error.to_string(),
+            message: label_entry_compile_error(&input.entry_module, error.to_string()),
         }
     })?;
     Ok(())
+}
+
+fn label_entry_compile_error(entry_module: &str, message: String) -> String {
+    if message.contains("Rhai module `") {
+        return message;
+    }
+
+    format!("failed to compile Rhai module `{entry_module}`: {message}")
 }
 
 fn validate_module_name(module_name: &str) -> ProcessorRepositoryResult<()> {

@@ -1,15 +1,34 @@
 import { useEffect } from "react";
-import { Button, Form, Input, Modal, Select, Space } from "antd";
+import {
+  Button,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Typography,
+} from "antd";
 import type {
   ProcessorScriptFormValues,
   ProcessorScriptStatus,
 } from "./types";
+import { RhaiEditor } from "./RhaiEditor";
 import { DEFAULT_PROCESSOR_SOURCE } from "./utils";
 
 type ProcessorScriptFormModalProps = {
   open: boolean;
+  mode?: "create" | "edit";
+  initialValues?: ProcessorScriptFormValues;
   confirmLoading?: boolean;
+  validateLoading?: boolean;
+  validationError?: string | null;
+  loading?: boolean;
   onCancel: () => void;
+  onValidate: (
+    values: ProcessorScriptFormValues,
+    options?: { notify?: boolean },
+  ) => Promise<void>;
   onSubmit: (values: ProcessorScriptFormValues) => Promise<void>;
 };
 
@@ -31,13 +50,59 @@ const defaultValues: ProcessorScriptFormValues = {
   ],
 };
 
+function extractValidationModuleName(error: string | null): string | null {
+  if (!error) {
+    return null;
+  }
+
+  return /Rhai module `([^`]+)`/.exec(error)?.[1] ?? null;
+}
+
+function renderRhaiSourceLabel(error: string | null) {
+  return (
+    <Space size={8} align="center" wrap>
+      <span>Rhai Source</span>
+      {error ? (
+        <Typography.Text
+          type="danger"
+          style={{ fontSize: 12, maxWidth: 620 }}
+          ellipsis={{ tooltip: error }}
+        >
+          {error}
+        </Typography.Text>
+      ) : null}
+    </Space>
+  );
+}
+
 export function ProcessorScriptFormModal({
   open,
+  mode = "create",
+  initialValues,
   confirmLoading = false,
+  validateLoading = false,
+  validationError = null,
+  loading = false,
   onCancel,
+  onValidate,
   onSubmit,
 }: ProcessorScriptFormModalProps) {
   const [form] = Form.useForm<ProcessorScriptFormValues>();
+  const watchedModules = Form.useWatch("modules", form);
+  const validationModuleName = extractValidationModuleName(validationError);
+
+  const sourceErrorForField = (fieldName: number) => {
+    if (!validationError) {
+      return null;
+    }
+
+    const moduleName = watchedModules?.[fieldName]?.module_name?.trim() ?? "";
+    if (validationModuleName) {
+      return validationModuleName === moduleName ? validationError : null;
+    }
+
+    return fieldName === 0 ? validationError : null;
+  };
 
   useEffect(() => {
     if (!open) {
@@ -45,12 +110,16 @@ export function ProcessorScriptFormModal({
       return;
     }
 
-    form.setFieldsValue(defaultValues);
-  }, [form, open]);
+    if (mode === "edit" && initialValues === undefined) {
+      return;
+    }
 
-  const handleOk = async () => {
+    form.setFieldsValue(initialValues ?? defaultValues);
+  }, [form, initialValues, mode, open]);
+
+  const validatedValues = async () => {
     const values = await form.validateFields();
-    await onSubmit({
+    return {
       ...values,
       script_key: values.script_key.trim(),
       name: values.name.trim(),
@@ -59,7 +128,18 @@ export function ProcessorScriptFormModal({
         module_name: module.module_name.trim(),
         source: module.source,
       })),
-    });
+    };
+  };
+
+  const validateScript = async (notify = false) => {
+    const values = await validatedValues();
+    await onValidate(values, { notify });
+    return values;
+  };
+
+  const handleOk = async () => {
+    const values = await validateScript();
+    await onSubmit(values);
   };
 
   return (
@@ -67,14 +147,31 @@ export function ProcessorScriptFormModal({
       destroyOnHidden
       open={open}
       width={900}
-      title="创建 Processor Script"
-      okText="创建"
-      cancelText="取消"
-      confirmLoading={confirmLoading}
+      title={mode === "edit" ? "编辑 Processor Script" : "创建 Processor Script"}
+      loading={loading}
       onCancel={onCancel}
-      onOk={() => {
-        void handleOk().catch(() => {});
-      }}
+      footer={
+        <Space style={{ display: "flex", justifyContent: "flex-end" }}>
+          <Button onClick={onCancel}>取消</Button>
+          <Button
+            loading={validateLoading}
+            onClick={() => {
+              void validateScript(true).catch(() => {});
+            }}
+          >
+            检查
+          </Button>
+          <Button
+            type="primary"
+            loading={confirmLoading}
+            onClick={() => {
+              void handleOk().catch(() => {});
+            }}
+          >
+            {mode === "edit" ? "保存" : "创建"}
+          </Button>
+        </Space>
+      }
     >
       <Form<ProcessorScriptFormValues>
         form={form}
@@ -90,7 +187,11 @@ export function ProcessorScriptFormModal({
               { whitespace: true, message: "script_key 不能为空" },
             ]}
           >
-            <Input placeholder="例如：payment_pipeline" style={{ width: 260 }} />
+            <Input
+              disabled={mode === "edit"}
+              placeholder="例如：payment_pipeline"
+              style={{ width: 260 }}
+            />
           </Form.Item>
           <Form.Item<ProcessorScriptFormValues>
             label="展示名"
@@ -147,27 +248,32 @@ export function ProcessorScriptFormModal({
                     >
                       <Input placeholder="main" style={{ width: 220 }} />
                     </Form.Item>
-                    <Button
-                      danger
+                    <Popconfirm
+                      title="确认删除这个 Module？"
+                      okText="删除"
+                      cancelText="取消"
                       disabled={fields.length <= 1}
-                      onClick={() => remove(field.name)}
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => remove(field.name)}
                     >
-                      删除 Module
-                    </Button>
+                      <Button
+                        danger
+                        disabled={fields.length <= 1}
+                        style={{ marginTop: 30 }}
+                      >
+                        删除 Module
+                      </Button>
+                    </Popconfirm>
                   </Space>
                   <Form.Item
-                    label="Rhai Source"
+                    label={renderRhaiSourceLabel(sourceErrorForField(field.name))}
                     name={[field.name, "source"]}
                     rules={[
                       { required: true, message: "请输入 Rhai source" },
                       { whitespace: true, message: "source 不能为空" },
                     ]}
                   >
-                    <Input.TextArea
-                      rows={12}
-                      spellCheck={false}
-                      style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
-                    />
+                    <RhaiEditor />
                   </Form.Item>
                 </div>
               ))}

@@ -7,7 +7,9 @@ import type {
   ProcessorScriptModule,
   ProcessorScriptStatus,
   ProjectProcessor,
+  UpdateProcessorScriptPayload,
   UpdateProcessorScriptStatusPayload,
+  ValidateProcessorScriptPayload,
 } from "./types";
 
 type ProcessorScriptResponse = {
@@ -220,6 +222,36 @@ export async function createProcessorScript(
   );
 
   return normalizeProcessorScriptResponse(response);
+}
+
+export async function updateProcessorScript(
+  id: number,
+  payload: UpdateProcessorScriptPayload,
+): Promise<ProcessorScript> {
+  const response = await requestJson<ProcessorScriptResponse>(
+    `/api/admin/processor-scripts/${id}`,
+    {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    },
+  );
+
+  return normalizeProcessorScriptResponse(response);
+}
+
+export async function validateProcessorScript(
+  payload: ValidateProcessorScriptPayload,
+): Promise<void> {
+  await request("/api/admin/processor-scripts/validate", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function updateProcessorScriptStatus(

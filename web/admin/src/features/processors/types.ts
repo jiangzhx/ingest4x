@@ -56,6 +56,18 @@ export interface CreateProcessorScriptPayload {
   modules: ProcessorScriptModuleFormValues[];
 }
 
+export interface UpdateProcessorScriptPayload {
+  name: string;
+  entry_module: string;
+  status: ProcessorScriptStatus;
+  modules: ProcessorScriptModuleFormValues[];
+}
+
+export interface ValidateProcessorScriptPayload {
+  entry_module: string;
+  modules: ProcessorScriptModuleFormValues[];
+}
+
 export interface UpdateProcessorScriptStatusPayload {
   status: ProcessorScriptStatus;
 }

@@ -2,7 +2,9 @@ use crate::ingest::processor::ProcessorRegistryState;
 use crate::repositories::{
     CreateProcessorScriptInput, CreateProcessorScriptModuleInput, ProcessorRepository,
     ProcessorRepositoryError, ProcessorScript, ProcessorScriptModule, ProcessorScriptStatus,
-    ProjectProcessor, UpdateProcessorScriptStatusInput,
+    ProjectProcessor, UpdateProcessorScriptInput, UpdateProcessorScriptModuleInput,
+    UpdateProcessorScriptStatusInput, ValidateProcessorScriptInput,
+    ValidateProcessorScriptModuleInput,
 };
 use actix_web::web::{self, Data, Json, Path, ServiceConfig};
 use actix_web::HttpResponse;
@@ -21,6 +23,32 @@ struct CreateProcessorScriptRequest {
 
 #[derive(Debug, Deserialize, ToSchema)]
 struct CreateProcessorScriptModuleRequest {
+    module_name: String,
+    source: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct UpdateProcessorScriptRequest {
+    name: String,
+    entry_module: String,
+    status: String,
+    modules: Vec<UpdateProcessorScriptModuleRequest>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct UpdateProcessorScriptModuleRequest {
+    module_name: String,
+    source: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct ValidateProcessorScriptRequest {
+    entry_module: String,
+    modules: Vec<ValidateProcessorScriptModuleRequest>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+struct ValidateProcessorScriptModuleRequest {
     module_name: String,
     source: String,
 }
@@ -82,7 +110,9 @@ struct ProjectProcessorResponse {
     paths(
         list_processor_scripts,
         create_processor_script,
+        validate_processor_script,
         get_processor_script,
+        update_processor_script,
         update_processor_script_status,
         list_project_processors,
         assign_project_processor,
@@ -92,6 +122,10 @@ struct ProjectProcessorResponse {
         schemas(
             CreateProcessorScriptRequest,
             CreateProcessorScriptModuleRequest,
+            UpdateProcessorScriptRequest,
+            UpdateProcessorScriptModuleRequest,
+            ValidateProcessorScriptRequest,
+            ValidateProcessorScriptModuleRequest,
             UpdateProcessorScriptStatusRequest,
             AssignProjectProcessorRequest,
             ProcessorScriptResponse,
@@ -113,8 +147,16 @@ pub fn configure(cfg: &mut ServiceConfig) {
             web::post().to(create_processor_script),
         )
         .route(
+            "/processor-scripts/validate",
+            web::post().to(validate_processor_script),
+        )
+        .route(
             "/processor-scripts/{processor_script_id}",
             web::get().to(get_processor_script),
+        )
+        .route(
+            "/processor-scripts/{processor_script_id}",
+            web::put().to(update_processor_script),
         )
         .route(
             "/processor-scripts/{processor_script_id}/status",
@@ -178,6 +220,24 @@ async fn create_processor_script(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/admin/processor-scripts/validate",
+    tag = "admin.processors",
+    request_body = ValidateProcessorScriptRequest,
+    responses((status = 204, description = "Processor script syntax is valid"))
+)]
+async fn validate_processor_script(
+    repository: Data<ProcessorRepository>,
+    request: Json<ValidateProcessorScriptRequest>,
+) -> HttpResponse {
+    let input = ValidateProcessorScriptInput::from(request.into_inner());
+    match repository.validate_script(input) {
+        Ok(()) => HttpResponse::NoContent().finish(),
+        Err(error) => map_repository_error(error),
+    }
+}
+
+#[utoipa::path(
     get,
     path = "/api/admin/processor-scripts/{processor_script_id}",
     tag = "admin.processors",
@@ -194,6 +254,33 @@ async fn get_processor_script(
         ),
         Ok(None) => HttpResponse::NotFound().finish(),
         Err(error) => map_repository_error(error),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/admin/processor-scripts/{processor_script_id}",
+    tag = "admin.processors",
+    params(("processor_script_id" = i32, Path, description = "Processor script id")),
+    request_body = UpdateProcessorScriptRequest,
+    responses((status = 200, description = "Processor script updated", body = ProcessorScriptResponse))
+)]
+async fn update_processor_script(
+    processor_script_id: Path<i32>,
+    repository: Data<ProcessorRepository>,
+    processor: Data<ProcessorRegistryState>,
+    request: Json<UpdateProcessorScriptRequest>,
+) -> HttpResponse {
+    match UpdateProcessorScriptInput::try_from(request.into_inner()) {
+        Ok(input) => match repository.update_script(*processor_script_id, input).await {
+            Ok(script) => finalize_processor_response(
+                HttpResponse::Ok().json(ProcessorScriptResponse::from(script)),
+                processor.refresh_if_needed().await,
+                "update_processor_script",
+            ),
+            Err(error) => map_repository_error(error),
+        },
+        Err(error) => HttpResponse::BadRequest().body(error),
     }
 }
 
@@ -373,8 +460,56 @@ impl TryFrom<UpdateProcessorScriptStatusRequest> for UpdateProcessorScriptStatus
     }
 }
 
+impl From<ValidateProcessorScriptRequest> for ValidateProcessorScriptInput {
+    fn from(value: ValidateProcessorScriptRequest) -> Self {
+        Self {
+            entry_module: value.entry_module,
+            modules: value
+                .modules
+                .into_iter()
+                .map(ValidateProcessorScriptModuleInput::from)
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<UpdateProcessorScriptRequest> for UpdateProcessorScriptInput {
+    type Error = String;
+
+    fn try_from(value: UpdateProcessorScriptRequest) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name,
+            entry_module: value.entry_module,
+            status: parse_processor_status(&value.status)?,
+            modules: value
+                .modules
+                .into_iter()
+                .map(UpdateProcessorScriptModuleInput::from)
+                .collect(),
+        })
+    }
+}
+
+impl From<ValidateProcessorScriptModuleRequest> for ValidateProcessorScriptModuleInput {
+    fn from(value: ValidateProcessorScriptModuleRequest) -> Self {
+        Self {
+            module_name: value.module_name,
+            source: value.source,
+        }
+    }
+}
+
 impl From<CreateProcessorScriptModuleRequest> for CreateProcessorScriptModuleInput {
     fn from(value: CreateProcessorScriptModuleRequest) -> Self {
+        Self {
+            module_name: value.module_name,
+            source: value.source,
+        }
+    }
+}
+
+impl From<UpdateProcessorScriptModuleRequest> for UpdateProcessorScriptModuleInput {
+    fn from(value: UpdateProcessorScriptModuleRequest) -> Self {
         Self {
             module_name: value.module_name,
             source: value.source,
