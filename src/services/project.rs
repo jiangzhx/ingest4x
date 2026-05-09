@@ -1,4 +1,4 @@
-use crate::repositories::{hash_ingest_token, Project, ProjectRepository, ProjectRepositoryResult};
+use crate::repositories::{Project, ProjectRepository, ProjectRepositoryResult};
 use actix_web::rt::{spawn, task::JoinHandle, time::sleep};
 use futures::lock::Mutex as AsyncMutex;
 use log::error;
@@ -30,7 +30,7 @@ impl ProjectRegistryState {
         self.projects
             .read()
             .expect("project registry read lock poisoned")
-            .get(&hash_ingest_token(ingest_token.trim()))
+            .get(ingest_token.trim())
             .cloned()
     }
 
@@ -103,7 +103,7 @@ async fn load_snapshot(
             return Ok((
                 projects
                     .into_iter()
-                    .map(|project| (project.ingest_token_hash.clone(), project))
+                    .map(|project| (project.ingest_token.clone(), project))
                     .collect(),
                 version_after,
             ));
@@ -141,11 +141,10 @@ mod tests {
         );
 
         let older_snapshot = HashMap::from([(
-            hash_ingest_token("igx_app_b"),
+            "igx_app_b".to_string(),
             Project {
                 id: 2,
-                ingest_token_hash: hash_ingest_token("igx_app_b"),
-                ingest_token_prefix: "igx_app_b".to_string(),
+                ingest_token: "igx_app_b".to_string(),
                 name: "App B".to_string(),
                 enabled: true,
                 created_at: 0,
@@ -153,11 +152,10 @@ mod tests {
             },
         )]);
         let newer_snapshot = HashMap::from([(
-            hash_ingest_token("igx_app_c"),
+            "igx_app_c".to_string(),
             Project {
                 id: 3,
-                ingest_token_hash: hash_ingest_token("igx_app_c"),
-                ingest_token_prefix: "igx_app_c".to_string(),
+                ingest_token: "igx_app_c".to_string(),
                 name: "App C".to_string(),
                 enabled: true,
                 created_at: 0,

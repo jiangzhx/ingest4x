@@ -76,6 +76,7 @@ async fn refresh_if_needed_replaces_snapshot_when_version_changes() {
             UpdateProjectInput {
                 name: None,
                 enabled: Some(false),
+                ingest_token: None,
             },
         )
         .await

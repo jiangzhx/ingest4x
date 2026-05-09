@@ -29,6 +29,9 @@ async fn migrator_creates_current_sqlite_schema() {
         "app_meta",
         "delivery_targets",
         "event_sinks",
+        "processor_script_modules",
+        "processor_scripts",
+        "project_processors",
         "project_rule_sets",
         "projects",
         "rule_sets",
@@ -66,4 +69,17 @@ async fn migrator_creates_current_sqlite_schema() {
         .expect("event sinks version value");
 
     assert_eq!(event_sinks_version, "0");
+
+    let processor_scripts_version = db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT value FROM app_meta WHERE key = 'processor_scripts_version'",
+        ))
+        .await
+        .expect("processor scripts metadata should query")
+        .expect("processor scripts version metadata should exist")
+        .try_get::<String>("", "value")
+        .expect("processor scripts version value");
+
+    assert_eq!(processor_scripts_version, "0");
 }

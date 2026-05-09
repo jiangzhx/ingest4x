@@ -4,7 +4,6 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
 };
-use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
@@ -14,8 +13,7 @@ const PROJECTS_VERSION_KEY: &str = "projects_version";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Project {
     pub id: i32,
-    pub ingest_token_hash: String,
-    pub ingest_token_prefix: String,
+    pub ingest_token: String,
     pub name: String,
     pub enabled: bool,
     pub created_at: i64,
@@ -33,6 +31,7 @@ pub struct CreateProjectInput {
 pub struct UpdateProjectInput {
     pub name: Option<String>,
     pub enabled: Option<bool>,
+    pub ingest_token: Option<String>,
 }
 
 pub type ProjectRepositoryResult<T> = Result<T, ProjectRepositoryError>;
@@ -102,15 +101,14 @@ impl ProjectRepository {
         if token.is_empty() {
             return Err(ProjectRepositoryError::InvalidIngestToken);
         }
-        let ingest_token_hash = hash_ingest_token(token);
+        let ingest_token = token.to_string();
         let ingest_token_prefix = ingest_token_prefix(token);
         let txn = self.db.begin().await?;
         let result = async {
             let now = current_timestamp();
 
             let project = projects::ActiveModel {
-                ingest_token_hash: Set(ingest_token_hash),
-                ingest_token_prefix: Set(ingest_token_prefix.clone()),
+                ingest_token: Set(ingest_token),
                 name: Set(input.name),
                 enabled: Set(input.enabled),
                 created_at: Set(now),
@@ -146,9 +144,28 @@ impl ProjectRepository {
             if let Some(enabled) = input.enabled {
                 active_model.enabled = Set(enabled);
             }
+            let token_prefix = if let Some(ingest_token) = input.ingest_token {
+                let token = ingest_token.trim();
+                if token.is_empty() {
+                    return Err(ProjectRepositoryError::InvalidIngestToken);
+                }
+
+                let prefix = ingest_token_prefix(token);
+                active_model.ingest_token = Set(token.to_string());
+                Some(prefix)
+            } else {
+                None
+            };
             active_model.updated_at = Set(current_timestamp());
 
-            let project = active_model.update(&txn).await?;
+            let project =
+                active_model
+                    .update(&txn)
+                    .await
+                    .map_err(|error| match token_prefix.as_deref() {
+                        Some(prefix) => map_write_error(error, prefix),
+                        None => ProjectRepositoryError::Database(error),
+                    })?;
             bump_projects_version(&txn).await?;
 
             Ok(project.into())
@@ -211,7 +228,7 @@ impl ProjectRepository {
             return Ok(None);
         }
         let project = projects::Entity::find()
-            .filter(projects::Column::IngestTokenHash.eq(hash_ingest_token(token)))
+            .filter(projects::Column::IngestToken.eq(token))
             .filter(projects::Column::Enabled.eq(true))
             .one(&self.db)
             .await?;
@@ -295,11 +312,6 @@ pub fn generate_ingest_token() -> String {
     format!("igx_{}", Uuid::new_v4().simple())
 }
 
-pub fn hash_ingest_token(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
-    format!("{digest:x}")
-}
-
 pub fn ingest_token_prefix(token: &str) -> String {
     let prefix = token.chars().take(12).collect::<String>();
     if token.chars().count() > 12 {
@@ -329,8 +341,7 @@ impl From<projects::Model> for Project {
     fn from(value: projects::Model) -> Self {
         Self {
             id: value.id,
-            ingest_token_hash: value.ingest_token_hash,
-            ingest_token_prefix: value.ingest_token_prefix,
+            ingest_token: value.ingest_token,
             name: value.name,
             enabled: value.enabled,
             created_at: value.created_at,

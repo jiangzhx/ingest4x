@@ -21,6 +21,8 @@ struct CreateProjectRequest {
 struct UpdateProjectRequest {
     name: Option<String>,
     enabled: Option<bool>,
+    ingest_token: Option<String>,
+    regenerate_ingest_token: Option<bool>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
@@ -28,16 +30,10 @@ struct ProjectResponse {
     id: i32,
     name: String,
     enabled: bool,
+    ingest_token: String,
     ingest_token_prefix: String,
     created_at: i64,
     updated_at: i64,
-}
-
-#[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
-struct CreateProjectResponse {
-    #[serde(flatten)]
-    project: ProjectResponse,
-    ingest_token: String,
 }
 
 #[derive(OpenApi)]
@@ -50,7 +46,7 @@ struct CreateProjectResponse {
         delete_project
     ),
     components(
-        schemas(CreateProjectRequest, UpdateProjectRequest, ProjectResponse, CreateProjectResponse)
+        schemas(CreateProjectRequest, UpdateProjectRequest, ProjectResponse)
     ),
     tags(
         (name = "admin.projects", description = "Admin project CRUD endpoints")
@@ -117,7 +113,7 @@ async fn get_project(project_id: Path<i32>, repository: Data<ProjectRepository>)
     tag = "admin.projects",
     request_body = CreateProjectRequest,
     responses(
-        (status = 201, description = "Project created", body = CreateProjectResponse),
+        (status = 201, description = "Project created", body = ProjectResponse),
         (status = 400, description = "Invalid JSON payload"),
         (status = 409, description = "Project ingest token already exists", body = String),
         (status = 500, description = "Repository failure", body = String)
@@ -157,10 +153,7 @@ async fn create_project(
                 warn!("processor registry refresh failed after create for '{project_id}': {error}");
             }
             finalize_success_response(
-                HttpResponse::Created().json(CreateProjectResponse {
-                    project: ProjectResponse::from(project),
-                    ingest_token,
-                }),
+                HttpResponse::Created().json(ProjectResponse::from(project)),
                 registry.refresh_if_needed().await,
                 "create",
                 project_id,
@@ -200,6 +193,7 @@ async fn assign_default_rule_set_to_project(rule_repository: &RuleRepository, pr
         (status = 200, description = "Project updated", body = ProjectResponse),
         (status = 400, description = "Invalid JSON payload"),
         (status = 404, description = "Project not found"),
+        (status = 409, description = "Project ingest token already exists", body = String),
         (status = 500, description = "Repository failure", body = String)
     )
 )]
@@ -209,10 +203,9 @@ async fn update_project(
     registry: Data<ProjectRegistryState>,
     request: Json<UpdateProjectRequest>,
 ) -> HttpResponse {
-    match repository
-        .update_project(*project_id, UpdateProjectInput::from(request.into_inner()))
-        .await
-    {
+    let input = UpdateProjectInput::from_request(request.into_inner());
+
+    match repository.update_project(*project_id, input).await {
         Ok(project) => {
             let project_id = project.id;
             finalize_success_response(
@@ -288,12 +281,30 @@ impl CreateProjectInput {
     }
 }
 
-impl From<UpdateProjectRequest> for UpdateProjectInput {
-    fn from(value: UpdateProjectRequest) -> Self {
+impl UpdateProjectInput {
+    fn from_request(value: UpdateProjectRequest) -> Self {
+        let ingest_token = value
+            .ingest_token
+            .clone()
+            .filter(|token| !token.trim().is_empty())
+            .or_else(|| {
+                value
+                    .regenerate_ingest_token
+                    .unwrap_or(false)
+                    .then(generate_ingest_token)
+            });
+
         Self {
             name: value.name,
             enabled: value.enabled,
+            ingest_token,
         }
+    }
+}
+
+impl From<UpdateProjectRequest> for UpdateProjectInput {
+    fn from(value: UpdateProjectRequest) -> Self {
+        Self::from_request(value)
     }
 }
 
@@ -303,7 +314,10 @@ impl From<Project> for ProjectResponse {
             id: value.id,
             name: value.name,
             enabled: value.enabled,
-            ingest_token_prefix: value.ingest_token_prefix,
+            ingest_token_prefix: crate::repositories::projects::ingest_token_prefix(
+                &value.ingest_token,
+            ),
+            ingest_token: value.ingest_token,
             created_at: value.created_at,
             updated_at: value.updated_at,
         }

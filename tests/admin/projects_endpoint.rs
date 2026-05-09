@@ -94,9 +94,8 @@ async fn create_then_list_projects() {
 
         assert_eq!(list_status, StatusCode::OK);
         let listed = listed.as_array().expect("projects should be an array");
-        assert!(listed
-            .iter()
-            .any(|project| project["id"] == created["id"] && project["ingest_token"].is_null()));
+        assert!(listed.iter().any(|project| project["id"] == created["id"]
+            && project["ingest_token"] == json!("igx_admin_app")));
         assert!(listed
             .iter()
             .any(|project| project["name"] == json!("test_app")));
@@ -113,7 +112,7 @@ async fn create_then_list_projects() {
 
         assert_eq!(detail_status, StatusCode::OK);
         assert_eq!(detailed["id"], created["id"]);
-        assert!(detailed["ingest_token"].is_null());
+        assert_eq!(detailed["ingest_token"], json!("igx_admin_app"));
     })
     .await;
 }
