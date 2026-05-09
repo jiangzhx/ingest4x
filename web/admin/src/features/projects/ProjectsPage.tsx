@@ -40,7 +40,6 @@ export function ProjectsPage() {
   const processorScriptsQuery = useProcessorScriptsQuery();
   const processorBindingsQuery = useProjectProcessorsQuery();
   const assignProcessorMutation = useAssignProjectProcessorMutation();
-  const projects = projectsQuery.data ?? [];
   const ruleSets = ruleSetsQuery.data ?? [];
   const processorScripts = processorScriptsQuery.data ?? [];
   const processorBindings = processorBindingsQuery.data ?? [];
@@ -54,6 +53,7 @@ export function ProjectsPage() {
   const [updatingRuleSetId, setUpdatingRuleSetId] = useState<number | null>(null);
   const [updatingProcessorProjectId, setUpdatingProcessorProjectId] =
     useState<number | null>(null);
+  const projects = projectsQuery.data ?? [];
   const editingProjectId =
     isFormOpen && modalMode === "edit" ? editingProject?.id ?? null : null;
   const assignmentsQuery = useProjectRuleSetAssignmentsQuery(editingProjectId);
@@ -107,12 +107,14 @@ export function ProjectsPage() {
     try {
       if (modalMode === "create") {
         await createProjectMutation.mutateAsync(toCreateProjectPayload(values));
+
         message.success(`项目 ${values.name} 创建成功`);
       } else if (editingProject) {
         await updateProjectMutation.mutateAsync({
           projectId: editingProject.id,
           payload: toUpdateProjectPayload(values),
         });
+
         message.success(`项目 ${editingProject.name} 保存成功`);
       }
 

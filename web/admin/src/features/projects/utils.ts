@@ -47,8 +47,12 @@ export function toCreateProjectPayload(
 export function toUpdateProjectPayload(
   project: ProjectFormValues,
 ): UpdateProjectPayload {
+  const ingestToken = project.ingest_token?.trim();
+
   return {
     name: project.name.trim(),
     enabled: project.enabled,
+    ...(ingestToken ? { ingest_token: ingestToken } : {}),
+    ...(project.regenerate_ingest_token ? { regenerate_ingest_token: true } : {}),
   };
 }

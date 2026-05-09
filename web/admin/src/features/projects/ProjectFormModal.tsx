@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { Divider, Form, Input, Modal, Switch } from "antd";
+import { Checkbox, Divider, Form, Input, Modal, Switch, Typography } from "antd";
 import type { Project, ProjectFormValues } from "./types";
 
 type ProjectFormModalProps = {
@@ -19,6 +19,7 @@ function toFormValues(project?: Project | null): ProjectFormValues {
     name: project?.name ?? "",
     enabled: project?.enabled ?? true,
     ingest_token: "",
+    regenerate_ingest_token: false,
   };
 }
 
@@ -49,6 +50,7 @@ export function ProjectFormModal({
       name: values.name.trim(),
       enabled: values.enabled,
       ingest_token: values.ingest_token?.trim(),
+      regenerate_ingest_token: values.regenerate_ingest_token,
     });
   };
 
@@ -81,9 +83,27 @@ export function ProjectFormModal({
         >
           <Input placeholder="请输入项目名称" maxLength={120} />
         </Form.Item>
-        {mode === "create" ? (
-          <Form.Item<ProjectFormValues> label="Ingest Token" name="ingest_token">
-            <Input placeholder="留空自动生成" maxLength={256} />
+        {mode === "edit" && project ? (
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+            当前 Token:{" "}
+            <Typography.Text code>{project.ingest_token}</Typography.Text>
+          </Typography.Paragraph>
+        ) : null}
+        <Form.Item<ProjectFormValues>
+          label={mode === "create" ? "Ingest Token" : "新 Ingest Token"}
+          name="ingest_token"
+        >
+          <Input
+            placeholder={mode === "create" ? "留空自动生成" : "留空不修改"}
+            maxLength={256}
+          />
+        </Form.Item>
+        {mode === "edit" ? (
+          <Form.Item<ProjectFormValues>
+            name="regenerate_ingest_token"
+            valuePropName="checked"
+          >
+            <Checkbox>保存时自动生成新 Token</Checkbox>
           </Form.Item>
         ) : null}
         <Form.Item<ProjectFormValues>

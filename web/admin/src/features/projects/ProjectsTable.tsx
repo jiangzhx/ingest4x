@@ -1,4 +1,5 @@
-import { Button, Empty, Popconfirm, Space, Table, Tag, Typography } from "antd";
+import { CopyOutlined } from "@ant-design/icons";
+import { Button, Empty, message, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { processorLabel } from "../processors/ProjectProcessorPanel";
 import type { ProcessorScript, ProjectProcessor } from "../processors/types";
@@ -14,6 +15,58 @@ type ProjectsTableProps = {
   onEdit: (project: Project) => void;
   onDelete: (project: Project) => Promise<void>;
 };
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  const clipboard =
+    typeof navigator === "undefined" ? undefined : navigator.clipboard;
+
+  try {
+    if (clipboard) {
+      await clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the textarea fallback below.
+  }
+
+  if (typeof document === "undefined" || !document.body) {
+    return false;
+  }
+
+  const selection = document.getSelection();
+  const selectedRange =
+    selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+
+  try {
+    textarea.focus();
+    textarea.select();
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+
+    if (selection && selectedRange) {
+      selection.removeAllRanges();
+      selection.addRange(selectedRange);
+    }
+  }
+}
+
+async function handleCopyToken(tokenText: string) {
+  const copied = await copyTextToClipboard(tokenText);
+  if (copied) {
+    message.success("Token 已复制");
+    return;
+  }
+
+  message.error("Token 复制失败，请手动复制");
+}
 
 function projectProcessorLabel(
   project: Project,
@@ -59,10 +112,31 @@ export function ProjectsTable({
     },
     {
       title: "Token",
-      dataIndex: "ingest_token_prefix",
-      key: "ingest_token_prefix",
-      width: 180,
-      render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
+      key: "ingest_token",
+      width: 360,
+      render: (_, project) => {
+        const tokenText = project.ingest_token;
+
+        return (
+          <Space size={6}>
+            <Typography.Text
+              code
+              style={{ whiteSpace: "normal", wordBreak: "break-all" }}
+            >
+              {tokenText}
+            </Typography.Text>
+            <Button
+              aria-label="复制 Token"
+              icon={<CopyOutlined />}
+              size="small"
+              type="text"
+              onClick={() => {
+                void handleCopyToken(tokenText);
+              }}
+            />
+          </Space>
+        );
+      },
     },
     {
       title: "项目名称",

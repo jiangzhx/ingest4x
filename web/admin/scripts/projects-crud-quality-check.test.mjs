@@ -40,7 +40,7 @@ registerHooks({
   },
 });
 
-const { normalizeProjectResponse, normalizeProjectsResponse } = await import(
+const { createProject, normalizeProjectResponse, normalizeProjectsResponse } = await import(
   resolveModuleUrl("../src/features/projects/api.ts")
 );
 const { HttpError, requestJson } = await import(
@@ -123,6 +123,7 @@ test("projects api normalizes valid response payloads at runtime", () => {
       id: 7,
       name: "  Demo Project ",
       enabled: true,
+      ingest_token: "igx_demo_token",
       ingest_token_prefix: "igx_demo...",
       created_at: 1700000000.8,
       updated_at: 1700000001.2,
@@ -131,6 +132,7 @@ test("projects api normalizes valid response payloads at runtime", () => {
       id: 7,
       name: "Demo Project",
       enabled: true,
+      ingest_token: "igx_demo_token",
       ingest_token_prefix: "igx_demo...",
       created_at: 1700000000,
       updated_at: 1700000001,
@@ -143,6 +145,7 @@ test("projects api normalizes valid response payloads at runtime", () => {
         id: 1,
         name: "A",
         enabled: false,
+        ingest_token: "igx_a_token",
         ingest_token_prefix: "igx_a",
         created_at: 1,
         updated_at: 2,
@@ -153,12 +156,77 @@ test("projects api normalizes valid response payloads at runtime", () => {
         id: 1,
         name: "A",
         enabled: false,
+        ingest_token: "igx_a_token",
         ingest_token_prefix: "igx_a",
         created_at: 1,
         updated_at: 2,
       },
     ],
   );
+});
+
+test("project creation keeps full ingest token visible and copyable", async () => {
+  assert.doesNotMatch(projectsPageSource, /projectTokens/);
+  assert.doesNotMatch(projectsPageSource, /setProjectTokens/);
+  assert.match(projectsTableSource, /const tokenText = project\.ingest_token;/);
+  assert.match(projectsTableSource, /\{tokenText\}\s*<\/Typography\.Text>/);
+  assert.match(projectsTableSource, /CopyOutlined/);
+  assert.match(projectsTableSource, /aria-label="复制 Token"/);
+  assert.doesNotMatch(projectsTableSource, /disabled=\{!tokenText\}/);
+  assert.match(projectsTableSource, /handleCopyToken\(tokenText\)/);
+  assert.doesNotMatch(projectsTableSource, /copyable=/);
+  assert.match(projectFormSource, /regenerate_ingest_token/);
+  assert.match(projectFormSource, /保存时自动生成新 Token/);
+
+  const originalFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = async () =>
+      new Response(
+        JSON.stringify({
+          id: 3,
+          name: "Created Project",
+          enabled: true,
+          ingest_token: "igx_created_full_token",
+          ingest_token_prefix: "igx_created_...",
+          created_at: 10,
+          updated_at: 11,
+        }),
+        {
+          status: 201,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      );
+
+    assert.deepEqual(
+      await createProject({
+        name: "Created Project",
+        enabled: true,
+      }),
+      {
+        id: 3,
+        name: "Created Project",
+        enabled: true,
+        ingest_token: "igx_created_full_token",
+        ingest_token_prefix: "igx_created_...",
+        created_at: 10,
+        updated_at: 11,
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("project token copy falls back when browser clipboard is unavailable", () => {
+  assert.match(projectsTableSource, /async function copyTextToClipboard/);
+  assert.match(projectsTableSource, /navigator\.clipboard/);
+  assert.match(projectsTableSource, /clipboard\.writeText\(text\)/);
+  assert.match(projectsTableSource, /document\.execCommand\("copy"\)/);
+  assert.match(projectsTableSource, /message\.success\("Token 已复制"\)/);
+  assert.match(projectsTableSource, /message\.error\("Token 复制失败，请手动复制"\)/);
 });
 
 test("projects api rejects invalid response payloads at runtime", () => {
@@ -172,6 +240,7 @@ test("projects api rejects invalid response payloads at runtime", () => {
         id: 1,
         name: "Demo Project",
         enabled: "yes",
+        ingest_token: "igx_demo_token",
         ingest_token_prefix: "igx_demo",
         created_at: 1,
         updated_at: 2,
@@ -184,6 +253,7 @@ test("projects api rejects invalid response payloads at runtime", () => {
         id: 1,
         name: "Demo Project",
         enabled: true,
+        ingest_token: "igx_demo_token",
         ingest_token_prefix: "   ",
         created_at: 1,
         updated_at: 2,
@@ -196,6 +266,7 @@ test("projects api rejects invalid response payloads at runtime", () => {
         id: 1,
         name: "Demo Project",
         enabled: true,
+        ingest_token: "igx_demo_token",
         ingest_token_prefix: "igx_demo",
         created_at: -1,
         updated_at: 2,

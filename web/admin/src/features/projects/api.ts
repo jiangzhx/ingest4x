@@ -9,6 +9,7 @@ type ProjectResponse = {
   id?: unknown;
   name?: unknown;
   enabled?: unknown;
+  ingest_token?: unknown;
   ingest_token_prefix?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
@@ -20,7 +21,7 @@ function invalidProjectData(message: string): Error {
 
 function normalizeRequiredString(
   value: unknown,
-  fieldName: "name" | "ingest_token_prefix",
+  fieldName: "name" | "ingest_token" | "ingest_token_prefix",
 ): string {
   if (typeof value !== "string") {
     throw invalidProjectData(`${fieldName} 缺失或不是字符串`);
@@ -62,10 +63,11 @@ export function normalizeProjectResponse(value: ProjectResponse): Project {
     throw invalidProjectData("enabled 缺失或不是布尔值");
   }
 
-  return {
+  const project: Project = {
     id: normalizePositiveInteger(value.id, "id"),
     name: normalizeRequiredString(value.name, "name"),
     enabled: value.enabled,
+    ingest_token: normalizeRequiredString(value.ingest_token, "ingest_token"),
     ingest_token_prefix: normalizeRequiredString(
       value.ingest_token_prefix,
       "ingest_token_prefix",
@@ -73,6 +75,8 @@ export function normalizeProjectResponse(value: ProjectResponse): Project {
     created_at: normalizeTimestamp(value.created_at, "created_at"),
     updated_at: normalizeTimestamp(value.updated_at, "updated_at"),
   };
+
+  return project;
 }
 
 export async function listProjects(): Promise<Project[]> {
