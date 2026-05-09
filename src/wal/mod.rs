@@ -211,6 +211,10 @@ impl WalWriter {
         self.inner.snapshot(Some(sink_names))
     }
 
+    pub fn node_id(&self) -> String {
+        self.inner.node_id.clone()
+    }
+
     #[allow(unused)]
     pub fn flush(&self) -> io::Result<()> {
         self.inner.flush_buffer()

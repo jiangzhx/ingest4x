@@ -37,6 +37,7 @@ async fn migrator_creates_current_sqlite_schema() {
         "rule_sets",
         "rules",
         "seaql_migrations",
+        "service_nodes",
     ] {
         assert!(
             table_names.iter().any(|table| table == expected),

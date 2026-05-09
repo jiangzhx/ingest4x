@@ -8,5 +8,7 @@ mod processors_endpoint;
 mod projects_endpoint;
 #[path = "admin/rules_endpoint.rs"]
 mod rules_endpoint;
+#[path = "admin/service_nodes_endpoint.rs"]
+mod service_nodes_endpoint;
 #[path = "admin/ui_static.rs"]
 mod ui_static;

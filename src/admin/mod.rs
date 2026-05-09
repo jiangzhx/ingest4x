@@ -3,6 +3,7 @@ pub mod event_sinks;
 pub mod processors;
 pub mod projects;
 pub mod rules;
+pub mod service_nodes;
 pub mod ui;
 
 use actix_web::middleware::from_fn;
@@ -17,10 +18,15 @@ impl OpenApi for AdminApiDoc {
         let rules_openapi = rules::AdminApiDoc::openapi();
         let event_sinks_openapi = event_sinks::AdminApiDoc::openapi();
         let processors_openapi = processors::AdminApiDoc::openapi();
+        let service_nodes_openapi = service_nodes::AdminApiDoc::openapi();
 
         openapi.paths.paths.extend(rules_openapi.paths.paths);
         openapi.paths.paths.extend(event_sinks_openapi.paths.paths);
         openapi.paths.paths.extend(processors_openapi.paths.paths);
+        openapi
+            .paths
+            .paths
+            .extend(service_nodes_openapi.paths.paths);
 
         if let Some(mut rules_components) = rules_openapi.components {
             let components = openapi
@@ -60,6 +66,20 @@ impl OpenApi for AdminApiDoc {
                 .security_schemes
                 .append(&mut processors_components.security_schemes);
         }
+        if let Some(mut service_nodes_components) = service_nodes_openapi.components {
+            let components = openapi
+                .components
+                .get_or_insert_with(utoipa::openapi::Components::new);
+            components
+                .schemas
+                .append(&mut service_nodes_components.schemas);
+            components
+                .responses
+                .append(&mut service_nodes_components.responses);
+            components
+                .security_schemes
+                .append(&mut service_nodes_components.security_schemes);
+        }
 
         match (&mut openapi.tags, rules_openapi.tags) {
             (Some(tags), Some(mut rules_tags)) => tags.append(&mut rules_tags),
@@ -76,6 +96,11 @@ impl OpenApi for AdminApiDoc {
             (None, Some(processors_tags)) => openapi.tags = Some(processors_tags),
             _ => {}
         }
+        match (&mut openapi.tags, service_nodes_openapi.tags) {
+            (Some(tags), Some(mut service_nodes_tags)) => tags.append(&mut service_nodes_tags),
+            (None, Some(service_nodes_tags)) => openapi.tags = Some(service_nodes_tags),
+            _ => {}
+        }
 
         openapi
     }
@@ -89,7 +114,8 @@ pub fn configure(cfg: &mut ServiceConfig) {
                 .configure(rules::configure)
                 .configure(processors::configure)
                 .configure(projects::configure)
-                .configure(event_sinks::configure),
+                .configure(event_sinks::configure)
+                .configure(service_nodes::configure),
         ),
     );
 }

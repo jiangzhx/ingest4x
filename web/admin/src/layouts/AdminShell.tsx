@@ -26,6 +26,10 @@ const menuItems = [
     key: "/processors",
     label: <Link to="/processors">Processor 管理</Link>,
   },
+  {
+    key: "/service-nodes",
+    label: <Link to="/service-nodes">节点管理</Link>,
+  },
 ];
 
 export function AdminShell({ children }: PropsWithChildren) {

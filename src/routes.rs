@@ -46,6 +46,7 @@ fn register_management_app_data(cfg: &mut ServiceConfig, state: &AppState) {
         .app_data(state.rule_repository.clone())
         .app_data(state.event_sink_repository.clone())
         .app_data(state.processor_repository.clone())
+        .app_data(state.service_node_repository.clone())
         .app_data(state.event_sinks.clone())
         .app_data(state.project_registry.clone())
         .app_data(state.processor.clone())

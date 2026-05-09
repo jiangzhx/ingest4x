@@ -2,7 +2,8 @@ use crate::db::{init_database, seed};
 use crate::ingest::processor::{ProcessorRegistryState, ProcessorState};
 use crate::repositories::{
     CreateDeliveryTargetInput, CreateEventSinkInput, CreateProjectInput, DeliveryTargetType,
-    EventSinkRepository, ProcessorRepository, ProjectRepository, RuleRepository,
+    EventSinkRepository, ProcessorRepository, ProjectRepository, RegisterServiceNodeInput,
+    RuleRepository, ServiceNodeRepository, ServiceNodeStatus,
 };
 use crate::routes;
 use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
@@ -13,6 +14,7 @@ use crate::settings::{
     AutoOffsetReset, EventSinkConfig, EventsSettings, Settings,
 };
 use crate::utils::events::EventSinkState;
+use crate::utils::get_host_ip;
 use crate::utils::prometheus::{
     init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
 };
@@ -60,6 +62,7 @@ pub struct AppState {
     pub(crate) rule_repository: Data<RuleRepository>,
     pub(crate) event_sink_repository: Data<EventSinkRepository>,
     pub(crate) processor_repository: Data<ProcessorRepository>,
+    pub(crate) service_node_repository: Data<ServiceNodeRepository>,
     pub(crate) project_registry: Data<ProjectRegistryState>,
     pub(crate) processor: Data<ProcessorRegistryState>,
     pub(crate) wal: Data<WalWriter>,
@@ -67,10 +70,17 @@ pub struct AppState {
     pub(crate) ingest_metrics: Option<Data<IngestPrometheusMetrics>>,
 }
 
+impl AppState {
+    pub fn service_node_repository(&self) -> ServiceNodeRepository {
+        self.service_node_repository.get_ref().clone()
+    }
+}
+
 pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
     let shared_registry = Registry::new();
     let mut app_state = build_app_state(settings.clone()).await?;
     register_wal_prometheus_metrics(&shared_registry, &mut app_state)?;
+    register_current_service_node(&app_state, ServiceNodeStatus::Starting).await?;
     spawn_project_registry_refresh_loop(
         app_state.project_registry.clone(),
         project_registry_refresh_interval(&settings),
@@ -111,6 +121,13 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
     .run();
     info!("ingest4x management server listening on http://{management_bind_address}");
 
+    register_current_service_node(&app_state, ServiceNodeStatus::Running).await?;
+    spawn_service_node_heartbeat_loop(
+        app_state.service_node_repository.clone(),
+        app_state.wal.node_id(),
+        project_registry_refresh_interval(&settings),
+    );
+
     futures::try_join!(main_server, management_server)?;
 
     Ok(())
@@ -122,6 +139,7 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
         rule_repository,
         event_sink_repository,
         processor_repository,
+        service_node_repository,
         project_registry,
     ) = init_repository_state(settings.clone()).await?;
     let processor = ProcessorRegistryState::load(processor_repository.get_ref().clone())
@@ -133,6 +151,7 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
         rule_repository,
         event_sink_repository,
         processor_repository,
+        service_node_repository,
         project_registry,
         processor,
     )
@@ -148,6 +167,7 @@ pub async fn build_app_state_with_processor(
         rule_repository,
         event_sink_repository,
         processor_repository,
+        service_node_repository,
         project_registry,
     ) = init_repository_state(settings.clone()).await?;
     build_app_state_from_parts(
@@ -156,6 +176,7 @@ pub async fn build_app_state_with_processor(
         rule_repository,
         event_sink_repository,
         processor_repository,
+        service_node_repository,
         project_registry,
         ProcessorRegistryState::from_processor(processor),
     )
@@ -168,6 +189,7 @@ async fn build_app_state_from_parts(
     rule_repository: Data<RuleRepository>,
     event_sink_repository: Data<EventSinkRepository>,
     processor_repository: Data<ProcessorRepository>,
+    service_node_repository: Data<ServiceNodeRepository>,
     project_registry: Data<ProjectRegistryState>,
     processor: ProcessorRegistryState,
 ) -> std::io::Result<AppState> {
@@ -192,12 +214,79 @@ async fn build_app_state_from_parts(
         rule_repository,
         event_sink_repository,
         processor_repository,
+        service_node_repository,
         project_registry,
         processor,
         wal,
         wal_metrics: None,
         ingest_metrics: None,
     })
+}
+
+async fn register_current_service_node(
+    state: &AppState,
+    status: ServiceNodeStatus,
+) -> std::io::Result<()> {
+    let node_id = state.wal.node_id();
+    state
+        .service_node_repository
+        .register_service_node(RegisterServiceNodeInput {
+            node_id: node_id.clone(),
+            hostname: current_hostname(),
+            machine_ip: Some(get_host_ip()).filter(|value| !value.is_empty()),
+            ingest_bind_address: state.settings.ingest.bind_address.clone(),
+            management_bind_address: state.settings.management.bind_address.clone(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            status,
+            metadata_json: None,
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    info!(
+        node_id = node_id,
+        status = status.as_str(),
+        "registered ingest4x service node"
+    );
+    Ok(())
+}
+
+fn spawn_service_node_heartbeat_loop(
+    repository: Data<ServiceNodeRepository>,
+    node_id: String,
+    interval: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+
+            match repository.mark_service_node_seen(&node_id).await {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    warn!(
+                        node_id = node_id,
+                        "service node heartbeat skipped because current run is no longer active"
+                    );
+                    break;
+                }
+                Err(error) => {
+                    warn!(
+                        node_id = node_id,
+                        error = %error,
+                        "service node heartbeat failed"
+                    );
+                }
+            }
+        }
+    })
+}
+
+fn current_hostname() -> Option<String> {
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("COMPUTERNAME"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub fn register_wal_prometheus_metrics(
@@ -320,8 +409,15 @@ fn wal_replay_retry_delay(consecutive_errors: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::wal_replay_retry_delay;
+    use super::{register_current_service_node, wal_replay_retry_delay};
+    use crate::repositories::ServiceNodeStatus;
+    use crate::settings::{
+        CheckpointSettings, EventsSettings, IngestSettings, LoggingSettings, ManagementSettings,
+        Settings, WalSettings,
+    };
+    use std::sync::Arc;
     use std::time::Duration;
+    use tempfile::tempdir;
 
     #[test]
     fn wal_replay_retry_delay_uses_exponential_backoff_with_cap() {
@@ -329,6 +425,53 @@ mod tests {
         assert_eq!(wal_replay_retry_delay(1), Duration::from_millis(200));
         assert_eq!(wal_replay_retry_delay(2), Duration::from_millis(400));
         assert_eq!(wal_replay_retry_delay(20), Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn register_current_service_node_uses_wal_node_identity() {
+        let temp = tempdir().expect("temp dir");
+        let settings = Arc::new(Settings {
+            ingest: IngestSettings {
+                bind_address: "127.0.0.1:8090".to_string(),
+                max_event_bytes: 1024,
+            },
+            logging: LoggingSettings::default(),
+            management: ManagementSettings {
+                bind_address: "127.0.0.1:18090".to_string(),
+                admin_password: None,
+            },
+            database: None,
+            wal: WalSettings {
+                dir: temp.path().join("wal").display().to_string(),
+                node_id: Some("node-from-wal".to_string()),
+                flush_max_interval: "10ms".to_string(),
+                flush_max_records: 1000,
+                no_sync: false,
+                wal_segment_max_bytes: 1024 * 1024,
+                min_free_bytes: 0,
+                checkpoint: CheckpointSettings::default(),
+            },
+            events: EventsSettings::default(),
+        });
+        let app_state = super::build_app_state(settings)
+            .await
+            .expect("app state should build");
+
+        register_current_service_node(&app_state, ServiceNodeStatus::Running)
+            .await
+            .expect("service node should register");
+
+        let nodes = app_state
+            .service_node_repository
+            .list_service_nodes()
+            .await
+            .expect("service nodes should list");
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].node_id, "node-from-wal");
+        assert_eq!(nodes[0].status, ServiceNodeStatus::Running);
+        assert_eq!(nodes[0].ingest_bind_address, "127.0.0.1:8090");
+        assert_eq!(nodes[0].management_bind_address, "127.0.0.1:18090");
     }
 }
 
@@ -339,6 +482,7 @@ async fn init_repository_state(
     Data<RuleRepository>,
     Data<EventSinkRepository>,
     Data<ProcessorRepository>,
+    Data<ServiceNodeRepository>,
     Data<ProjectRegistryState>,
 )> {
     let db = match settings.database.as_ref() {
@@ -357,7 +501,8 @@ async fn init_repository_state(
 
     let rule_repository = RuleRepository::new(db.clone());
     let event_sink_repository = EventSinkRepository::new(db.clone());
-    let processor_repository = ProcessorRepository::new(db);
+    let processor_repository = ProcessorRepository::new(db.clone());
+    let service_node_repository = ServiceNodeRepository::new(db);
     seed_default_delivery_targets(&event_sink_repository).await?;
     import_config_event_sinks(&event_sink_repository, &settings.events).await?;
     seed_default_event_sinks(&event_sink_repository).await?;
@@ -373,6 +518,7 @@ async fn init_repository_state(
         Data::new(rule_repository),
         Data::new(event_sink_repository),
         Data::new(processor_repository),
+        Data::new(service_node_repository),
         project_registry,
     ))
 }

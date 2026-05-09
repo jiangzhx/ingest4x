@@ -12,6 +12,7 @@ import { LoginPage } from "../features/auth/LoginPage";
 import { ProcessorsPage } from "../features/processors/ProcessorsPage";
 import { ProjectsPage } from "../features/projects/ProjectsPage";
 import { RulesPage } from "../features/rules/RulesPage";
+import { ServiceNodesPage } from "../features/service-nodes/ServiceNodesPage";
 import { SinksPage } from "../features/sinks/SinksPage";
 import { HomePage } from "../pages/HomePage";
 
@@ -68,6 +69,12 @@ const processorsRoute = createRoute({
   component: ProcessorsPage,
 });
 
+const serviceNodesRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/service-nodes",
+  component: ServiceNodesPage,
+});
+
 const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/login",
@@ -82,6 +89,7 @@ const routeTree = rootRoute.addChildren([
     rulesRoute,
     sinksRoute,
     processorsRoute,
+    serviceNodesRoute,
   ]),
 ]);
 

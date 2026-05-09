@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --disable-warning=ExperimentalWarning --test scripts/auth-quality-check.test.mjs scripts/router-quality-check.test.mjs scripts/projects-crud-quality-check.test.mjs scripts/rules-management-quality-check.test.mjs scripts/sinks-management-quality-check.test.mjs scripts/processors-management-quality-check.test.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --test scripts/auth-quality-check.test.mjs scripts/router-quality-check.test.mjs scripts/projects-crud-quality-check.test.mjs scripts/rules-management-quality-check.test.mjs scripts/sinks-management-quality-check.test.mjs scripts/processors-management-quality-check.test.mjs scripts/service-nodes-quality-check.test.mjs",
     "check": "npm run test && npm run build"
   },
   "dependencies": {

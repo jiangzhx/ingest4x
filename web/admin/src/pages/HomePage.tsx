@@ -23,6 +23,9 @@ export function HomePage() {
         <Button>
           <Link to="/processors">Processor 管理</Link>
         </Button>
+        <Button>
+          <Link to="/service-nodes">节点管理</Link>
+        </Button>
       </Space>
     </Space>
   );

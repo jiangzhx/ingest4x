@@ -8,3 +8,4 @@ pub mod project_rule_sets;
 pub mod projects;
 pub mod rule_sets;
 pub mod rules;
+pub mod service_nodes;

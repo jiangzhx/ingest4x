@@ -2,6 +2,7 @@ pub mod event_sinks;
 pub mod processors;
 pub mod projects;
 pub mod rules;
+pub mod service_nodes;
 
 pub use event_sinks::{
     CreateDeliveryTargetInput, CreateEventSinkInput, DeliveryTarget, DeliveryTargetType, EventSink,
@@ -22,4 +23,8 @@ pub use projects::{
 pub use rules::{
     CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, ProjectRuleSet, Rule,
     RuleRepository, RuleRepositoryError, RuleSet, UpdateRuleInput, UpdateRuleSetInput,
+};
+pub use service_nodes::{
+    RegisterServiceNodeInput, ServiceNode, ServiceNodeRepository, ServiceNodeRepositoryResult,
+    ServiceNodeStatus,
 };
