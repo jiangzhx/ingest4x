@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use tracing::warn;
 
+pub(crate) mod lint;
+
 // Host-side APIs exposed to Rhai processor scripts.
 def_package! {
     pub ProcessorApiPackage(module) {
@@ -275,4 +277,23 @@ fn emit(target: SinkTarget, event: Dynamic) -> Result<(), Box<EvalAltResult>> {
         });
         Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lint::lint_emit_targets;
+
+    #[test]
+    fn lint_emit_targets_rejects_string_sink_target() {
+        let error = lint_emit_targets(
+            "main",
+            r#"fn process(event, request) { emit("events", event); }"#,
+            &["events".to_string()],
+        )
+        .expect_err("string sink target should be rejected");
+
+        assert!(error
+            .to_string()
+            .contains("emit target must use sink constant `SINK_EVENTS`"));
+    }
 }
