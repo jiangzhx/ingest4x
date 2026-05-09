@@ -16,14 +16,21 @@ export function ProcessorScriptDetailModal({
   loading = false,
   onCancel,
 }: ProcessorScriptDetailModalProps) {
-  const tabItems =
-    detail?.modules.map((module) => ({
-      key: module.module_name,
-      label: module.module_name,
-      children: (
-        <RhaiEditor value={module.source} height="360px" readOnly />
-      ),
-    })) ?? [];
+  const orderedModules = [...(detail?.modules ?? [])].sort((left, right) => {
+    const leftIsMain = left.module_name === "main";
+    const rightIsMain = right.module_name === "main";
+    if (leftIsMain === rightIsMain) {
+      return 0;
+    }
+
+    return leftIsMain ? -1 : 1;
+  });
+  const tabItems = orderedModules.map((module) => ({
+    key: module.module_name,
+    label: module.module_name,
+    closable: false,
+    children: <RhaiEditor value={module.source} height="360px" readOnly />,
+  }));
 
   return (
     <Modal
@@ -50,7 +57,7 @@ export function ProcessorScriptDetailModal({
               激活时间：{formatProcessorTimestamp(detail.activated_at)}
             </Typography.Text>
           </Space>
-          <Tabs items={tabItems} />
+          <Tabs items={tabItems} type="editable-card" hideAdd tabBarGutter={8} />
         </Space>
       ) : null}
     </Modal>

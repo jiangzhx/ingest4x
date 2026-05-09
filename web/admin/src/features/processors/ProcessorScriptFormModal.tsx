@@ -1,14 +1,15 @@
-import { useEffect } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import {
   Button,
   Form,
   Input,
   Modal,
-  Popconfirm,
   Select,
   Space,
+  Tabs,
   Typography,
 } from "antd";
+import type { KeyboardEvent, MouseEvent } from "react";
 import type {
   ProcessorScriptFormValues,
   ProcessorScriptStatus,
@@ -32,6 +33,8 @@ type ProcessorScriptFormModalProps = {
   onSubmit: (values: ProcessorScriptFormValues) => Promise<void>;
 };
 
+type EditableTabTargetKey = MouseEvent | KeyboardEvent | string;
+
 const statusOptions: Array<{ label: string; value: ProcessorScriptStatus }> = [
   { label: "active", value: "active" },
   { label: "draft", value: "draft" },
@@ -50,6 +53,21 @@ const defaultValues: ProcessorScriptFormValues = {
   ],
 };
 
+function nextModuleName(modules: ProcessorScriptFormValues["modules"] | undefined) {
+  const moduleNameCandidates = new Set(
+    (modules ?? [])
+      .map((module) => module.module_name.trim())
+      .filter(Boolean),
+  );
+
+  let index = 1;
+  while (moduleNameCandidates.has(`module${index}`)) {
+    index += 1;
+  }
+
+  return `module${index}`;
+}
+
 function extractValidationModuleName(error: string | null): string | null {
   if (!error) {
     return null;
@@ -59,19 +77,99 @@ function extractValidationModuleName(error: string | null): string | null {
 }
 
 function renderRhaiSourceLabel(error: string | null) {
+  return error ? (
+    <Typography.Text
+      type="danger"
+      style={{ fontSize: 12, maxWidth: 620 }}
+      ellipsis={{ tooltip: error }}
+    >
+      {error}
+    </Typography.Text>
+  ) : null;
+}
+
+type ModuleNameTabLabelProps = {
+  tabKey: string;
+  placeholder: string;
+  value?: string;
+  isEditing: boolean;
+  isActive: boolean;
+  onChange?: (event: ChangeEvent<HTMLInputElement>) => void;
+  onActivate: () => void;
+  onStartEditing: () => void;
+  onEditingComplete: () => void;
+};
+
+function ModuleNameTabLabel({
+  tabKey,
+  placeholder,
+  value,
+  isEditing,
+  isActive,
+  onChange,
+  onActivate,
+  onStartEditing,
+  onEditingComplete,
+}: ModuleNameTabLabelProps) {
+  const displayValue = value?.trim() || placeholder;
+
+  if (isEditing) {
+    return (
+      <Input
+        aria-label="Module Name"
+        autoFocus
+        placeholder={placeholder}
+        size="small"
+        style={{ width: 140 }}
+        value={value}
+        onBlur={onEditingComplete}
+        onChange={onChange}
+        onClick={(event) => event.stopPropagation()}
+        onFocus={onActivate}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+          if (event.key === "Escape") {
+            onEditingComplete();
+          }
+        }}
+      />
+    );
+  }
+
   return (
-    <Space size={8} align="center" wrap>
-      <span>Rhai Source</span>
-      {error ? (
-        <Typography.Text
-          type="danger"
-          style={{ fontSize: 12, maxWidth: 620 }}
-          ellipsis={{ tooltip: error }}
-        >
-          {error}
-        </Typography.Text>
-      ) : null}
-    </Space>
+    <span
+      data-module-tab-key={tabKey}
+      style={{
+        alignItems: "center",
+        display: "inline-flex",
+        gap: 4,
+        cursor: isActive ? "text" : "pointer",
+      }}
+      onFocus={onActivate}
+      onClick={(event) => {
+        if (isActive) {
+          event.stopPropagation();
+          onStartEditing();
+          return;
+        }
+
+        onActivate();
+      }}
+    >
+      <Typography.Text
+        ellipsis={{ tooltip: displayValue }}
+        style={{
+          color: isActive ? "#0958d9" : undefined,
+          fontWeight: isActive ? 600 : 400,
+          maxWidth: 96,
+        }}
+      >
+        {displayValue}
+      </Typography.Text>
+    </span>
   );
 }
 
@@ -88,6 +186,8 @@ export function ProcessorScriptFormModal({
   onSubmit,
 }: ProcessorScriptFormModalProps) {
   const [form] = Form.useForm<ProcessorScriptFormValues>();
+  const [activeModuleTab, setActiveModuleTab] = useState<string>();
+  const [editingModuleTab, setEditingModuleTab] = useState<string>();
   const watchedModules = Form.useWatch("modules", form);
   const validationModuleName = extractValidationModuleName(validationError);
 
@@ -107,6 +207,8 @@ export function ProcessorScriptFormModal({
   useEffect(() => {
     if (!open) {
       form.resetFields();
+      setActiveModuleTab(undefined);
+      setEditingModuleTab(undefined);
       return;
     }
 
@@ -223,72 +325,132 @@ export function ProcessorScriptFormModal({
         </Space>
 
         <Form.List name="modules">
-          {(fields, { add, remove }) => (
-            <Space direction="vertical" size={12} style={{ display: "flex" }}>
-              {fields.map((field) => (
-                <div
-                  key={field.key}
-                  style={{
-                    border: "1px solid #f0f0f0",
-                    borderRadius: 8,
-                    padding: 12,
-                  }}
-                >
-                  <Space
-                    align="start"
-                    style={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Form.Item
-                      label="Module Name"
-                      name={[field.name, "module_name"]}
-                      rules={[
-                        { required: true, message: "请输入 module_name" },
-                        { whitespace: true, message: "module_name 不能为空" },
-                      ]}
-                    >
-                      <Input placeholder="main" style={{ width: 220 }} />
-                    </Form.Item>
-                    <Popconfirm
-                      title="确认删除这个 Module？"
-                      okText="删除"
-                      cancelText="取消"
-                      disabled={fields.length <= 1}
-                      okButtonProps={{ danger: true }}
-                      onConfirm={() => remove(field.name)}
-                    >
-                      <Button
-                        danger
-                        disabled={fields.length <= 1}
-                        style={{ marginTop: 30 }}
-                      >
-                        删除 Module
-                      </Button>
-                    </Popconfirm>
-                  </Space>
+          {(fields, { add, remove }) => {
+            const fieldModuleName = (field: { name: number }) =>
+              watchedModules?.[field.name]?.module_name?.trim() ?? "";
+            const orderedFields = [...fields].sort((left, right) => {
+              const leftIsMain = fieldModuleName(left) === "main";
+              const rightIsMain = fieldModuleName(right) === "main";
+              if (leftIsMain === rightIsMain) {
+                return 0;
+              }
+
+              return leftIsMain ? -1 : 1;
+            });
+            const activeKey = fields.some(
+              (field) => String(field.key) === activeModuleTab,
+            )
+              ? activeModuleTab
+              : String(orderedFields[0]?.key ?? "");
+            const handleAddModule = () => {
+              add({
+                module_name: nextModuleName(watchedModules),
+                source: "fn transform(event) {\n    return event;\n}",
+              });
+              setEditingModuleTab(undefined);
+            };
+            const handleRemoveModule = (targetKey: EditableTabTargetKey) => {
+              const tabKey = String(targetKey);
+              const targetField = fields.find(
+                (field) => String(field.key) === tabKey,
+              );
+              if (!targetField || fields.length <= 1) {
+                return;
+              }
+
+              const remainingFields = orderedFields.filter(
+                (field) => String(field.key) !== tabKey,
+              );
+              if (tabKey === activeKey) {
+                const targetIndex = orderedFields.findIndex(
+                  (field) => String(field.key) === tabKey,
+                );
+                const nextActiveField =
+                  remainingFields[
+                    targetIndex === remainingFields.length
+                      ? targetIndex - 1
+                      : targetIndex
+                  ];
+                setActiveModuleTab(String(nextActiveField?.key ?? ""));
+              }
+              if (editingModuleTab === tabKey) {
+                setEditingModuleTab(undefined);
+              }
+              remove(targetField.name);
+            };
+            const tabItems = orderedFields.map((field) => {
+              const tabKey = String(field.key);
+
+              return {
+                key: tabKey,
+                closable: fields.length > 1,
+                label: (
                   <Form.Item
-                    label={renderRhaiSourceLabel(sourceErrorForField(field.name))}
-                    name={[field.name, "source"]}
+                    noStyle
+                    name={[field.name, "module_name"]}
                     rules={[
-                      { required: true, message: "请输入 Rhai source" },
-                      { whitespace: true, message: "source 不能为空" },
+                      { required: true, message: "请输入 module_name" },
+                      { whitespace: true, message: "module_name 不能为空" },
                     ]}
                   >
-                    <RhaiEditor />
+                    <ModuleNameTabLabel
+                      tabKey={tabKey}
+                      placeholder={`Module ${field.name + 1}`}
+                      isEditing={editingModuleTab === tabKey}
+                      isActive={activeKey === tabKey}
+                      onActivate={() => setActiveModuleTab(tabKey)}
+                      onStartEditing={() => setEditingModuleTab(tabKey)}
+                      onEditingComplete={() => setEditingModuleTab(undefined)}
+                    />
                   </Form.Item>
-                </div>
-              ))}
-              <Button
-                onClick={() =>
-                  add({
-                    module_name: "custom",
-                    source: "fn transform(event) {\n    return event;\n}",
-                  })
+                ),
+                children: (
+                  <Space
+                    direction="vertical"
+                    size={12}
+                    style={{ display: "flex" }}
+                  >
+                    <Form.Item
+                      label={renderRhaiSourceLabel(
+                        sourceErrorForField(field.name),
+                      )}
+                      name={[field.name, "source"]}
+                      rules={[
+                        { required: true, message: "请输入 Rhai source" },
+                        { whitespace: true, message: "source 不能为空" },
+                      ]}
+                    >
+                      <RhaiEditor />
+                    </Form.Item>
+                  </Space>
+                ),
+              };
+            });
+
+            return (
+              <Tabs
+                items={tabItems}
+                activeKey={activeKey}
+                onChange={setActiveModuleTab}
+                type="editable-card"
+                hideAdd
+                onEdit={(targetKey, action) => {
+                  if (action === "add") {
+                    handleAddModule();
+                    return;
+                  }
+
+                  handleRemoveModule(targetKey);
+                }}
+                tabBarGutter={8}
+                tabBarExtraContent={
+                  <Space>
+                    <Button onClick={handleAddModule}>添加 Module</Button>
+                  </Space>
                 }
-              >
-                添加 Module
-              </Button>
-            </Space>
-          )}
+              />
+            );
+          }}
         </Form.List>
       </Form>
     </Modal>

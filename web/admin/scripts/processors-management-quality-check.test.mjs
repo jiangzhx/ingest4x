@@ -99,6 +99,37 @@ test("processors page manages script versions only", () => {
 
 test("processor script form supports multi-module Rhai scripts", () => {
   assert.match(scriptFormSource, /Form\.List name="modules"/);
+  assert.match(scriptFormSource, /\bTabs\b/);
+  assert.match(scriptFormSource, /<Tabs[\s\S]*items=\{tabItems\}/);
+  assert.match(scriptFormSource, /type="editable-card"/);
+  assert.match(scriptFormSource, /hideAdd/);
+  assert.match(scriptFormSource, /onEdit=\{\(targetKey, action\) =>/);
+  assert.match(scriptFormSource, /tabBarGutter=\{8\}/);
+  assert.match(scriptFormSource, /const orderedFields = \[\.\.\.fields\]\.sort/);
+  assert.match(scriptFormSource, /fieldModuleName\(left\) === "main"/);
+  assert.match(scriptFormSource, /const tabItems = orderedFields\.map/);
+  assert.match(scriptFormSource, /closable: fields\.length > 1/);
+  assert.match(scriptFormSource, /label:\s*\([\s\S]*<Form\.Item[\s\S]*noStyle[\s\S]*name=\{\[field\.name, "module_name"\]\}/);
+  assert.match(scriptFormSource, /<ModuleNameTabLabel/);
+  assert.match(scriptFormSource, /editingModuleTab/);
+  assert.match(scriptFormSource, /isActive=\{activeKey === tabKey\}/);
+  assert.match(scriptFormSource, /setEditingModuleTab\(tabKey\)/);
+  assert.doesNotMatch(scriptFormSource, /backgroundColor: isActive/);
+  assert.doesNotMatch(scriptFormSource, /border: isActive/);
+  assert.doesNotMatch(scriptFormSource, /borderRadius: 4/);
+  assert.match(scriptFormSource, /fontWeight: isActive \? 600 : 400/);
+  assert.doesNotMatch(scriptFormSource, /hoveredModuleTab/);
+  assert.doesNotMatch(scriptFormSource, /minWidth: 132/);
+  assert.doesNotMatch(scriptFormSource, />\s*编辑\s*<\/Button>/);
+  assert.doesNotMatch(scriptFormSource, />Rhai Source</);
+  assert.doesNotMatch(scriptFormSource, /label="Module Name"[\s\S]{0,80}name=\{\[field\.name, "module_name"\]\}/);
+  assert.match(scriptFormSource, /tabBarExtraContent=\{[\s\S]*<Space/);
+  assert.match(scriptFormSource, /tabBarExtraContent=\{[\s\S]*添加 Module/);
+  assert.doesNotMatch(scriptFormSource, />\s*删除 Module\s*</);
+  assert.match(scriptFormSource, /nextModuleName/);
+  assert.match(scriptFormSource, /moduleNameCandidates\.has\(`module\$\{index\}`\)/);
+  assert.match(scriptFormSource, /module_name: nextModuleName\(watchedModules\)/);
+  assert.doesNotMatch(scriptFormSource, /module_name: "custom"/);
   assert.match(scriptFormSource, /entry_module/);
   assert.match(scriptFormSource, /DEFAULT_PROCESSOR_SOURCE/);
   assert.match(scriptFormSource, /mode === "edit"/);
@@ -118,6 +149,11 @@ test("processor script source uses codemirror with javascript highlighting", () 
 test("processor script detail uses readonly highlighted source viewer", () => {
   assert.match(scriptDetailSource, /<RhaiEditor/);
   assert.match(scriptDetailSource, /readOnly/);
+  assert.match(scriptDetailSource, /const orderedModules = \[\.\.\.\(detail\?\.modules \?\? \[\]\)\]\.sort/);
+  assert.match(scriptDetailSource, /left\.module_name === "main"/);
+  assert.match(scriptDetailSource, /const tabItems = orderedModules\.map/);
+  assert.match(scriptDetailSource, /closable: false/);
+  assert.match(scriptDetailSource, /<Tabs[\s\S]*items=\{tabItems\}[\s\S]*type="editable-card"[\s\S]*hideAdd[\s\S]*tabBarGutter=\{8\}/);
   assert.doesNotMatch(scriptDetailSource, /<Typography\.Paragraph[\s\S]*module\.source/);
   assert.match(rhaiEditorSource, /readOnly\?: boolean/);
   assert.match(rhaiEditorSource, /editable=\{!readOnly\}/);
@@ -223,9 +259,10 @@ test("processor script form validates Rhai syntax before create and update", () 
   assert.match(scriptFormSource, /footer=/);
   assert.match(scriptFormSource, /取消[\s\S]*检查[\s\S]*\{mode === "edit" \? "保存" : "创建"\}/);
   assert.doesNotMatch(scriptFormSource, /label="Module Name"[\s\S]*检查[\s\S]*label="Rhai Source"/);
-  assert.match(scriptFormSource, /Popconfirm/);
-  assert.match(scriptFormSource, /title="确认删除这个 Module？"/);
-  assert.match(scriptFormSource, /onConfirm=\{\(\) => remove\(field\.name\)\}/);
+  assert.doesNotMatch(scriptFormSource, /Popconfirm/);
+  assert.doesNotMatch(scriptFormSource, /title="确认删除这个 Module？"/);
+  assert.match(scriptFormSource, /const handleRemoveModule = \(targetKey: EditableTabTargetKey\) =>/);
+  assert.match(scriptFormSource, /remove\(targetField\.name\)/);
   assert.match(scriptFormSource, /await onValidate/);
   assert.match(scriptFormSource, /await validateScript\(\)/);
 
