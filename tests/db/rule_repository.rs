@@ -6,6 +6,92 @@ use ingest4x::repositories::{
 use serde_json::json;
 
 #[tokio::test]
+async fn upsert_rhai_validation_rule_replaces_legacy_rule_tree() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let rules = RuleRepository::new(db);
+
+    let rule_set = rules
+        .create_rule_set(CreateRuleSetInput {
+            name: "Default ingest".to_string(),
+            description: None,
+            enabled: true,
+        })
+        .await
+        .expect("rule set should be created");
+
+    let base = rules
+        .create_rule(CreateRuleInput {
+            rule_set_id: rule_set.id,
+            parent_id: None,
+            name: "Base".to_string(),
+            xwhat: None,
+            content: "fields: {}\n".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("base rule should be created");
+
+    rules
+        .create_rule(CreateRuleInput {
+            rule_set_id: rule_set.id,
+            parent_id: Some(base.id),
+            name: "Payment".to_string(),
+            xwhat: Some("payment".to_string()),
+            content: "fields: {}\n".to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("child rule should be created");
+
+    rules
+        .update_rule_set(
+            rule_set.id,
+            UpdateRuleSetInput {
+                name: None,
+                description: None,
+                enabled: None,
+                wildcard_rule_id: Some(Some(base.id)),
+            },
+        )
+        .await
+        .expect("base rule should become wildcard rule");
+
+    let validation_rule = rules
+        .upsert_rhai_validation_rule(
+            rule_set.id,
+            r#"
+fn validate(event) {
+    event.field("appid").required("string");
+    event.result()
+}
+"#,
+            true,
+        )
+        .await
+        .expect("rhai validation rule should be upserted");
+
+    assert_eq!(validation_rule.parent_id, None);
+    assert_eq!(validation_rule.xwhat, None);
+    assert!(validation_rule.content.contains("fn validate(event)"));
+
+    let rule_set = rules
+        .get_rule_set(rule_set.id)
+        .await
+        .expect("rule set lookup should succeed")
+        .expect("rule set should exist");
+    assert_eq!(rule_set.wildcard_rule_id, Some(validation_rule.id));
+
+    let remaining = rules
+        .list_rules(rule_set.id)
+        .await
+        .expect("rules should list");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, validation_rule.id);
+}
+
+#[tokio::test]
 async fn project_bound_rule_set_can_compile_single_rhai_validation_rule() {
     let db = init_sqlite_database("sqlite::memory:")
         .await

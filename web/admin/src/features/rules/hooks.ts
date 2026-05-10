@@ -9,6 +9,7 @@ import {
   listProjectRuleSetAssignments,
   listRules,
   listRuleSets,
+  saveValidationRule,
   updateRule,
   updateRuleSet,
 } from "./api";
@@ -16,6 +17,7 @@ import type {
   AssignProjectRuleSetPayload,
   CreateRulePayload,
   CreateRuleSetPayload,
+  SaveValidationRulePayload,
   UpdateRulePayload,
   UpdateRuleSetPayload,
 } from "./types";
@@ -125,6 +127,21 @@ export function useDeleteRuleMutation(ruleSetId: number | null) {
 
   return useMutation({
     mutationFn: (ruleId: number) => deleteRule(ruleSetId ?? 0, ruleId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: rulesQueryKey(ruleSetId) }),
+        queryClient.invalidateQueries({ queryKey: ruleSetsQueryKey }),
+      ]);
+    },
+  });
+}
+
+export function useSaveValidationRuleMutation(ruleSetId: number | null) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: SaveValidationRulePayload) =>
+      saveValidationRule(ruleSetId ?? 0, payload),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: rulesQueryKey(ruleSetId) }),

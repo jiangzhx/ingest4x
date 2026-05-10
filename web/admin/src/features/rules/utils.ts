@@ -50,10 +50,7 @@ export function toCreateRuleSetPayload(
 export function toUpdateRuleSetPayload(
   values: RuleSetFormValues,
 ): UpdateRuleSetPayload {
-  return {
-    ...toCreateRuleSetPayload(values),
-    wildcard_rule_id: values.wildcard_rule_id,
-  };
+  return toCreateRuleSetPayload(values);
 }
 
 function normalizeXwhat(value: string): string | null {

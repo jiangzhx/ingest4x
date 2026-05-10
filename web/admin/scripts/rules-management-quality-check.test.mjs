@@ -94,11 +94,16 @@ test("admin shell and router expose the rules management page", () => {
   assert.doesNotMatch(shellSource, /项目规则配置/);
 });
 
-test("rules page only manages rule sets and rule trees", () => {
+test("rules page manages rule sets and a single Rhai validation script", () => {
   assert.match(rulesPageSource, /useRuleSetsQuery\(\)/);
   assert.match(rulesPageSource, /<Select/);
   assert.match(rulesPageSource, /ruleSetOptions/);
+  assert.match(rulesPageSource, /Rhai 校验脚本/);
+  assert.match(rulesPageSource, /useSaveValidationRuleMutation/);
   assert.doesNotMatch(rulesPageSource, /<RuleSetsTable/);
+  assert.doesNotMatch(rulesPageSource, /<RulesTable/);
+  assert.doesNotMatch(rulesPageSource, /新建规则\s*</);
+  assert.doesNotMatch(rulesPageSource, /规则继承树/);
   assert.doesNotMatch(rulesPageSource, /useProjectsQuery\(\)/);
   assert.doesNotMatch(rulesPageSource, /useProjectRuleSetAssignmentsQuery/);
   assert.doesNotMatch(rulesPageSource, /<ProjectRuleSetsPanel/);
@@ -120,24 +125,29 @@ test("project rule set assignment is a single selected rule set", () => {
   assert.doesNotMatch(projectRuleSetsPanelSource, /assignedRuleSetIds/);
 });
 
-test("rules UI labels xwhat as event name", () => {
-  assert.match(rulesTableSource, /title:\s*"事件名"/);
-  assert.match(ruleFormModalSource, /label="事件名"/);
+test("rules UI no longer exposes legacy rule tree fields", () => {
+  assert.doesNotMatch(rulesPageSource, /父规则/);
+  assert.doesNotMatch(rulesPageSource, /事件名/);
+  assert.doesNotMatch(rulesPageSource, /默认规则/);
+  assert.doesNotMatch(ruleFormModalSource, /label="父规则"/);
+  assert.doesNotMatch(ruleFormModalSource, /label="规则名称"/);
+  assert.doesNotMatch(ruleFormModalSource, /label="事件名"/);
+  assert.doesNotMatch(rulesTableSource, /title:\s*"事件名"/);
   assert.doesNotMatch(rulesTableSource, /title:\s*"xwhat"/);
   assert.doesNotMatch(ruleFormModalSource, /事件名 xwhat/);
 });
 
-test("rules UI configures wildcard from rule set editor", () => {
-  assert.match(ruleSetFormModalSource, /label="通配规则"/);
-  assert.match(ruleSetFormModalSource, /wildcard_rule_id/);
-  assert.match(ruleSetFormModalSource, /rules\s*=\s*\[\]/);
-  assert.match(ruleSetFormModalSource, /\.filter\(\(rule\) => !rule\.xwhat\)/);
+test("rules UI does not configure wildcard from rule set editor", () => {
+  assert.doesNotMatch(ruleSetFormModalSource, /label="通配规则"/);
+  assert.doesNotMatch(ruleSetFormModalSource, /wildcard_rule_id/);
+  assert.doesNotMatch(ruleSetFormModalSource, /rules\s*=\s*\[\]/);
+  assert.doesNotMatch(ruleSetFormModalSource, /\.filter\(\(rule\) => !rule\.xwhat\)/);
   assert.doesNotMatch(ruleFormModalSource, /label="充当通配规则"/);
 });
 
-test("rules UI derives wildcard display state from selected rule set", () => {
-  assert.match(rulesPageSource, /selectedRuleSet\?\.wildcard_rule_id/);
-  assert.match(rulesTableSource, /wildcardRuleId === rule\.id/);
+test("rules UI hides wildcard display state from operators", () => {
+  assert.doesNotMatch(rulesPageSource, /通配/);
+  assert.doesNotMatch(rulesTableSource, /wildcardRuleId === rule\.id/);
 });
 
 test("rules UI does not expose manual sort order", () => {
@@ -146,13 +156,12 @@ test("rules UI does not expose manual sort order", () => {
   assert.doesNotMatch(ruleFormModalSource, /name="sort_order"/);
 });
 
-test("rule content uses an open source yaml editor", () => {
+test("rule content uses an open source Rhai editor", () => {
   assert.match(rulesPackageSource, /"@uiw\/react-codemirror"/);
-  assert.match(rulesPackageSource, /"@codemirror\/lang-yaml"/);
-  assert.match(ruleFormModalSource, /const EMPTY_RULE_CONTENT = "fields:\\n  \{\}\\n"/);
-  assert.match(ruleFormModalSource, /function LazyYamlEditor/);
-  assert.match(ruleFormModalSource, /<YamlEditor value=\{value\} onChange=\{onChange\}/);
-  assert.match(ruleFormModalSource, /<LazyYamlEditor \/>/);
+  assert.match(rulesPageSource, /const EMPTY_RHAI_RULE_CONTENT/);
+  assert.match(rulesPageSource, /function LazyRhaiEditor/);
+  assert.match(rulesPageSource, /<RhaiEditor value=\{value\} onChange=\{onChange\}/);
+  assert.match(rulesPageSource, /<LazyRhaiEditor/);
   assert.doesNotMatch(ruleFormModalSource, /<Input\.TextArea[\s\S]*name="content"/);
 });
 

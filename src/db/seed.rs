@@ -214,7 +214,7 @@ async fn import_default_ingest_rules(
         .create_rule(CreateRuleInput {
             rule_set_id,
             parent_id: None,
-            name: "默认规则".to_string(),
+            name: "Validation rule".to_string(),
             xwhat: None,
             content: DEFAULT_RULE_CONTENT.to_string(),
             enabled: true,

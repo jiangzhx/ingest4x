@@ -1,12 +1,11 @@
 import { useEffect } from "react";
-import { Form, Input, Modal, Select, Switch } from "antd";
-import type { Rule, RuleSet, RuleSetFormValues } from "./types";
+import { Form, Input, Modal, Switch } from "antd";
+import type { RuleSet, RuleSetFormValues } from "./types";
 
 type RuleSetFormModalProps = {
   open: boolean;
   mode: "create" | "edit";
   ruleSet?: RuleSet | null;
-  rules?: Rule[];
   confirmLoading?: boolean;
   onCancel: () => void;
   onSubmit: (values: RuleSetFormValues) => Promise<void>;
@@ -17,7 +16,6 @@ function toFormValues(ruleSet?: RuleSet | null): RuleSetFormValues {
     name: ruleSet?.name ?? "",
     description: ruleSet?.description ?? "",
     enabled: ruleSet?.enabled ?? true,
-    wildcard_rule_id: ruleSet?.wildcard_rule_id ?? null,
   };
 }
 
@@ -25,18 +23,11 @@ export function RuleSetFormModal({
   open,
   mode,
   ruleSet,
-  rules = [],
   confirmLoading = false,
   onCancel,
   onSubmit,
 }: RuleSetFormModalProps) {
   const [form] = Form.useForm<RuleSetFormValues>();
-  const wildcardRuleOptions = [
-    { label: "不设置通配规则", value: 0 },
-    ...rules
-      .filter((rule) => !rule.xwhat)
-      .map((rule) => ({ label: rule.name, value: rule.id })),
-  ];
 
   useEffect(() => {
     if (!open) {
@@ -53,7 +44,6 @@ export function RuleSetFormModal({
       name: values.name.trim(),
       description: values.description.trim(),
       enabled: values.enabled,
-      wildcard_rule_id: values.wildcard_rule_id === 0 ? null : values.wildcard_rule_id,
     });
   };
 
@@ -88,15 +78,6 @@ export function RuleSetFormModal({
         <Form.Item<RuleSetFormValues> label="描述" name="description">
           <Input.TextArea rows={3} placeholder="请输入规则集说明" maxLength={500} />
         </Form.Item>
-        {mode === "edit" ? (
-          <Form.Item<RuleSetFormValues>
-            label="通配规则"
-            name="wildcard_rule_id"
-            getValueProps={(value: number | null) => ({ value: value ?? 0 })}
-          >
-            <Select options={wildcardRuleOptions} />
-          </Form.Item>
-        ) : null}
         <Form.Item<RuleSetFormValues>
           label="启用状态"
           name="enabled"

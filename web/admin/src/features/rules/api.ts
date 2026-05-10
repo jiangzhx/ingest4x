@@ -6,6 +6,7 @@ import type {
   ProjectRuleSetAssignment,
   Rule,
   RuleSet,
+  SaveValidationRulePayload,
   UpdateRulePayload,
   UpdateRuleSetPayload,
 } from "./types";
@@ -278,6 +279,21 @@ export async function deleteRule(
   await request(`/api/admin/rule-sets/${ruleSetId}/rules/${ruleId}`, {
     method: "DELETE",
   });
+}
+
+export async function saveValidationRule(
+  ruleSetId: number,
+  payload: SaveValidationRulePayload,
+): Promise<Rule> {
+  const response = await requestJson<RuleResponse>(
+    `/api/admin/rule-sets/${ruleSetId}/validation-rule`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  return normalizeRuleResponse(response);
 }
 
 export async function listProjectRuleSetAssignments(

@@ -21,6 +21,12 @@ struct CreateRuleRequest {
     enabled: bool,
 }
 
+#[derive(Debug, serde::Deserialize, ToSchema)]
+struct SaveValidationRuleRequest {
+    content: String,
+    enabled: Option<bool>,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -34,6 +40,7 @@ struct CreateRuleRequest {
         get_rule,
         update_rule,
         delete_rule,
+        save_validation_rule,
         list_project_rule_sets,
         assign_project_rule_set,
         delete_project_rule_set
@@ -47,6 +54,7 @@ struct CreateRuleRequest {
             UpdateRuleSetInput,
             CreateRuleRequest,
             UpdateRuleInput,
+            SaveValidationRuleRequest,
             AssignProjectRuleSetRequest
         )
     ),
@@ -71,6 +79,10 @@ pub fn configure(cfg: &mut ServiceConfig) {
             .route(
                 "/{rule_set_id}/rules/{rule_id}",
                 web::delete().to(delete_rule),
+            )
+            .route(
+                "/{rule_set_id}/validation-rule",
+                web::put().to(save_validation_rule),
             ),
     )
     .route(
@@ -313,6 +325,38 @@ async fn delete_rule(path: Path<(i32, i32)>, repository: Data<RuleRepository>) -
     let (rule_set_id, rule_id) = path.into_inner();
     match repository.delete_rule(rule_set_id, rule_id).await {
         Ok(()) => HttpResponse::NoContent().finish(),
+        Err(error) => map_repository_error(error),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/admin/rule-sets/{rule_set_id}/validation-rule",
+    tag = "admin.rules",
+    params(("rule_set_id" = i32, Path, description = "Rule set id")),
+    request_body = SaveValidationRuleRequest,
+    responses(
+        (status = 200, description = "Validation rule saved", body = Rule),
+        (status = 400, description = "Invalid Rhai validation rule", body = String),
+        (status = 404, description = "Rule set not found"),
+        (status = 500, description = "Repository failure", body = String)
+    )
+)]
+async fn save_validation_rule(
+    rule_set_id: Path<i32>,
+    repository: Data<RuleRepository>,
+    request: Json<SaveValidationRuleRequest>,
+) -> HttpResponse {
+    let request = request.into_inner();
+    match repository
+        .upsert_rhai_validation_rule(
+            rule_set_id.into_inner(),
+            request.content,
+            request.enabled.unwrap_or(true),
+        )
+        .await
+    {
+        Ok(rule) => HttpResponse::Ok().json(rule),
         Err(error) => map_repository_error(error),
     }
 }

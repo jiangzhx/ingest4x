@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   App,
   Alert,
@@ -6,32 +6,63 @@ import {
   Popconfirm,
   Result,
   Select,
+  Skeleton,
   Space,
   Spin,
   Tag,
   Typography,
 } from "antd";
-import type { Rule, RuleFormValues, RuleSet, RuleSetFormValues } from "./types";
+import type { Rule, RuleSet, RuleSetFormValues } from "./types";
 import {
-  useCreateRuleMutation,
-  useCreateRuleSetMutation,
-  useDeleteRuleMutation,
-  useDeleteRuleSetMutation,
   useRulesQuery,
   useRuleSetsQuery,
-  useUpdateRuleMutation,
+  useCreateRuleSetMutation,
+  useDeleteRuleSetMutation,
+  useSaveValidationRuleMutation,
   useUpdateRuleSetMutation,
 } from "./hooks";
-import { RuleFormModal } from "./RuleFormModal";
 import { RuleSetFormModal } from "./RuleSetFormModal";
-import { RulesTable } from "./RulesTable";
 import {
   getErrorMessage,
-  toCreateRulePayload,
   toCreateRuleSetPayload,
-  toUpdateRulePayload,
   toUpdateRuleSetPayload,
 } from "./utils";
+
+const RhaiEditor = lazy(() =>
+  import("../processors/RhaiEditor").then((module) => ({
+    default: module.RhaiEditor,
+  })),
+);
+
+const EMPTY_RHAI_RULE_CONTENT = `fn validate(event) {
+    event.result()
+}
+`;
+
+type LazyRhaiEditorProps = {
+  value?: string;
+  onChange?: (value: string) => void;
+};
+
+function LazyRhaiEditor({ value, onChange }: LazyRhaiEditorProps) {
+  return (
+    <Suspense fallback={<Skeleton.Input block active style={{ height: 420 }} />}>
+      <RhaiEditor value={value} onChange={onChange} height="420px" />
+    </Suspense>
+  );
+}
+
+function findValidationRule(
+  rules: Rule[],
+  selectedRuleSet: RuleSet | null,
+): Rule | null {
+  return (
+    rules.find((rule) => rule.id === selectedRuleSet?.wildcard_rule_id) ??
+    rules.find((rule) => rule.content.includes("fn validate")) ??
+    rules[0] ??
+    null
+  );
+}
 
 export function RulesPage() {
   const { message } = App.useApp();
@@ -42,19 +73,14 @@ export function RulesPage() {
   const createRuleSetMutation = useCreateRuleSetMutation();
   const updateRuleSetMutation = useUpdateRuleSetMutation();
   const deleteRuleSetMutation = useDeleteRuleSetMutation();
-  const createRuleMutation = useCreateRuleMutation(selectedRuleSetId);
-  const updateRuleMutation = useUpdateRuleMutation(selectedRuleSetId);
-  const deleteRuleMutation = useDeleteRuleMutation(selectedRuleSetId);
+  const saveValidationRuleMutation = useSaveValidationRuleMutation(selectedRuleSetId);
   const [ruleSetModalMode, setRuleSetModalMode] = useState<"create" | "edit">(
     "create",
   );
   const [editingRuleSet, setEditingRuleSet] = useState<RuleSet | null>(null);
   const [isRuleSetModalOpen, setIsRuleSetModalOpen] = useState(false);
-  const [ruleModalMode, setRuleModalMode] = useState<"create" | "edit">("create");
-  const [editingRule, setEditingRule] = useState<Rule | null>(null);
-  const [isRuleModalOpen, setIsRuleModalOpen] = useState(false);
+  const [scriptContent, setScriptContent] = useState(EMPTY_RHAI_RULE_CONTENT);
   const [deletingRuleSetId, setDeletingRuleSetId] = useState<number | null>(null);
-  const [deletingRuleId, setDeletingRuleId] = useState<number | null>(null);
 
   useEffect(() => {
     if (selectedRuleSetId !== null || ruleSets.length === 0) {
@@ -66,16 +92,23 @@ export function RulesPage() {
 
   const selectedRuleSet =
     ruleSets.find((ruleSet) => ruleSet.id === selectedRuleSetId) ?? null;
+  const rules = rulesQuery.data ?? [];
+  const validationRule = useMemo(
+    () => findValidationRule(rules, selectedRuleSet),
+    [rules, selectedRuleSet],
+  );
   const ruleSetOptions = ruleSets.map((ruleSet) => ({
     label: `${ruleSet.name}${ruleSet.enabled ? "" : "（已停用）"}`,
     value: ruleSet.id,
   }));
-  const rules = rulesQuery.data ?? [];
   const isRuleSetSubmitting =
     createRuleSetMutation.isPending || updateRuleSetMutation.isPending;
-  const isRuleSubmitting = createRuleMutation.isPending || updateRuleMutation.isPending;
-  const ruleSetActionsDisabled = deletingRuleSetId !== null;
-  const ruleActionsDisabled = deletingRuleId !== null || selectedRuleSetId === null;
+  const isScriptSaving = saveValidationRuleMutation.isPending;
+  const ruleSetActionsDisabled = deletingRuleSetId !== null || isScriptSaving;
+
+  useEffect(() => {
+    setScriptContent(validationRule?.content ?? EMPTY_RHAI_RULE_CONTENT);
+  }, [selectedRuleSetId, validationRule?.id, validationRule?.content]);
 
   const openCreateRuleSetModal = () => {
     createRuleSetMutation.reset();
@@ -93,26 +126,6 @@ export function RulesPage() {
     setIsRuleSetModalOpen(true);
   };
 
-  const openCreateRuleModal = () => {
-    if (selectedRuleSetId === null) {
-      return;
-    }
-
-    createRuleMutation.reset();
-    updateRuleMutation.reset();
-    setRuleModalMode("create");
-    setEditingRule(null);
-    setIsRuleModalOpen(true);
-  };
-
-  const openEditRuleModal = (rule: Rule) => {
-    createRuleMutation.reset();
-    updateRuleMutation.reset();
-    setRuleModalMode("edit");
-    setEditingRule(rule);
-    setIsRuleModalOpen(true);
-  };
-
   const closeRuleSetModal = () => {
     if (isRuleSetSubmitting) {
       return;
@@ -122,15 +135,6 @@ export function RulesPage() {
     setEditingRuleSet(null);
   };
 
-  const closeRuleModal = () => {
-    if (isRuleSubmitting) {
-      return;
-    }
-
-    setIsRuleModalOpen(false);
-    setEditingRule(null);
-  };
-
   const handleRuleSetSubmit = async (values: RuleSetFormValues) => {
     try {
       if (ruleSetModalMode === "create") {
@@ -138,6 +142,7 @@ export function RulesPage() {
           toCreateRuleSetPayload(values),
         );
         setSelectedRuleSetId(created.id);
+        setScriptContent(EMPTY_RHAI_RULE_CONTENT);
         message.success(`规则集 ${created.name} 创建成功`);
       } else if (editingRuleSet) {
         await updateRuleSetMutation.mutateAsync({
@@ -155,33 +160,13 @@ export function RulesPage() {
     }
   };
 
-  const handleRuleSubmit = async (values: RuleFormValues) => {
-    try {
-      if (ruleModalMode === "create") {
-        await createRuleMutation.mutateAsync(toCreateRulePayload(values));
-        message.success(`规则 ${values.name} 创建成功`);
-      } else if (editingRule) {
-        await updateRuleMutation.mutateAsync({
-          ruleId: editingRule.id,
-          payload: toUpdateRulePayload(values),
-        });
-        message.success(`规则 ${editingRule.name} 保存成功`);
-      }
-
-      setIsRuleModalOpen(false);
-      setEditingRule(null);
-    } catch (error) {
-      message.error(getErrorMessage(error, "保存规则失败，请稍后重试。"));
-      throw error;
-    }
-  };
-
   const handleDeleteRuleSet = async (ruleSet: RuleSet) => {
     setDeletingRuleSetId(ruleSet.id);
     try {
       await deleteRuleSetMutation.mutateAsync(ruleSet.id);
       if (selectedRuleSetId === ruleSet.id) {
         setSelectedRuleSetId(null);
+        setScriptContent(EMPTY_RHAI_RULE_CONTENT);
       }
       message.success(`规则集 ${ruleSet.name} 删除成功`);
     } catch (error) {
@@ -191,15 +176,19 @@ export function RulesPage() {
     }
   };
 
-  const handleDeleteRule = async (rule: Rule) => {
-    setDeletingRuleId(rule.id);
+  const handleSaveScript = async () => {
+    if (selectedRuleSetId === null) {
+      return;
+    }
+
     try {
-      await deleteRuleMutation.mutateAsync(rule.id);
-      message.success(`规则 ${rule.name} 删除成功`);
+      await saveValidationRuleMutation.mutateAsync({
+        content: scriptContent.trim(),
+        enabled: true,
+      });
+      message.success("Rhai 校验脚本保存成功");
     } catch (error) {
-      message.error(getErrorMessage(error, "删除规则失败，请稍后重试。"));
-    } finally {
-      setDeletingRuleId(null);
+      message.error(getErrorMessage(error, "保存 Rhai 校验脚本失败，请稍后重试。"));
     }
   };
 
@@ -216,7 +205,7 @@ export function RulesPage() {
             规则管理
           </Typography.Title>
           <Typography.Paragraph type="secondary" style={{ margin: "8px 0 0" }}>
-            管理规则集和规则继承树。
+            管理规则集和 Rhai 校验脚本。
           </Typography.Paragraph>
         </div>
       </Space>
@@ -245,11 +234,7 @@ export function RulesPage() {
 
       {!ruleSetsQuery.isLoading && !showInitialError ? (
         <Space direction="vertical" size={16} style={{ display: "flex" }}>
-          <Alert
-            type="info"
-            showIcon
-            message={`共 ${ruleSets.length} 个规则集`}
-          />
+          <Alert type="info" showIcon message={`共 ${ruleSets.length} 个规则集`} />
           <Space
             align="center"
             wrap
@@ -330,34 +315,29 @@ export function RulesPage() {
               </Popconfirm>
             </Space>
           </Space>
-          <Space
-            align="start"
-            style={{ justifyContent: "space-between", width: "100%" }}
-          >
-            <div>
-              <Typography.Title level={4} style={{ margin: 0 }}>
-                {selectedRuleSet ? selectedRuleSet.name : "规则"}
-              </Typography.Title>
-              <Typography.Text type="secondary">
-                规则会沿父节点向上继承并合并。
-              </Typography.Text>
-            </div>
-            <Button
-              type="primary"
-              disabled={selectedRuleSetId === null}
-              onClick={openCreateRuleModal}
+
+          <Space direction="vertical" size={12} style={{ display: "flex" }}>
+            <Space
+              align="center"
+              style={{ justifyContent: "space-between", width: "100%" }}
             >
-              新建规则
-            </Button>
+              <Typography.Title level={4} style={{ margin: 0 }}>
+                Rhai 校验脚本
+              </Typography.Title>
+              <Button
+                type="primary"
+                disabled={selectedRuleSetId === null}
+                loading={isScriptSaving}
+                onClick={() => void handleSaveScript()}
+              >
+                保存脚本
+              </Button>
+            </Space>
+            {rulesQuery.isFetching ? (
+              <Typography.Text type="secondary">正在同步脚本...</Typography.Text>
+            ) : null}
+            <LazyRhaiEditor value={scriptContent} onChange={setScriptContent} />
           </Space>
-          <RulesTable
-            rules={rules}
-            wildcardRuleId={selectedRuleSet?.wildcard_rule_id ?? null}
-            actionsDisabled={ruleActionsDisabled}
-            deletingRuleId={deletingRuleId}
-            onEdit={openEditRuleModal}
-            onDelete={handleDeleteRule}
-          />
         </Space>
       ) : null}
 
@@ -365,19 +345,9 @@ export function RulesPage() {
         open={isRuleSetModalOpen}
         mode={ruleSetModalMode}
         ruleSet={editingRuleSet}
-        rules={rules}
         confirmLoading={isRuleSetSubmitting}
         onCancel={closeRuleSetModal}
         onSubmit={handleRuleSetSubmit}
-      />
-      <RuleFormModal
-        open={isRuleModalOpen}
-        mode={ruleModalMode}
-        rule={editingRule}
-        rules={rules}
-        confirmLoading={isRuleSubmitting}
-        onCancel={closeRuleModal}
-        onSubmit={handleRuleSubmit}
       />
     </Space>
   );

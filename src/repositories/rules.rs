@@ -13,6 +13,8 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use utoipa::ToSchema;
 
+const RHAI_VALIDATION_RULE_NAME: &str = "Validation rule";
+
 #[derive(Clone)]
 pub struct RuleRepository {
     db: DatabaseConnection,
@@ -308,6 +310,103 @@ impl RuleRepository {
             return Err(RuleRepositoryError::RuleNotFound { id });
         }
         Ok(())
+    }
+
+    pub async fn upsert_rhai_validation_rule(
+        &self,
+        rule_set_id: i32,
+        content: impl Into<String>,
+        enabled: bool,
+    ) -> RuleRepositoryResult<Rule> {
+        ensure_rule_set_exists(&self.db, rule_set_id).await?;
+        let content = content.into();
+        if !is_rhai_validation_rule(&content) {
+            return Err(RuleRepositoryError::InvalidRuleContent {
+                message: "Rhai validation rule must define fn validate(event)".to_string(),
+            });
+        }
+        Rules::from_rhai_script(&content).map_err(|error| {
+            RuleRepositoryError::InvalidRuleContent {
+                message: error.to_string(),
+            }
+        })?;
+
+        let rule_set = rule_sets::Entity::find_by_id(rule_set_id)
+            .one(&self.db)
+            .await?
+            .ok_or(RuleRepositoryError::RuleSetNotFound { id: rule_set_id })?;
+        let existing_rules = rules::Entity::find()
+            .filter(rules::Column::RuleSetId.eq(rule_set_id))
+            .all(&self.db)
+            .await?;
+        let existing_validation_rule_id = existing_rules
+            .iter()
+            .find(|rule| {
+                Some(rule.id) == rule_set.wildcard_rule_id && is_rhai_validation_rule(&rule.content)
+            })
+            .or_else(|| {
+                existing_rules.iter().find(|rule| {
+                    rule.parent_id.is_none()
+                        && !has_event_xwhat(&rule.xwhat)
+                        && is_rhai_validation_rule(&rule.content)
+                })
+            })
+            .map(|rule| rule.id);
+
+        let now = current_timestamp();
+        let validation_rule = if let Some(rule_id) = existing_validation_rule_id {
+            rules::Entity::delete_many()
+                .filter(rules::Column::RuleSetId.eq(rule_set_id))
+                .filter(rules::Column::Id.ne(rule_id))
+                .exec(&self.db)
+                .await?;
+
+            let rule = rules::Entity::find_by_id(rule_id)
+                .one(&self.db)
+                .await?
+                .ok_or(RuleRepositoryError::RuleNotFound { id: rule_id })?;
+            let mut active = rule.into_active_model();
+            active.parent_id = Set(None);
+            active.name = Set(RHAI_VALIDATION_RULE_NAME.to_string());
+            active.xwhat = Set(None);
+            active.content = Set(content);
+            active.enabled = Set(enabled);
+            active.updated_at = Set(now);
+            active
+                .update(&self.db)
+                .await
+                .map_err(map_rule_write_error)?
+        } else {
+            rules::Entity::delete_many()
+                .filter(rules::Column::RuleSetId.eq(rule_set_id))
+                .exec(&self.db)
+                .await?;
+
+            rules::ActiveModel {
+                rule_set_id: Set(rule_set_id),
+                parent_id: Set(None),
+                name: Set(RHAI_VALIDATION_RULE_NAME.to_string()),
+                xwhat: Set(None),
+                content: Set(content),
+                enabled: Set(enabled),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&self.db)
+            .await
+            .map_err(map_rule_write_error)?
+        };
+
+        let mut active_rule_set = rule_set.into_active_model();
+        active_rule_set.wildcard_rule_id = Set(Some(validation_rule.id));
+        active_rule_set.updated_at = Set(now);
+        active_rule_set
+            .update(&self.db)
+            .await
+            .map_err(map_rule_set_write_error)?;
+
+        Ok(validation_rule.into())
     }
 
     pub async fn assign_rule_set_to_project(

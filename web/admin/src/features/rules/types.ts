@@ -33,7 +33,6 @@ export interface RuleSetFormValues {
   name: string;
   description: string;
   enabled: boolean;
-  wildcard_rule_id: number | null;
 }
 
 export interface RuleFormValues {
@@ -70,6 +69,11 @@ export interface UpdateRulePayload {
   name?: string;
   xwhat?: string | null;
   content?: string;
+  enabled?: boolean;
+}
+
+export interface SaveValidationRulePayload {
+  content: string;
   enabled?: boolean;
 }
 

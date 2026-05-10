@@ -206,7 +206,68 @@ async fn openapi_json_includes_admin_rules_paths() {
         assert_eq!(status, StatusCode::OK);
         assert!(body["paths"]["/api/admin/rule-sets"].is_object());
         assert!(body["paths"]["/api/admin/rule-sets/{rule_set_id}/rules"].is_object());
+        assert!(body["paths"]["/api/admin/rule-sets/{rule_set_id}/validation-rule"].is_object());
         assert!(body["paths"]["/api/admin/projects/{project_id}/rule-sets"].is_object());
+    })
+    .await;
+}
+
+#[actix_rt::test]
+async fn admin_can_replace_rule_tree_with_single_rhai_validation_rule() {
+    with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
+        let app = create_app().await;
+        let rule_set = create_rule_set(&app, "Admin Rhai Rule").await;
+        let legacy_rule = create_rule(&app, rule_set["id"].as_i64().expect("rule set id")).await;
+
+        let save_validation_rule = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::put())
+                .uri(
+                    format!(
+                        "/api/admin/rule-sets/{}/validation-rule",
+                        rule_set["id"]
+                    )
+                    .as_str(),
+                )
+                .set_json(json!({
+                    "content": "fn validate(event) {\n    event.field(\"appid\").required(\"string\");\n    event.result()\n}\n",
+                    "enabled": true
+                }))
+                .to_request(),
+        )
+        .await;
+        let validation_status = save_validation_rule.status();
+        let validation_rule: Value = test::read_body_json(save_validation_rule).await;
+
+        assert_eq!(validation_status, StatusCode::OK);
+        assert_ne!(validation_rule["id"], legacy_rule["id"]);
+        assert_eq!(validation_rule["parent_id"], Value::Null);
+        assert_eq!(validation_rule["xwhat"], Value::Null);
+
+        let list_rules = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri(format!("/api/admin/rule-sets/{}/rules", rule_set["id"]).as_str())
+                .to_request(),
+        )
+        .await;
+        let rules: Value = test::read_body_json(list_rules).await;
+        let rules = rules.as_array().expect("rules should be an array");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["id"], validation_rule["id"]);
+
+        let fetched_rule_set = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri(format!("/api/admin/rule-sets/{}", rule_set["id"]).as_str())
+                .to_request(),
+        )
+        .await;
+        let fetched_rule_set: Value = test::read_body_json(fetched_rule_set).await;
+        assert_eq!(
+            fetched_rule_set["wildcard_rule_id"],
+            validation_rule["id"]
+        );
     })
     .await;
 }
