@@ -217,7 +217,6 @@ struct QuarantinedWalRecord<'a> {
     method: &'a str,
     path: &'a str,
     query: Option<&'a str>,
-    appid: Option<String>,
     xwhat: Option<String>,
     target: Option<String>,
     message: &'a str,
@@ -248,7 +247,7 @@ fn quarantine_replay_issue(
 
 fn quarantine_record<'a>(entry: &'a WalEntry, issue: &'a ReplayIssue) -> QuarantinedWalRecord<'a> {
     let error = issue.to_string();
-    let (body_appid, body_xwhat) = quarantine_event_fields(&entry.record.body);
+    let body_xwhat = quarantine_event_xwhat(&entry.record.body);
     QuarantinedWalRecord {
         schema: QUARANTINE_SCHEMA,
         code: issue.code(),
@@ -261,7 +260,6 @@ fn quarantine_record<'a>(entry: &'a WalEntry, issue: &'a ReplayIssue) -> Quarant
         method: entry.record.method.as_str(),
         path: entry.record.path.as_str(),
         query: entry.record.query.as_deref(),
-        appid: body_appid.or_else(|| issue.appid().map(str::to_string)),
         xwhat: body_xwhat.or_else(|| issue.xwhat().map(str::to_string)),
         target: issue.target().map(str::to_string),
         message: issue.message(),
@@ -270,20 +268,14 @@ fn quarantine_record<'a>(entry: &'a WalEntry, issue: &'a ReplayIssue) -> Quarant
     }
 }
 
-fn quarantine_event_fields(body: &[u8]) -> (Option<String>, Option<String>) {
+fn quarantine_event_xwhat(body: &[u8]) -> Option<String> {
     let Ok(json) = serde_json::from_slice::<Value>(body) else {
-        return (None, None);
+        return None;
     };
 
-    let appid = json
-        .get("appid")
+    json.get("xwhat")
         .and_then(Value::as_str)
-        .map(str::to_string);
-    let xwhat = json
-        .get("xwhat")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    (appid, xwhat)
+        .map(str::to_string)
 }
 
 fn read_sink_replay_states(
@@ -380,13 +372,6 @@ async fn process_record(
         .get("xwhat")
         .and_then(Value::as_str)
         .map(ToString::to_string);
-    let event_appid = json
-        .get("appid")
-        .and_then(Value::as_str)
-        .map(ToString::to_string);
-    let Some(_event_appid) = event_appid else {
-        return Err(ReplayIssue::missing_appid(xwhat));
-    };
     if !context
         .project_registry
         .contains_project_id(record.project_id)

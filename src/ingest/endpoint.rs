@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{error, warn};
+use tracing::error;
 
 pub async fn ingest(
     req: HttpRequest,
@@ -54,7 +54,6 @@ pub async fn ingest(
         &req,
         body,
         project.id,
-        payload.appid.as_str(),
         payload.event_name.as_str(),
         &wal,
         &event_sinks.sink_names(),
@@ -92,7 +91,6 @@ fn decode_query_payload(query_params: &HashMap<String, String>) -> Result<Vec<u8
 }
 
 struct ValidatedIngestPayload {
-    appid: String,
     event_name: String,
 }
 
@@ -136,16 +134,7 @@ fn validate_ingest_payload(body: &[u8]) -> Result<ValidatedIngestPayload, Ingest
     };
     let event_name = json["xwhat"].as_str().unwrap_or("default").to_string();
 
-    let Some(appid) = json
-        .get("appid")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-    else {
-        warn!(xwhat = event_name.as_str(), "missing or invalid appid");
-        return Err(IngestIssue::MissingAppid);
-    };
-
-    Ok(ValidatedIngestPayload { appid, event_name })
+    Ok(ValidatedIngestPayload { event_name })
 }
 
 fn reject_if_payload_too_large(
@@ -171,7 +160,6 @@ enum IngestIssue {
     InvalidBase64 { message: String },
     PayloadTooLarge,
     InvalidJson { message: String },
-    MissingAppid,
     WalAppendFailed,
 }
 
@@ -185,7 +173,6 @@ impl IngestIssue {
             Self::InvalidBase64 { .. } => "ingest_invalid_base64",
             Self::PayloadTooLarge => "ingest_payload_too_large",
             Self::InvalidJson { .. } => "ingest_invalid_json",
-            Self::MissingAppid => "ingest_missing_appid",
             Self::WalAppendFailed => "ingest_wal_append_failed",
         }
     }
@@ -203,7 +190,6 @@ impl IngestIssue {
             Self::InvalidJson { message } => {
                 HttpResponse::BadRequest().body(format!("invalid json payload: {message}"))
             }
-            Self::MissingAppid => HttpResponse::BadRequest().body("missing or invalid appid"),
             Self::WalAppendFailed => HttpResponse::ServiceUnavailable().json(serde_json::json!({
                 "error": "wal_capacity_exceeded",
                 "message": "WAL disk space is insufficient or unavailable"
@@ -216,7 +202,6 @@ async fn append_wal_record(
     req: &HttpRequest,
     body: Vec<u8>,
     project_id: i32,
-    appid: &str,
     event_name: &str,
     wal: &WalWriter,
     active_sink_names: &[String],
@@ -240,7 +225,13 @@ async fn append_wal_record(
             if let (Some(metrics), Some(settings)) = (wal_metrics, settings) {
                 metrics.observe(settings, wal, active_sink_names);
             }
-            observe_ingest_event(ingest_metrics, appid, event_name, "wal_appended", started);
+            observe_ingest_event(
+                ingest_metrics,
+                project_id,
+                event_name,
+                "wal_appended",
+                started,
+            );
             HttpResponse::Ok().body("200")
         }
         Err(err) => {
@@ -253,7 +244,7 @@ async fn append_wal_record(
             }
             observe_ingest_event(
                 ingest_metrics,
-                appid,
+                project_id,
                 event_name,
                 "wal_append_error",
                 started,
@@ -270,13 +261,18 @@ async fn append_wal_record(
 
 fn observe_ingest_event(
     metrics: Option<&IngestPrometheusMetrics>,
-    appid: &str,
+    project_id: i32,
     event_name: &str,
     result: &str,
     started: Instant,
 ) {
     if let Some(metrics) = metrics {
-        metrics.observe_event(appid, event_name, result, started.elapsed().as_secs_f64());
+        metrics.observe_event(
+            project_id,
+            event_name,
+            result,
+            started.elapsed().as_secs_f64(),
+        );
     }
 }
 
@@ -305,10 +301,10 @@ mod tests {
 
     #[test]
     fn ingest_issue_codes_are_stable_while_responses_stay_compatible() {
-        let issue = IngestIssue::MissingAppid;
-        assert_eq!(issue.code(), "ingest_missing_appid");
+        let issue = IngestIssue::PayloadTooLarge;
+        assert_eq!(issue.code(), "ingest_payload_too_large");
 
         let response = issue.into_response();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

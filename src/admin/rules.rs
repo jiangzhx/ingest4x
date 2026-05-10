@@ -74,15 +74,15 @@ pub fn configure(cfg: &mut ServiceConfig) {
             ),
     )
     .route(
-        "/projects/{appid}/rule-sets",
+        "/projects/{project_id}/rule-sets",
         web::get().to(list_project_rule_sets),
     )
     .route(
-        "/projects/{appid}/rule-sets",
+        "/projects/{project_id}/rule-sets",
         web::put().to(assign_project_rule_set),
     )
     .route(
-        "/projects/{appid}/rule-sets/{rule_set_id}",
+        "/projects/{project_id}/rule-sets/{rule_set_id}",
         web::delete().to(delete_project_rule_set),
     );
 }

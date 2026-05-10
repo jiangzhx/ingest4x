@@ -971,7 +971,7 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
     let quarantine = quarantine_logs.single_record();
     assert_eq!(quarantine["code"], json!("replay_unknown_sink_target"));
     assert_eq!(quarantine["action"], json!("quarantine_record"));
-    assert_eq!(quarantine["appid"], json!("APPID"));
+    assert!(quarantine.get("appid").is_none());
     assert_eq!(quarantine["xwhat"], json!("custom_event"));
     assert_eq!(quarantine["target"], json!("missing_sink"));
     let body = STANDARD

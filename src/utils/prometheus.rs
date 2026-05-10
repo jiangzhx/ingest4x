@@ -38,16 +38,16 @@ impl IngestPrometheusMetrics {
             events_total: CounterVec::new(
                 Opts::new(
                     "ingest_events_total",
-                    "Total ingest events by appid, xwhat, and processing result.",
+                    "Total ingest events by project_id, xwhat, and processing result.",
                 ),
-                &["appid", "xwhat", "result"],
+                &["project_id", "xwhat", "result"],
             )?,
             event_duration_seconds: HistogramVec::new(
                 HistogramOpts::new(
                     "ingest_event_duration_seconds",
-                    "Ingest event processing duration by appid, xwhat, and processing result.",
+                    "Ingest event processing duration by project_id, xwhat, and processing result.",
                 ),
-                &["appid", "xwhat", "result"],
+                &["project_id", "xwhat", "result"],
             )?,
         };
 
@@ -57,12 +57,13 @@ impl IngestPrometheusMetrics {
         Ok(metrics)
     }
 
-    pub fn observe_event(&self, appid: &str, xwhat: &str, result: &str, duration_seconds: f64) {
+    pub fn observe_event(&self, project_id: i32, xwhat: &str, result: &str, duration_seconds: f64) {
+        let project_id = project_id.to_string();
         self.events_total
-            .with_label_values(&[appid, xwhat, result])
+            .with_label_values(&[project_id.as_str(), xwhat, result])
             .inc();
         self.event_duration_seconds
-            .with_label_values(&[appid, xwhat, result])
+            .with_label_values(&[project_id.as_str(), xwhat, result])
             .observe(duration_seconds);
     }
 }

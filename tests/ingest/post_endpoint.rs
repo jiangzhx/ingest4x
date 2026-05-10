@@ -66,6 +66,44 @@ async fn post_ingest_normalizes_and_sends_event() {
 }
 
 #[actix_rt::test]
+async fn post_ingest_accepts_payload_without_appid() {
+    let script = r#"
+fn process(event, request) {
+    emit(SINK_EVENTS, event);
+}
+"#;
+    let (app, testservice) = create_app_with_processor_script(script).await;
+    let consumer = create_consumer(
+        &testservice,
+        "ingest-post-without-appid-topic",
+        &testservice.topic,
+    );
+    let input_payload = json!({
+        "xwhat": "custom_event",
+        "xcontext": {
+            "installid": "iid-no-appid",
+            "os": "ios",
+            "idfa": "idfa-no-appid"
+        }
+    });
+
+    let req = test::TestRequest::post()
+        .uri("/ingest")
+        .insert_header(("x-ingest-token", "igx_test_token"))
+        .set_json(input_payload.clone())
+        .to_request();
+
+    let resp = test::call_service(&app, req).await;
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(replay_once(&testservice).await.expect("replay wal once"), 1);
+
+    let kafka_string = read_message_payload(&consumer).await;
+    let emitted: Value = serde_json::from_str(kafka_string.as_str()).expect("event json");
+    assert_json_eq!(emitted, input_payload);
+}
+
+#[actix_rt::test]
 async fn post_ingest_sends_invalid_payload_to_error_topic() {
     let (app, testservice) = create_app().await;
     let error_consumer = create_consumer(

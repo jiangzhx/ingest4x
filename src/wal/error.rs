@@ -26,7 +26,6 @@ pub(crate) enum ReplayIssue {
     EventPayload {
         code: &'static str,
         message: String,
-        appid: Option<String>,
         xwhat: Option<String>,
     },
     // Project metadata or rules make this project impossible to process now.
@@ -118,17 +117,7 @@ impl ReplayIssue {
         Self::EventPayload {
             code: "replay_invalid_json_body",
             message: format!("invalid wal record json body: {error}"),
-            appid: None,
             xwhat: None,
-        }
-    }
-
-    pub(crate) fn missing_appid(xwhat: Option<String>) -> Self {
-        Self::EventPayload {
-            code: "replay_missing_appid",
-            message: "missing or invalid appid".to_string(),
-            appid: None,
-            xwhat,
         }
     }
 
@@ -136,7 +125,6 @@ impl ReplayIssue {
         Self::EventPayload {
             code: "replay_unknown_project",
             message: format!("wal record references unknown project `{project_id}`"),
-            appid: None,
             xwhat: _xwhat,
         }
     }
@@ -237,13 +225,6 @@ impl ReplayIssue {
             | Self::DeliveryPlan { message, .. }
             | Self::Sink { message, .. }
             | Self::Runtime { message, .. } => message,
-        }
-    }
-
-    pub(crate) fn appid(&self) -> Option<&str> {
-        match self {
-            Self::EventPayload { appid, .. } => appid.as_deref(),
-            _ => None,
         }
     }
 

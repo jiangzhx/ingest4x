@@ -198,10 +198,11 @@ flush_max_records = 1
     assert!(metrics.contains("wal_checkpoint_lsn 0"));
     assert!(metrics.contains("wal_max_lsn 1"));
     assert!(metrics.contains("wal_replay_lag_lsn 1"));
-    assert!(metrics
-        .contains(r#"ingest_events_total{appid="APPID",result="wal_appended",xwhat="startup"} 1"#));
     assert!(metrics.contains(
-        r#"ingest_event_duration_seconds_count{appid="APPID",result="wal_appended",xwhat="startup"} 1"#
+        r#"ingest_events_total{project_id="1",result="wal_appended",xwhat="startup"} 1"#
+    ));
+    assert!(metrics.contains(
+        r#"ingest_event_duration_seconds_count{project_id="1",result="wal_appended",xwhat="startup"} 1"#
     ));
 }
 
@@ -377,10 +378,11 @@ flush_max_records = 1
     let metrics =
         String::from_utf8(test::read_body(metrics_resp).await.to_vec()).expect("metrics text");
 
-    assert!(metrics
-        .contains(r#"ingest_events_total{appid="APPID",result="wal_appended",xwhat="startup"} 1"#));
     assert!(metrics.contains(
-        r#"ingest_event_duration_seconds_count{appid="APPID",result="wal_appended",xwhat="startup"} 1"#
+        r#"ingest_events_total{project_id="1",result="wal_appended",xwhat="startup"} 1"#
+    ));
+    assert!(metrics.contains(
+        r#"ingest_event_duration_seconds_count{project_id="1",result="wal_appended",xwhat="startup"} 1"#
     ));
 }
 
