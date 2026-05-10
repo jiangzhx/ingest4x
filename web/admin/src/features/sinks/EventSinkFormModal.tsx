@@ -5,14 +5,21 @@ import type {
   DeliveryTarget,
   EventSink,
   EventSinkFormValues,
+  SinkTypeMetadata,
 } from "./types";
-import { eventSinkToFormValues, getDeliveryTargetTypeLabel } from "./utils";
+import {
+  eventSinkToFormValues,
+  getDeliveryTargetTypeLabel,
+  parseJsonObject,
+  stringifyJsonObject,
+} from "./utils";
 
 type EventSinkFormModalProps = {
   open: boolean;
   mode: "create" | "edit";
   sink?: EventSink | null;
   targets: DeliveryTarget[];
+  sinkTypes: SinkTypeMetadata[];
   confirmLoading?: boolean;
   onCancel: () => void;
   onSubmit: (values: EventSinkFormValues) => Promise<void>;
@@ -28,17 +35,16 @@ export function EventSinkFormModal({
   mode,
   sink,
   targets,
+  sinkTypes,
   confirmLoading = false,
   onCancel,
   onSubmit,
 }: EventSinkFormModalProps) {
   const [form] = Form.useForm<EventSinkFormValues>();
-  const selectedTargetId = Form.useWatch("delivery_target_id", form);
-  const selectedTarget =
-    targets.find((target) => target.id === selectedTargetId) ?? null;
   const targetOptions = targets.map((target) => ({
     label: `${target.name} (${target.target_id}, ${getDeliveryTargetTypeLabel(
       target.target_type,
+      sinkTypes,
     )})${target.enabled ? "" : "（已停用）"}`,
     value: target.id,
   }));
@@ -54,11 +60,12 @@ export function EventSinkFormModal({
 
   const handleOk = async () => {
     const values = await form.validateFields();
+    const destination = parseJsonObject(values.destination_json, "投递目标配置");
     await onSubmit({
       ...values,
       sink_id: values.sink_id.trim(),
       name: values.name.trim(),
-      topic: values.topic.trim(),
+      destination_json: stringifyJsonObject(destination),
     });
   };
 
@@ -113,23 +120,36 @@ export function EventSinkFormModal({
             optionFilterProp="label"
           />
         </Form.Item>
-        {selectedTarget?.target_type === "kafka" ? (
-          <Form.Item<EventSinkFormValues>
-            label="Kafka Topic"
-            name="topic"
-            rules={[
-              { required: true, message: "请输入 Kafka topic" },
-              { whitespace: true, message: "topic 不能为空" },
-            ]}
-          >
-            <Input placeholder="ingest4x-events" />
-          </Form.Item>
-        ) : null}
         <Form.Item<EventSinkFormValues>
-          label="投递目标附加配置"
+          label="投递目标配置 JSON"
           name="destination_json"
+          rules={[
+            {
+              validator: (_, value: string | undefined) => {
+                parseJsonObject(value ?? "", "投递目标配置");
+                return Promise.resolve();
+              },
+            },
+          ]}
         >
-          <Input.TextArea rows={4} spellCheck={false} />
+          <Input.TextArea
+            rows={10}
+            spellCheck={false}
+            onBlur={() => {
+              try {
+                const destination = parseJsonObject(
+                  form.getFieldValue("destination_json") ?? "",
+                  "投递目标配置",
+                );
+                form.setFieldValue(
+                  "destination_json",
+                  stringifyJsonObject(destination),
+                );
+              } catch {
+                // The form validator renders the actionable error on save.
+              }
+            }}
+          />
         </Form.Item>
         <Form.Item<EventSinkFormValues>
           label="Auto Offset Reset"

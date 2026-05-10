@@ -6,6 +6,7 @@ import type {
   DeliveryTarget,
   DeliveryTargetType,
   EventSink,
+  SinkTypeMetadata,
   UpdateDeliveryTargetPayload,
   UpdateEventSinkPayload,
 } from "./types";
@@ -19,6 +20,11 @@ type DeliveryTargetResponse = {
   enabled?: unknown;
   created_at?: unknown;
   updated_at?: unknown;
+};
+
+type SinkTypeResponse = {
+  target_type?: unknown;
+  label?: unknown;
 };
 
 type EventSinkResponse = {
@@ -75,12 +81,17 @@ function normalizeObject(value: unknown, fieldName: string): Record<string, unkn
   return value as Record<string, unknown>;
 }
 
-function normalizeDeliveryTargetType(value: unknown): DeliveryTargetType {
-  if (value !== "kafka" && value !== "stdout") {
-    throw invalidSinkData("target_type 不是支持的类型");
+function normalizeDeliveryTargetType(
+  value: unknown,
+  sinkTypes: SinkTypeMetadata[],
+): DeliveryTargetType {
+  const targetType = normalizeRequiredString(value, "target_type");
+
+  if (!sinkTypes.some((sinkType) => sinkType.target_type === targetType)) {
+    throw invalidSinkData("target_type 不是已注册的类型");
   }
 
-  return value;
+  return targetType;
 }
 
 function normalizeAutoOffsetReset(value: unknown): AutoOffsetReset {
@@ -93,6 +104,7 @@ function normalizeAutoOffsetReset(value: unknown): AutoOffsetReset {
 
 export function normalizeDeliveryTargetResponse(
   value: DeliveryTargetResponse,
+  sinkTypes: SinkTypeMetadata[],
 ): DeliveryTarget {
   if (!value || typeof value !== "object") {
     throw invalidSinkData("delivery target 数据不是对象");
@@ -106,7 +118,7 @@ export function normalizeDeliveryTargetResponse(
     id: normalizePositiveInteger(value.id, "id"),
     target_id: normalizeRequiredString(value.target_id, "target_id"),
     name: normalizeRequiredString(value.name, "name"),
-    target_type: normalizeDeliveryTargetType(value.target_type),
+    target_type: normalizeDeliveryTargetType(value.target_type, sinkTypes),
     config_json: normalizeObject(value.config_json, "config_json"),
     enabled: value.enabled,
     created_at: normalizeTimestamp(value.created_at, "created_at"),
@@ -114,12 +126,38 @@ export function normalizeDeliveryTargetResponse(
   };
 }
 
-export function normalizeDeliveryTargetsResponse(response: unknown): DeliveryTarget[] {
+export function normalizeDeliveryTargetsResponse(
+  response: unknown,
+  sinkTypes: SinkTypeMetadata[] = [],
+): DeliveryTarget[] {
   if (!Array.isArray(response)) {
     throw invalidSinkData("delivery target 列表不是数组");
   }
 
-  return response.map((target) => normalizeDeliveryTargetResponse(target));
+  if (response.length > 0 && sinkTypes.length === 0) {
+    throw invalidSinkData("delivery target 规范化必须传入已注册 sink type 列表");
+  }
+
+  return response.map((target) => normalizeDeliveryTargetResponse(target, sinkTypes));
+}
+
+export function normalizeSinkTypeResponse(value: SinkTypeResponse): SinkTypeMetadata {
+  if (!value || typeof value !== "object") {
+    throw invalidSinkData("sink type 数据不是对象");
+  }
+
+  return {
+    target_type: normalizeRequiredString(value.target_type, "target_type"),
+    label: normalizeRequiredString(value.label, "label"),
+  };
+}
+
+export function normalizeSinkTypesResponse(response: unknown): SinkTypeMetadata[] {
+  if (!Array.isArray(response)) {
+    throw invalidSinkData("sink type 列表不是数组");
+  }
+
+  return response.map((sinkType) => normalizeSinkTypeResponse(sinkType));
 }
 
 export function normalizeEventSinkResponse(value: EventSinkResponse): EventSink {
@@ -155,16 +193,25 @@ export function normalizeEventSinksResponse(response: unknown): EventSink[] {
   return response.map((sink) => normalizeEventSinkResponse(sink));
 }
 
-export async function listDeliveryTargets(): Promise<DeliveryTarget[]> {
+export async function listSinkTypes(): Promise<SinkTypeMetadata[]> {
+  const response = await requestJson<SinkTypeResponse[]>("/api/admin/sink-types");
+
+  return normalizeSinkTypesResponse(response);
+}
+
+export async function listDeliveryTargets(
+  sinkTypes: SinkTypeMetadata[],
+): Promise<DeliveryTarget[]> {
   const response = await requestJson<DeliveryTargetResponse[]>(
     "/api/admin/delivery-targets",
   );
 
-  return normalizeDeliveryTargetsResponse(response);
+  return normalizeDeliveryTargetsResponse(response, sinkTypes);
 }
 
 export async function createDeliveryTarget(
   payload: CreateDeliveryTargetPayload,
+  sinkTypes: SinkTypeMetadata[],
 ): Promise<DeliveryTarget> {
   const response = await requestJson<DeliveryTargetResponse>(
     "/api/admin/delivery-targets",
@@ -177,12 +224,13 @@ export async function createDeliveryTarget(
     },
   );
 
-  return normalizeDeliveryTargetResponse(response);
+  return normalizeDeliveryTargetResponse(response, sinkTypes);
 }
 
 export async function updateDeliveryTarget(
   id: number,
   payload: UpdateDeliveryTargetPayload,
+  sinkTypes: SinkTypeMetadata[],
 ): Promise<DeliveryTarget> {
   const response = await requestJson<DeliveryTargetResponse>(
     `/api/admin/delivery-targets/${id}`,
@@ -195,7 +243,7 @@ export async function updateDeliveryTarget(
     },
   );
 
-  return normalizeDeliveryTargetResponse(response);
+  return normalizeDeliveryTargetResponse(response, sinkTypes);
 }
 
 export async function deleteDeliveryTarget(id: number): Promise<void> {

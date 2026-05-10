@@ -11,6 +11,7 @@ import {
   useDeleteEventSinkMutation,
   useDeliveryTargetsQuery,
   useEventSinksQuery,
+  useSinkTypesQuery,
   useUpdateDeliveryTargetMutation,
   useUpdateEventSinkMutation,
 } from "./hooks";
@@ -30,7 +31,9 @@ import {
 
 export function SinksPage() {
   const { message } = App.useApp();
-  const deliveryTargetsQuery = useDeliveryTargetsQuery();
+  const sinkTypesQuery = useSinkTypesQuery();
+  const sinkTypes = sinkTypesQuery.data ?? [];
+  const deliveryTargetsQuery = useDeliveryTargetsQuery(sinkTypes);
   const eventSinksQuery = useEventSinksQuery();
   const targets = deliveryTargetsQuery.data ?? [];
   const sinks = eventSinksQuery.data ?? [];
@@ -51,10 +54,11 @@ export function SinksPage() {
   const [deletingTargetId, setDeletingTargetId] = useState<number | null>(null);
   const [deletingSinkId, setDeletingSinkId] = useState<number | null>(null);
   const showInitialError =
+    (sinkTypesQuery.isError && sinkTypesQuery.data === undefined) ||
     (deliveryTargetsQuery.isError && deliveryTargetsQuery.data === undefined) ||
     (eventSinksQuery.isError && eventSinksQuery.data === undefined);
   const isInitialLoading =
-    deliveryTargetsQuery.isLoading || eventSinksQuery.isLoading;
+    sinkTypesQuery.isLoading || deliveryTargetsQuery.isLoading || eventSinksQuery.isLoading;
   const targetFormError =
     targetModalMode === "create"
       ? createDeliveryTargetMutation.error
@@ -128,6 +132,7 @@ export function SinksPage() {
   };
 
   const refreshAll = () => {
+    void sinkTypesQuery.refetch();
     void deliveryTargetsQuery.refetch();
     void eventSinksQuery.refetch();
   };
@@ -135,14 +140,16 @@ export function SinksPage() {
   const handleTargetSubmit = async (values: DeliveryTargetFormValues) => {
     try {
       if (targetModalMode === "create") {
-        await createDeliveryTargetMutation.mutateAsync(
-          toCreateDeliveryTargetPayload(values),
-        );
+        await createDeliveryTargetMutation.mutateAsync({
+          payload: toCreateDeliveryTargetPayload(values),
+          sinkTypes,
+        });
         message.success(`Delivery target ${values.target_id} 创建成功`);
       } else if (editingTarget) {
         await updateDeliveryTargetMutation.mutateAsync({
           id: editingTarget.id,
           payload: toUpdateDeliveryTargetPayload(values),
+          sinkTypes,
         });
         message.success(`Delivery target ${editingTarget.target_id} 保存成功`);
       }
@@ -158,14 +165,12 @@ export function SinksPage() {
   const handleSinkSubmit = async (values: EventSinkFormValues) => {
     try {
       if (sinkModalMode === "create") {
-        await createEventSinkMutation.mutateAsync(
-          toCreateEventSinkPayload(values, targets),
-        );
+        await createEventSinkMutation.mutateAsync(toCreateEventSinkPayload(values));
         message.success(`Event sink ${values.sink_id} 创建成功`);
       } else if (editingSink) {
         await updateEventSinkMutation.mutateAsync({
           id: editingSink.id,
-          payload: toUpdateEventSinkPayload(values, targets),
+          payload: toUpdateEventSinkPayload(values),
         });
         message.success(`Event sink ${editingSink.sink_id} 保存成功`);
       }
@@ -219,7 +224,11 @@ export function SinksPage() {
         <Space>
           <Button
             onClick={refreshAll}
-            loading={deliveryTargetsQuery.isFetching || eventSinksQuery.isFetching}
+            loading={
+              sinkTypesQuery.isFetching ||
+              deliveryTargetsQuery.isFetching ||
+              eventSinksQuery.isFetching
+            }
           >
             刷新
           </Button>
@@ -250,7 +259,7 @@ export function SinksPage() {
           status="error"
           title="Sink 配置加载失败"
           subTitle={getErrorMessage(
-            deliveryTargetsQuery.error ?? eventSinksQuery.error,
+            sinkTypesQuery.error ?? deliveryTargetsQuery.error ?? eventSinksQuery.error,
           )}
           extra={
             <Button type="primary" onClick={refreshAll}>
@@ -291,6 +300,7 @@ export function SinksPage() {
                 children: (
                   <DeliveryTargetsTable
                     targets={targets}
+                    sinkTypes={sinkTypes}
                     deletingTargetId={deletingTargetId}
                     actionsDisabled={deletingTargetId !== null}
                     onEdit={openEditTargetModal}
@@ -305,6 +315,7 @@ export function SinksPage() {
                   <EventSinksTable
                     sinks={sinks}
                     targets={targets}
+                    sinkTypes={sinkTypes}
                     deletingSinkId={deletingSinkId}
                     actionsDisabled={deletingSinkId !== null}
                     onEdit={openEditSinkModal}
@@ -321,6 +332,7 @@ export function SinksPage() {
         open={isTargetModalOpen}
         mode={targetModalMode}
         target={editingTarget}
+        sinkTypes={sinkTypes}
         confirmLoading={isTargetSubmitting}
         onCancel={closeTargetModal}
         onSubmit={handleTargetSubmit}
@@ -330,6 +342,7 @@ export function SinksPage() {
         mode={sinkModalMode}
         sink={editingSink}
         targets={targets}
+        sinkTypes={sinkTypes}
         confirmLoading={isSinkSubmitting}
         onCancel={closeSinkModal}
         onSubmit={handleSinkSubmit}

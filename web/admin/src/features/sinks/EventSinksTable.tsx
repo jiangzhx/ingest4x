@@ -1,6 +1,6 @@
 import { Button, Empty, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import type { DeliveryTarget, EventSink } from "./types";
+import type { DeliveryTarget, EventSink, SinkTypeMetadata } from "./types";
 import {
   formatSinkTimestamp,
   getDeliveryTargetTypeLabel,
@@ -9,20 +9,28 @@ import {
 type EventSinksTableProps = {
   sinks: EventSink[];
   targets: DeliveryTarget[];
+  sinkTypes: SinkTypeMetadata[];
   deletingSinkId?: number | null;
   actionsDisabled?: boolean;
   onEdit: (sink: EventSink) => void;
   onDelete: (sink: EventSink) => Promise<void>;
 };
 
-function targetLabel(sink: EventSink, targets: DeliveryTarget[]): string {
+function targetLabel(
+  sink: EventSink,
+  targets: DeliveryTarget[],
+  sinkTypes: SinkTypeMetadata[],
+): string {
   const target = targets.find((candidate) => candidate.id === sink.delivery_target_id);
 
   if (!target) {
     return `#${sink.delivery_target_id}`;
   }
 
-  return `${target.target_id} / ${getDeliveryTargetTypeLabel(target.target_type)}`;
+  return `${target.target_id} / ${getDeliveryTargetTypeLabel(
+    target.target_type,
+    sinkTypes,
+  )}`;
 }
 
 function destinationLabel(sink: EventSink): string {
@@ -38,6 +46,7 @@ function destinationLabel(sink: EventSink): string {
 export function EventSinksTable({
   sinks,
   targets,
+  sinkTypes,
   deletingSinkId = null,
   actionsDisabled = false,
   onEdit,
@@ -70,7 +79,7 @@ export function EventSinksTable({
       width: 260,
       ellipsis: true,
       render: (_, sink) => {
-        const label = targetLabel(sink, targets);
+        const label = targetLabel(sink, targets, sinkTypes);
 
         return (
           <Typography.Text ellipsis={{ tooltip: label }}>

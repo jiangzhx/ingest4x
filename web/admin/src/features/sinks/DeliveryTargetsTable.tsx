@@ -1,6 +1,6 @@
 import { Button, Empty, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import type { DeliveryTarget } from "./types";
+import type { DeliveryTarget, SinkTypeMetadata } from "./types";
 import {
   formatSinkTimestamp,
   getDeliveryTargetTypeLabel,
@@ -8,6 +8,7 @@ import {
 
 type DeliveryTargetsTableProps = {
   targets: DeliveryTarget[];
+  sinkTypes: SinkTypeMetadata[];
   deletingTargetId?: number | null;
   actionsDisabled?: boolean;
   onEdit: (target: DeliveryTarget) => void;
@@ -16,6 +17,7 @@ type DeliveryTargetsTableProps = {
 
 export function DeliveryTargetsTable({
   targets,
+  sinkTypes,
   deletingTargetId = null,
   actionsDisabled = false,
   onEdit,
@@ -42,7 +44,7 @@ export function DeliveryTargetsTable({
       width: 120,
       render: (value: DeliveryTarget["target_type"]) => (
         <Tag color={value === "kafka" ? "blue" : "default"}>
-          {getDeliveryTargetTypeLabel(value)}
+          {getDeliveryTargetTypeLabel(value, sinkTypes)}
         </Tag>
       ),
     },

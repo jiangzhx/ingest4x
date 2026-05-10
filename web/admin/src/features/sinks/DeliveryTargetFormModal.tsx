@@ -3,34 +3,38 @@ import { Form, Input, Modal, Select, Switch } from "antd";
 import type {
   DeliveryTarget,
   DeliveryTargetFormValues,
-  DeliveryTargetType,
+  SinkTypeMetadata,
 } from "./types";
-import { deliveryTargetToFormValues } from "./utils";
+import {
+  deliveryTargetToFormValues,
+  parseJsonObject,
+  stringifyJsonObject,
+} from "./utils";
 
 type DeliveryTargetFormModalProps = {
   open: boolean;
   mode: "create" | "edit";
   target?: DeliveryTarget | null;
+  sinkTypes: SinkTypeMetadata[];
   confirmLoading?: boolean;
   onCancel: () => void;
   onSubmit: (values: DeliveryTargetFormValues) => Promise<void>;
 };
 
-const targetTypeOptions: Array<{ label: string; value: DeliveryTargetType }> = [
-  { label: "Kafka", value: "kafka" },
-  { label: "stdout", value: "stdout" },
-];
-
 export function DeliveryTargetFormModal({
   open,
   mode,
   target,
+  sinkTypes,
   confirmLoading = false,
   onCancel,
   onSubmit,
 }: DeliveryTargetFormModalProps) {
   const [form] = Form.useForm<DeliveryTargetFormValues>();
-  const targetType = Form.useWatch("target_type", form) ?? "kafka";
+  const targetTypeOptions = sinkTypes.map((sinkType) => ({
+    label: sinkType.label,
+    value: sinkType.target_type,
+  }));
 
   useEffect(() => {
     if (!open) {
@@ -38,21 +42,21 @@ export function DeliveryTargetFormModal({
       return;
     }
 
-    form.setFieldsValue(deliveryTargetToFormValues(target));
-  }, [form, open, target]);
+    const nextValues = deliveryTargetToFormValues(target);
+    if (!target && sinkTypes[0]) {
+      nextValues.target_type = sinkTypes[0].target_type;
+    }
+    form.setFieldsValue(nextValues);
+  }, [form, open, sinkTypes, target]);
 
   const handleOk = async () => {
     const values = await form.validateFields();
+    const config = parseJsonObject(values.config_json, "连接配置");
     await onSubmit({
       ...values,
       target_id: values.target_id.trim(),
       name: values.name.trim(),
-      bootstrap_servers: values.bootstrap_servers.trim(),
-      delivery_timeout_ms: values.delivery_timeout_ms.trim(),
-      queue_buffering_max_ms: values.queue_buffering_max_ms.trim(),
-      batch_num_messages: values.batch_num_messages.trim(),
-      queue_buffering_max_messages: values.queue_buffering_max_messages.trim(),
-      linger_ms: values.linger_ms.trim(),
+      config_json: stringifyJsonObject(config),
     });
   };
 
@@ -102,59 +106,33 @@ export function DeliveryTargetFormModal({
         >
           <Select options={targetTypeOptions} disabled={mode === "edit"} />
         </Form.Item>
-        {targetType === "kafka" ? (
-          <>
-            <Form.Item<DeliveryTargetFormValues>
-              label="Bootstrap Servers"
-              name="bootstrap_servers"
-              rules={[
-                { required: true, message: "请输入 Kafka bootstrap_servers" },
-                { whitespace: true, message: "bootstrap_servers 不能为空" },
-              ]}
-            >
-              <Input placeholder="127.0.0.1:9092" />
-            </Form.Item>
-            <Form.Item<DeliveryTargetFormValues>
-              label="Delivery Timeout"
-              name="delivery_timeout_ms"
-              rules={[{ required: true, message: "请输入 delivery_timeout_ms" }]}
-            >
-              <Input placeholder="3000" />
-            </Form.Item>
-            <Form.Item<DeliveryTargetFormValues>
-              label="Queue Buffering Max"
-              name="queue_buffering_max_ms"
-              rules={[{ required: true, message: "请输入 queue_buffering_max_ms" }]}
-            >
-              <Input placeholder="0" />
-            </Form.Item>
-            <Form.Item<DeliveryTargetFormValues>
-              label="Batch Messages"
-              name="batch_num_messages"
-              rules={[{ required: true, message: "请输入 batch_num_messages" }]}
-            >
-              <Input placeholder="100" />
-            </Form.Item>
-            <Form.Item<DeliveryTargetFormValues>
-              label="Queue Messages"
-              name="queue_buffering_max_messages"
-              rules={[
-                { required: true, message: "请输入 queue_buffering_max_messages" },
-              ]}
-            >
-              <Input placeholder="300" />
-            </Form.Item>
-            <Form.Item<DeliveryTargetFormValues>
-              label="Linger"
-              name="linger_ms"
-              rules={[{ required: true, message: "请输入 linger_ms" }]}
-            >
-              <Input placeholder="100" />
-            </Form.Item>
-          </>
-        ) : null}
-        <Form.Item<DeliveryTargetFormValues> label="附加连接配置" name="config_json">
-          <Input.TextArea rows={4} spellCheck={false} />
+        <Form.Item<DeliveryTargetFormValues>
+          label="连接配置 JSON"
+          name="config_json"
+          rules={[
+            {
+              validator: (_, value: string | undefined) => {
+                parseJsonObject(value ?? "", "连接配置");
+                return Promise.resolve();
+              },
+            },
+          ]}
+        >
+          <Input.TextArea
+            rows={12}
+            spellCheck={false}
+            onBlur={() => {
+              try {
+                const config = parseJsonObject(
+                  form.getFieldValue("config_json") ?? "",
+                  "连接配置",
+                );
+                form.setFieldValue("config_json", stringifyJsonObject(config));
+              } catch {
+                // The form validator renders the actionable error on save.
+              }
+            }}
+          />
         </Form.Item>
         <Form.Item<DeliveryTargetFormValues>
           label="启用状态"

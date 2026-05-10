@@ -1,5 +1,10 @@
-export type DeliveryTargetType = "kafka" | "stdout";
+export type DeliveryTargetType = string;
 export type AutoOffsetReset = "latest" | "earliest";
+
+export interface SinkTypeMetadata {
+  target_type: DeliveryTargetType;
+  label: string;
+}
 
 export interface DeliveryTarget {
   id: number;
@@ -28,12 +33,6 @@ export interface DeliveryTargetFormValues {
   target_id: string;
   name: string;
   target_type: DeliveryTargetType;
-  bootstrap_servers: string;
-  delivery_timeout_ms: string;
-  queue_buffering_max_ms: string;
-  batch_num_messages: string;
-  queue_buffering_max_messages: string;
-  linger_ms: string;
   config_json: string;
   enabled: boolean;
 }
@@ -42,7 +41,6 @@ export interface EventSinkFormValues {
   sink_id: string;
   name: string;
   delivery_target_id: number | null;
-  topic: string;
   destination_json: string;
   auto_offset_reset: AutoOffsetReset;
   enabled: boolean;

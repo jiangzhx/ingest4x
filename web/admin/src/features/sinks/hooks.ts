@@ -6,6 +6,7 @@ import {
   deleteEventSink,
   listDeliveryTargets,
   listEventSinks,
+  listSinkTypes,
   updateDeliveryTarget,
   updateEventSink,
 } from "./api";
@@ -14,15 +15,25 @@ import type {
   CreateEventSinkPayload,
   UpdateDeliveryTargetPayload,
   UpdateEventSinkPayload,
+  SinkTypeMetadata,
 } from "./types";
 
 export const deliveryTargetsQueryKey = ["admin", "delivery-targets"] as const;
 export const eventSinksQueryKey = ["admin", "event-sinks"] as const;
+export const sinkTypesQueryKey = ["admin", "sink-types"] as const;
 
-export function useDeliveryTargetsQuery() {
+export function useSinkTypesQuery() {
   return useQuery({
-    queryKey: deliveryTargetsQueryKey,
-    queryFn: listDeliveryTargets,
+    queryKey: sinkTypesQueryKey,
+    queryFn: listSinkTypes,
+  });
+}
+
+export function useDeliveryTargetsQuery(sinkTypes: SinkTypeMetadata[]) {
+  return useQuery({
+    queryKey: [...deliveryTargetsQueryKey, sinkTypes.map((type) => type.target_type)],
+    queryFn: () => listDeliveryTargets(sinkTypes),
+    enabled: sinkTypes.length > 0,
   });
 }
 
@@ -37,7 +48,13 @@ export function useCreateDeliveryTargetMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (payload: CreateDeliveryTargetPayload) => createDeliveryTarget(payload),
+    mutationFn: ({
+      payload,
+      sinkTypes,
+    }: {
+      payload: CreateDeliveryTargetPayload;
+      sinkTypes: SinkTypeMetadata[];
+    }) => createDeliveryTarget(payload, sinkTypes),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: deliveryTargetsQueryKey });
       await queryClient.invalidateQueries({ queryKey: eventSinksQueryKey });
@@ -52,10 +69,12 @@ export function useUpdateDeliveryTargetMutation() {
     mutationFn: ({
       id,
       payload,
+      sinkTypes,
     }: {
       id: number;
       payload: UpdateDeliveryTargetPayload;
-    }) => updateDeliveryTarget(id, payload),
+      sinkTypes: SinkTypeMetadata[];
+    }) => updateDeliveryTarget(id, payload, sinkTypes),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: deliveryTargetsQueryKey });
       await queryClient.invalidateQueries({ queryKey: eventSinksQueryKey });
