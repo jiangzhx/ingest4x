@@ -25,9 +25,3 @@ wal_segment_max_bytes = 134217728
 flush_interval = "1s"
 flush_records = 1000
 flush_bytes = 67108864
-
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"

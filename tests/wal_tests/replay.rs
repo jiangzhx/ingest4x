@@ -1,4 +1,5 @@
 use crate::support::mock_services::build_app_state_with_test_processor;
+use crate::support::sinks::{kafka_runtime_sink, stdout_runtime_sink};
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use base64::engine::general_purpose::STANDARD;
@@ -12,10 +13,8 @@ use ingest4x::repositories::{
 };
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
-use ingest4x::settings::{
-    AutoOffsetReset, CheckpointSettings, EventSinkConfig, EventsSettings, Settings,
-};
-use ingest4x::utils::events::init_event_sinks;
+use ingest4x::settings::{AutoOffsetReset, CheckpointSettings, Settings};
+use ingest4x::sinks::init_event_sinks_from_runtime_sinks;
 use ingest4x::wal::replay::{initialize_sink_checkpoints, replay_once, WalReplayContext};
 use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -23,7 +22,7 @@ use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
 use rdkafka::{ClientConfig, Message};
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
@@ -39,6 +38,7 @@ async fn wal_replay_sends_records_to_kafka_and_advances_checkpoint() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-replay.toml");
+    let db_url = sqlite_url(temp.path());
     let kafka = create_kafka_config("wal-replay-valid");
     let consumer = create_consumer(&kafka, "wal-replay-main-topic", &kafka.topic);
 
@@ -52,40 +52,18 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
+[database]
+url = "{}"
+
 [wal]
 dir = "{}"
-
-[events.sink.events]
-type = "kafka"
-auto_offset_reset = "earliest"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
-
-[events.sink.events_error]
-type = "kafka"
-auto_offset_reset = "earliest"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
 "#,
+            db_url,
             wal_dir.display(),
-            kafka.bootstrap_servers,
-            kafka.topic,
-            kafka.bootstrap_servers,
-            kafka.error_topic
         ),
     )
     .expect("write config");
-
+    seed_kafka_event_sinks(db_url.as_str(), &kafka, AutoOffsetReset::Earliest).await;
     let settings = Arc::new(
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
@@ -172,7 +150,7 @@ async fn wal_replay_uses_project_bound_database_processor_script() {
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: "events_target".to_string(),
             name: "events target".to_string(),
-            target_type: DeliveryTargetType::Kafka,
+            target_type: DeliveryTargetType::kafka(),
             config_json: json!({
                 "bootstrap_servers": kafka.bootstrap_servers,
                 "delivery_timeout_ms": "5000",
@@ -244,39 +222,12 @@ url = "{}"
 
 [wal]
 dir = "{}"
-
-[events.sink.events]
-type = "kafka"
-auto_offset_reset = "earliest"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
-
-[events.sink.events_error]
-type = "kafka"
-auto_offset_reset = "earliest"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
 "#,
             db_url,
             wal_dir.display(),
-            kafka.bootstrap_servers,
-            kafka.topic,
-            kafka.bootstrap_servers,
-            kafka.error_topic
         ),
     )
     .expect("write config");
-
     let settings = Arc::new(
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
@@ -349,36 +300,20 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([
-            (
-                "kafka_original".to_string(),
-                EventSinkConfig::Kafka {
-                    bootstrap_servers: kafka.bootstrap_servers.clone(),
-                    topic: kafka.topic.clone(),
-                    auto_offset_reset: AutoOffsetReset::Earliest,
-                    delivery_timeout_ms: "5000".to_string(),
-                    queue_buffering_max_ms: "0".to_string(),
-                    batch_num_messages: "1".to_string(),
-                    queue_buffering_max_messages: "300".to_string(),
-                    linger_ms: "0".to_string(),
-                },
-            ),
-            (
-                "kafka_mutated".to_string(),
-                EventSinkConfig::Kafka {
-                    bootstrap_servers: kafka.bootstrap_servers.clone(),
-                    topic: mutated_topic,
-                    auto_offset_reset: AutoOffsetReset::Earliest,
-                    delivery_timeout_ms: "5000".to_string(),
-                    queue_buffering_max_ms: "0".to_string(),
-                    batch_num_messages: "1".to_string(),
-                    queue_buffering_max_messages: "300".to_string(),
-                    linger_ms: "0".to_string(),
-                },
-            ),
-        ]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![
+        kafka_runtime_sink(
+            "kafka_original",
+            &kafka.bootstrap_servers,
+            &kafka.topic,
+            AutoOffsetReset::Earliest,
+        ),
+        kafka_runtime_sink(
+            "kafka_mutated",
+            &kafka.bootstrap_servers,
+            &mutated_topic,
+            AutoOffsetReset::Earliest,
+        ),
+    ])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -442,6 +377,7 @@ async fn wal_replay_quarantines_invalid_json_record_and_continues() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-replay-invalid-json.toml");
+    let db_url = sqlite_url(temp.path());
     let kafka = create_kafka_config("wal-replay-invalid-json");
     let consumer = create_consumer(&kafka, "wal-replay-invalid-json-topic", &kafka.topic);
 
@@ -455,39 +391,18 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
+[database]
+url = "{}"
+
 [wal]
 dir = "{}"
-
-[events.sink.events]
-type = "kafka"
-auto_offset_reset = "earliest"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
-
-[events.sink.events_error]
-type = "kafka"
-auto_offset_reset = "earliest"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
 "#,
+            db_url,
             wal_dir.display(),
-            kafka.bootstrap_servers,
-            kafka.topic,
-            kafka.bootstrap_servers,
-            kafka.error_topic
         ),
     )
     .expect("write config");
+    seed_kafka_event_sinks(db_url.as_str(), &kafka, AutoOffsetReset::Earliest).await;
 
     let settings = Arc::new(
         Settings::init_with_file(config_path.to_str().expect("config path"))
@@ -580,9 +495,10 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
+        "stdout",
+        AutoOffsetReset::Earliest,
+    )])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -677,9 +593,10 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
+        "stdout",
+        AutoOffsetReset::Earliest,
+    )])
     .expect("event sinks should initialize");
     let processor = ProcessorState::new(
         r#"
@@ -760,12 +677,10 @@ async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([
-            ("sink_a".to_string(), stdout_sink(AutoOffsetReset::Earliest)),
-            ("sink_b".to_string(), stdout_sink(AutoOffsetReset::Earliest)),
-        ]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![
+        stdout_runtime_sink("sink_a", AutoOffsetReset::Earliest),
+        stdout_runtime_sink("sink_b", AutoOffsetReset::Earliest),
+    ])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -845,9 +760,10 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Latest))]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
+        "stdout",
+        AutoOffsetReset::Latest,
+    )])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -921,9 +837,10 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Latest))]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
+        "stdout",
+        AutoOffsetReset::Latest,
+    )])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -999,9 +916,10 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
+        "stdout",
+        AutoOffsetReset::Earliest,
+    )])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -1094,21 +1012,12 @@ async fn wal_replay_rejects_tampered_sink_checkpoint() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([(
-            "kafka_valid".to_string(),
-            EventSinkConfig::Kafka {
-                bootstrap_servers: kafka.bootstrap_servers.clone(),
-                topic: kafka.topic.clone(),
-                auto_offset_reset: AutoOffsetReset::Earliest,
-                delivery_timeout_ms: "5000".to_string(),
-                queue_buffering_max_ms: "0".to_string(),
-                batch_num_messages: "1".to_string(),
-                queue_buffering_max_messages: "300".to_string(),
-                linger_ms: "0".to_string(),
-            },
-        )]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![kafka_runtime_sink(
+        "kafka_valid",
+        &kafka.bootstrap_servers,
+        &kafka.topic,
+        AutoOffsetReset::Earliest,
+    )])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -1181,6 +1090,7 @@ async fn wal_replay_removes_segments_before_checkpoint() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-replay-cleanup.toml");
+    let db_url = sqlite_url(temp.path());
     let kafka = create_kafka_config("wal-replay-cleanup");
 
     fs::write(
@@ -1193,38 +1103,19 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
+[database]
+url = "{}"
+
 [wal]
 dir = "{}"
 wal_segment_max_bytes = 16
-
-[events.sink.events]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
-
-[events.sink.events_error]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
 "#,
+            db_url,
             wal_dir.display(),
-            kafka.bootstrap_servers,
-            kafka.topic,
-            kafka.bootstrap_servers,
-            kafka.error_topic
         ),
     )
     .expect("write config");
+    seed_kafka_event_sinks(db_url.as_str(), &kafka, AutoOffsetReset::Latest).await;
 
     let settings = Arc::new(
         Settings::init_with_file(config_path.to_str().expect("config path"))
@@ -1294,21 +1185,12 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([(
-            "kafka_valid".to_string(),
-            EventSinkConfig::Kafka {
-                bootstrap_servers: kafka.bootstrap_servers.clone(),
-                topic: kafka.topic.clone(),
-                auto_offset_reset: AutoOffsetReset::Earliest,
-                delivery_timeout_ms: "5000".to_string(),
-                queue_buffering_max_ms: "0".to_string(),
-                batch_num_messages: "1".to_string(),
-                queue_buffering_max_messages: "300".to_string(),
-                linger_ms: "0".to_string(),
-            },
-        )]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![kafka_runtime_sink(
+        "kafka_valid",
+        &kafka.bootstrap_servers,
+        &kafka.topic,
+        AutoOffsetReset::Earliest,
+    )])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -1386,9 +1268,10 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         .await
         .expect("project registry should load");
     let rule_repository = RuleRepository::new(db);
-    let event_sinks = init_event_sinks(&EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), stdout_sink(AutoOffsetReset::Earliest))]),
-    })
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
+        "stdout",
+        AutoOffsetReset::Earliest,
+    )])
     .expect("event sinks should initialize");
     let processor = processor_with_sinks(
         r#"
@@ -1478,6 +1361,73 @@ fn create_kafka_config(prefix: &str) -> TestKafkaConfig {
         topic,
         error_topic,
         _kafka_cluster: kafka_cluster,
+    }
+}
+
+fn sqlite_url(dir: &Path) -> String {
+    format!("sqlite://{}?mode=rwc", dir.join("ingest4x.db").display())
+}
+
+async fn seed_kafka_event_sinks(
+    db_url: &str,
+    kafka: &TestKafkaConfig,
+    auto_offset_reset: AutoOffsetReset,
+) {
+    let db = init_sqlite_database(db_url)
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    if !project_repository
+        .list_projects()
+        .await
+        .expect("projects should list")
+        .iter()
+        .any(|project| project.ingest_token == "igx_APPID")
+    {
+        project_repository
+            .create_project(CreateProjectInput {
+                name: "APPID".to_string(),
+                enabled: true,
+                ingest_token: "igx_APPID".to_string(),
+            })
+            .await
+            .expect("project should be created");
+    }
+
+    let repository = EventSinkRepository::new(db);
+    let target = repository
+        .create_delivery_target(CreateDeliveryTargetInput {
+            target_id: "test_kafka".to_string(),
+            name: "Test Kafka".to_string(),
+            target_type: DeliveryTargetType::kafka(),
+            config_json: json!({
+                "bootstrap_servers": &kafka.bootstrap_servers,
+                "delivery_timeout_ms": "5000",
+                "queue_buffering_max_ms": "0",
+                "batch_num_messages": "1",
+                "queue_buffering_max_messages": "300",
+                "linger_ms": "0"
+            }),
+            enabled: true,
+        })
+        .await
+        .expect("kafka delivery target should be created");
+
+    for (sink_id, topic) in [
+        ("events", kafka.topic.as_str()),
+        ("events_error", kafka.error_topic.as_str()),
+    ] {
+        repository
+            .create_event_sink(CreateEventSinkInput {
+                sink_id: sink_id.to_string(),
+                name: sink_id.to_string(),
+                delivery_target_id: target.id,
+                destination_json: json!({ "topic": topic }),
+                auto_offset_reset,
+                enabled: true,
+            })
+            .await
+            .expect("event sink should be created");
     }
 }
 
@@ -1613,10 +1563,6 @@ fn install_quarantine_capture() -> (CapturedQuarantineLogs, tracing::subscriber:
     let subscriber = tracing_subscriber::registry().with(logs.clone());
     let guard = tracing::subscriber::set_default(subscriber);
     (logs, guard)
-}
-
-fn stdout_sink(auto_offset_reset: AutoOffsetReset) -> EventSinkConfig {
-    EventSinkConfig::Stdout { auto_offset_reset }
 }
 
 fn rewrite_wal_entry_lsn(wal_dir: &Path, entry_index: usize, new_lsn: u64) {

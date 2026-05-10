@@ -1,11 +1,10 @@
-use crate::repositories::{DeliveryTargetType, EventSinkRepository, RuntimeEventSink};
+use crate::repositories::{EventSinkRepository, RuntimeEventSink};
 use crate::rhai_ctx::ProcessorDelivery;
-use crate::settings::{AutoOffsetReset, EventSinkConfig, EventsSettings};
-use crate::utils::kafka::KafkaProducer;
+use crate::settings::AutoOffsetReset;
+use crate::sinks::{build_sink, EventSinkRuntime};
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
 use futures::lock::Mutex as AsyncMutex;
-use rdkafka::config::ClientConfig;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -95,9 +94,13 @@ impl EventSinkState {
     }
 }
 
-pub fn init_event_sinks(settings: &EventsSettings) -> Result<Data<EventSinkState>> {
+pub fn init_event_sinks_from_runtime_sinks(
+    runtime_sinks: Vec<RuntimeEventSink>,
+) -> Result<Data<EventSinkState>> {
     Ok(Data::new(EventSinkState {
-        router: Arc::new(RwLock::new(Arc::new(EventRouter::from_settings(settings)?))),
+        router: Arc::new(RwLock::new(Arc::new(EventRouter::from_runtime_sinks(
+            runtime_sinks,
+        )?))),
         repository: None,
         version: Arc::new(AtomicU64::new(0)),
         refresh_lock: Arc::new(AsyncMutex::new(())),
@@ -124,27 +127,11 @@ struct EventRouter {
 }
 
 struct EventSinkEntry {
-    sink: EventSink,
+    sink: Box<dyn EventSinkRuntime>,
     auto_offset_reset: AutoOffsetReset,
 }
 
 impl EventRouter {
-    fn from_settings(settings: &EventsSettings) -> Result<Self> {
-        let mut sinks = HashMap::new();
-
-        for (name, config) in &settings.sink {
-            sinks.insert(
-                name.clone(),
-                EventSinkEntry {
-                    sink: EventSink::from_config(config)?,
-                    auto_offset_reset: config.auto_offset_reset(),
-                },
-            );
-        }
-
-        Ok(Self { sinks })
-    }
-
     fn from_runtime_sinks(runtime_sinks: Vec<RuntimeEventSink>) -> Result<Self> {
         let mut sinks = HashMap::new();
 
@@ -153,7 +140,7 @@ impl EventRouter {
                 runtime_sink.sink_id.clone(),
                 EventSinkEntry {
                     auto_offset_reset: runtime_sink.auto_offset_reset,
-                    sink: EventSink::from_runtime_sink(&runtime_sink)?,
+                    sink: build_sink(&runtime_sink)?,
                 },
             );
         }
@@ -162,28 +149,32 @@ impl EventRouter {
     }
 
     async fn send_deliveries(&self, deliveries: &[ProcessorDelivery]) -> Result<()> {
-        let mut sinks = Vec::with_capacity(deliveries.len());
+        let mut deliveries_by_sink: HashMap<&str, Vec<Value>> = HashMap::new();
         for delivery in deliveries {
             if delivery.target.trim().is_empty() {
                 tracing::warn!("processor delivery ignored empty sink target");
                 continue;
             }
-            let sink = self.sinks.get(&delivery.target).or_else(|| {
+            let Some(_sink) = self.sinks.get(&delivery.target) else {
                 tracing::warn!(
                     target = delivery.target.as_str(),
                     "processor delivery ignored unknown sink target"
                 );
-                None
-            });
-            let Some(sink) = sink else {
                 continue;
             };
-            let payload = serde_json::to_vec(&delivery.event)?;
-            sinks.push((delivery.target.as_str(), &sink.sink, payload));
+            deliveries_by_sink
+                .entry(delivery.target.as_str())
+                .or_default()
+                .push(delivery.event.clone());
         }
 
-        for (target, sink, payload) in sinks {
-            sink.send(&payload)
+        for (target, payloads) in deliveries_by_sink {
+            let sink = self
+                .sinks
+                .get(target)
+                .ok_or_else(|| anyhow!("unknown event sink target `{target}`"))?;
+            sink.sink
+                .send_batch(&payloads)
                 .await
                 .with_context(|| format!("event sink `{target}` failed"))?;
         }
@@ -196,9 +187,9 @@ impl EventRouter {
             .sinks
             .get(&delivery.target)
             .ok_or_else(|| anyhow!("unknown event sink target `{}`", delivery.target))?;
-        let payload = serde_json::to_vec(&delivery.event)?;
+        let events = [delivery.event.clone()];
         sink.sink
-            .send(&payload)
+            .send_batch(&events)
             .await
             .with_context(|| format!("event sink `{}` failed", delivery.target))
     }
@@ -228,165 +219,28 @@ impl EventRouter {
     }
 }
 
-enum EventSink {
-    Kafka {
-        producer: KafkaProducer,
-        topic: String,
-    },
-    Stdout,
-}
-
-impl EventSink {
-    fn from_config(config: &EventSinkConfig) -> Result<Self> {
-        match config {
-            EventSinkConfig::Kafka {
-                bootstrap_servers,
-                topic,
-                auto_offset_reset: _,
-                delivery_timeout_ms,
-                queue_buffering_max_ms,
-                batch_num_messages,
-                queue_buffering_max_messages,
-                linger_ms,
-            } => {
-                let producer = KafkaProducer::new(
-                    ClientConfig::new()
-                        .set("bootstrap.servers", bootstrap_servers)
-                        .set("queue.buffering.max.ms", queue_buffering_max_ms)
-                        .set("delivery.timeout.ms", delivery_timeout_ms)
-                        .set("batch.num.messages", batch_num_messages)
-                        .set("queue.buffering.max.messages", queue_buffering_max_messages)
-                        .set("linger.ms", linger_ms)
-                        .set("compression.type", "snappy")
-                        .clone(),
-                );
-                Ok(Self::Kafka {
-                    producer,
-                    topic: topic.clone(),
-                })
-            }
-            EventSinkConfig::Stdout {
-                auto_offset_reset: _,
-            } => Ok(Self::Stdout),
-        }
-    }
-
-    async fn send(&self, payload: &[u8]) -> Result<()> {
-        match self {
-            Self::Kafka { producer, topic } => producer.send_value(topic, payload.to_vec()).await,
-            Self::Stdout => {
-                let payload = serde_json::from_slice::<Value>(payload)
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|_| String::from_utf8_lossy(payload).into_owned());
-                println!("{payload}");
-                Ok(())
-            }
-        }
-    }
-
-    fn from_runtime_sink(sink: &RuntimeEventSink) -> Result<Self> {
-        match sink.target.target_type {
-            DeliveryTargetType::Kafka => {
-                let bootstrap_servers =
-                    required_string(&sink.target.config_json, "bootstrap_servers")?;
-                let delivery_timeout_ms =
-                    required_string(&sink.target.config_json, "delivery_timeout_ms")?;
-                let queue_buffering_max_ms =
-                    required_string(&sink.target.config_json, "queue_buffering_max_ms")?;
-                let batch_num_messages =
-                    required_string(&sink.target.config_json, "batch_num_messages")?;
-                let queue_buffering_max_messages =
-                    required_string(&sink.target.config_json, "queue_buffering_max_messages")?;
-                let linger_ms = required_string(&sink.target.config_json, "linger_ms")?;
-                let topic = required_string(&sink.destination_json, "topic")?;
-
-                let producer = KafkaProducer::new(
-                    ClientConfig::new()
-                        .set("bootstrap.servers", bootstrap_servers)
-                        .set("queue.buffering.max.ms", queue_buffering_max_ms)
-                        .set("delivery.timeout.ms", delivery_timeout_ms)
-                        .set("batch.num.messages", batch_num_messages)
-                        .set("queue.buffering.max.messages", queue_buffering_max_messages)
-                        .set("linger.ms", linger_ms)
-                        .set("compression.type", "snappy")
-                        .clone(),
-                );
-                Ok(Self::Kafka {
-                    producer,
-                    topic: topic.to_string(),
-                })
-            }
-            DeliveryTargetType::Stdout => Ok(Self::Stdout),
-        }
-    }
-
-    async fn check_alive(&self) -> Result<()> {
-        match self {
-            Self::Kafka { producer, .. } => producer
-                .check_alive()
-                .await
-                .map_err(|error| anyhow::Error::from(error)),
-            Self::Stdout => Ok(()),
-        }
-    }
-}
-
-fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("missing required string field `{field}`"))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::init_event_sinks;
+    use super::init_event_sinks_from_runtime_sinks;
+    use crate::repositories::{DeliveryTarget, DeliveryTargetType, RuntimeEventSink};
     use crate::rhai_ctx::ProcessorDelivery;
-    use crate::settings::{AutoOffsetReset, EventSinkConfig, EventsSettings};
+    use crate::settings::AutoOffsetReset;
     use rdkafka::consumer::{Consumer, StreamConsumer};
     use rdkafka::mocking::MockCluster;
     use rdkafka::producer::DefaultProducerContext;
     use rdkafka::{ClientConfig, Message};
     use serde_json::json;
-    use std::collections::HashMap;
 
     #[tokio::test]
     async fn sends_processed_event_to_all_declared_targets() {
         let kafka = create_kafka_cluster(&["raw-events", "payment-events"]);
         let raw_consumer = create_consumer(&kafka, "raw-target", "raw-events");
         let payment_consumer = create_consumer(&kafka, "payment-target", "payment-events");
-        let settings = EventsSettings {
-            sink: HashMap::from([
-                (
-                    "kafka_raw".to_string(),
-                    EventSinkConfig::Kafka {
-                        bootstrap_servers: kafka.bootstrap_servers.clone(),
-                        topic: "raw-events".to_string(),
-                        auto_offset_reset: AutoOffsetReset::Latest,
-                        delivery_timeout_ms: "5000".to_string(),
-                        queue_buffering_max_ms: "0".to_string(),
-                        batch_num_messages: "1".to_string(),
-                        queue_buffering_max_messages: "300".to_string(),
-                        linger_ms: "0".to_string(),
-                    },
-                ),
-                (
-                    "kafka_payment".to_string(),
-                    EventSinkConfig::Kafka {
-                        bootstrap_servers: kafka.bootstrap_servers.clone(),
-                        topic: "payment-events".to_string(),
-                        auto_offset_reset: AutoOffsetReset::Latest,
-                        delivery_timeout_ms: "5000".to_string(),
-                        queue_buffering_max_ms: "0".to_string(),
-                        batch_num_messages: "1".to_string(),
-                        queue_buffering_max_messages: "300".to_string(),
-                        linger_ms: "0".to_string(),
-                    },
-                ),
-            ]),
-        };
-        let sinks = init_event_sinks(&settings).expect("event sinks should initialize");
+        let sinks = init_event_sinks_from_runtime_sinks(vec![
+            kafka_runtime_sink("kafka_raw", &kafka.bootstrap_servers, "raw-events"),
+            kafka_runtime_sink("kafka_payment", &kafka.bootstrap_servers, "payment-events"),
+        ])
+        .expect("event sinks should initialize");
 
         sinks
             .send_deliveries(&[
@@ -416,22 +270,12 @@ mod tests {
     async fn ignores_unknown_declared_target_and_sends_known_targets() {
         let kafka = create_kafka_cluster(&["raw-events"]);
         let raw_consumer = create_consumer(&kafka, "unknown-target-ignored", "raw-events");
-        let settings = EventsSettings {
-            sink: HashMap::from([(
-                "kafka_raw".to_string(),
-                EventSinkConfig::Kafka {
-                    bootstrap_servers: kafka.bootstrap_servers.clone(),
-                    topic: "raw-events".to_string(),
-                    auto_offset_reset: AutoOffsetReset::Latest,
-                    delivery_timeout_ms: "5000".to_string(),
-                    queue_buffering_max_ms: "0".to_string(),
-                    batch_num_messages: "1".to_string(),
-                    queue_buffering_max_messages: "300".to_string(),
-                    linger_ms: "0".to_string(),
-                },
-            )]),
-        };
-        let sinks = init_event_sinks(&settings).expect("event sinks should initialize");
+        let sinks = init_event_sinks_from_runtime_sinks(vec![kafka_runtime_sink(
+            "kafka_raw",
+            &kafka.bootstrap_servers,
+            "raw-events",
+        )])
+        .expect("event sinks should initialize");
 
         sinks
             .send_deliveries(&[
@@ -490,5 +334,31 @@ mod tests {
         std::str::from_utf8(message.payload().expect("payload"))
             .expect("utf8 payload")
             .to_string()
+    }
+
+    fn kafka_runtime_sink(sink_id: &str, bootstrap_servers: &str, topic: &str) -> RuntimeEventSink {
+        RuntimeEventSink {
+            sink_id: sink_id.to_string(),
+            name: sink_id.to_string(),
+            destination_json: json!({ "topic": topic }),
+            auto_offset_reset: AutoOffsetReset::Latest,
+            target: DeliveryTarget {
+                id: 1,
+                target_id: format!("{sink_id}_target"),
+                name: format!("{sink_id} target"),
+                target_type: DeliveryTargetType::kafka(),
+                config_json: json!({
+                    "bootstrap_servers": bootstrap_servers,
+                    "delivery_timeout_ms": "5000",
+                    "queue_buffering_max_ms": "0",
+                    "batch_num_messages": "1",
+                    "queue_buffering_max_messages": "300",
+                    "linger_ms": "0"
+                }),
+                enabled: true,
+                created_at: 0,
+                updated_at: 0,
+            },
+        }
     }
 }

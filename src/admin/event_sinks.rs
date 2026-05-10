@@ -3,7 +3,7 @@ use crate::repositories::{
     EventSinkRepository, EventSinkRepositoryError, UpdateDeliveryTargetInput, UpdateEventSinkInput,
 };
 use crate::settings::AutoOffsetReset;
-use crate::utils::events::EventSinkState;
+use crate::sinks::{registered_sink_types, EventSinkState, SinkTypeMetadata};
 use actix_web::web::{self, Data, Json, Path, ServiceConfig};
 use actix_web::HttpResponse;
 use log::warn;
@@ -51,6 +51,12 @@ struct UpdateEventSinkRequest {
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
+struct SinkTypeResponse {
+    target_type: String,
+    label: String,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
 struct DeliveryTargetResponse {
     id: i32,
     target_id: String,
@@ -80,6 +86,7 @@ struct EventSinkResponse {
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        list_sink_types,
         list_delivery_targets,
         create_delivery_target,
         update_delivery_target,
@@ -95,6 +102,7 @@ struct EventSinkResponse {
             UpdateDeliveryTargetRequest,
             CreateEventSinkRequest,
             UpdateEventSinkRequest,
+            SinkTypeResponse,
             DeliveryTargetResponse,
             EventSinkResponse
         )
@@ -106,7 +114,8 @@ struct EventSinkResponse {
 pub struct AdminApiDoc;
 
 pub fn configure(cfg: &mut ServiceConfig) {
-    cfg.route("/delivery-targets", web::get().to(list_delivery_targets))
+    cfg.route("/sink-types", web::get().to(list_sink_types))
+        .route("/delivery-targets", web::get().to(list_delivery_targets))
         .route("/delivery-targets", web::post().to(create_delivery_target))
         .route(
             "/delivery-targets/{delivery_target_id}",
@@ -126,6 +135,24 @@ pub fn configure(cfg: &mut ServiceConfig) {
             "/event-sinks/{event_sink_id}",
             web::delete().to(delete_event_sink),
         );
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/admin/sink-types",
+    tag = "admin.event_sinks",
+    responses(
+        (status = 200, description = "List registered sink target types", body = [SinkTypeResponse])
+    )
+)]
+async fn list_sink_types() -> HttpResponse {
+    HttpResponse::Ok().json(
+        registered_sink_types()
+            .iter()
+            .copied()
+            .map(SinkTypeResponse::from)
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[utoipa::path(
@@ -394,11 +421,7 @@ fn map_repository_error(error: EventSinkRepositoryError) -> HttpResponse {
 }
 
 fn parse_delivery_target_type(value: &str) -> Result<DeliveryTargetType, String> {
-    match value {
-        "kafka" => Ok(DeliveryTargetType::Kafka),
-        "stdout" => Ok(DeliveryTargetType::Stdout),
-        _ => Err(format!("unknown delivery target type `{value}`")),
-    }
+    DeliveryTargetType::parse(value).map_err(|error| error.to_string())
 }
 
 fn parse_auto_offset_reset(value: &str) -> Result<AutoOffsetReset, String> {
@@ -406,13 +429,6 @@ fn parse_auto_offset_reset(value: &str) -> Result<AutoOffsetReset, String> {
         "earliest" => Ok(AutoOffsetReset::Earliest),
         "latest" => Ok(AutoOffsetReset::Latest),
         _ => Err(format!("unknown auto_offset_reset `{value}`")),
-    }
-}
-
-fn delivery_target_type_as_str(value: DeliveryTargetType) -> &'static str {
-    match value {
-        DeliveryTargetType::Kafka => "kafka",
-        DeliveryTargetType::Stdout => "stdout",
     }
 }
 
@@ -488,7 +504,7 @@ impl From<DeliveryTarget> for DeliveryTargetResponse {
             id: value.id,
             target_id: value.target_id,
             name: value.name,
-            target_type: delivery_target_type_as_str(value.target_type).to_string(),
+            target_type: value.target_type.as_str().to_string(),
             config_json: value.config_json,
             enabled: value.enabled,
             created_at: value.created_at,
@@ -509,6 +525,15 @@ impl From<EventSink> for EventSinkResponse {
             enabled: value.enabled,
             created_at: value.created_at,
             updated_at: value.updated_at,
+        }
+    }
+}
+
+impl From<SinkTypeMetadata> for SinkTypeResponse {
+    fn from(value: SinkTypeMetadata) -> Self {
+        Self {
+            target_type: value.target_type.to_string(),
+            label: value.label.to_string(),
         }
     }
 }

@@ -491,11 +491,6 @@ admin_password = "test-admin-password"
 [wal]
 dir = "{}"
 
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 "#,
             temp.path().join("wal").display()
         ),

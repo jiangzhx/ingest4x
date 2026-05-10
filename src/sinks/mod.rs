@@ -1,0 +1,238 @@
+use crate::repositories::{DeliveryTargetType, RuntimeEventSink};
+use anyhow::Result;
+use futures::future::BoxFuture;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+pub mod kafka;
+pub mod state;
+pub mod stdout;
+
+pub use state::{init_event_sinks_from_runtime_sinks, EventSinkState};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SinkTypeMetadata {
+    pub target_type: &'static str,
+    pub label: &'static str,
+}
+
+pub trait EventSink: Send + Sync {
+    type DeliveryTargetConfig: SinkConfig;
+    type EventSinkConfig: SinkConfig;
+
+    fn from_config(
+        target_config: Self::DeliveryTargetConfig,
+        sink_config: Self::EventSinkConfig,
+    ) -> Result<Self>
+    where
+        Self: Sized;
+
+    fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>>;
+
+    fn check_alive(&self) -> BoxFuture<'_, Result<()>>;
+}
+
+pub trait EventSinkRuntime: Send + Sync {
+    fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>>;
+
+    fn check_alive(&self) -> BoxFuture<'_, Result<()>>;
+}
+
+impl<T> EventSinkRuntime for T
+where
+    T: EventSink,
+{
+    fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>> {
+        EventSink::send_batch(self, events)
+    }
+
+    fn check_alive(&self) -> BoxFuture<'_, Result<()>> {
+        EventSink::check_alive(self)
+    }
+}
+
+pub trait EventSinkProvider: Send + Sync {
+    type Sink: EventSink + 'static;
+
+    fn sink_type(&self) -> SinkTypeMetadata;
+
+    fn normalize_delivery_target_config(&self, config_json: Value) -> Result<String, String> {
+        <Self::Sink as EventSink>::DeliveryTargetConfig::normalize(config_json)
+    }
+
+    fn normalize_event_sink_config(&self, config_json: Value) -> Result<String, String> {
+        <Self::Sink as EventSink>::EventSinkConfig::normalize(config_json)
+    }
+}
+
+pub trait SinkConfig: DeserializeOwned + Serialize {
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn parse(config_json: Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let config =
+            serde_json::from_value::<Self>(config_json).map_err(|error| error.to_string())?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn normalize(config_json: Value) -> Result<String, String>
+    where
+        Self: Sized,
+    {
+        let config = Self::parse(config_json)?;
+        serde_json::to_string(&config).map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyConfig {}
+
+impl SinkConfig for EmptyConfig {}
+
+trait ErasedEventSinkProvider: Send + Sync {
+    fn sink_type(&self) -> SinkTypeMetadata;
+
+    fn normalize_delivery_target_config(&self, config_json: Value) -> Result<String, String>;
+
+    fn normalize_event_sink_config(&self, config_json: Value) -> Result<String, String>;
+
+    fn build_sink(&self, sink: &RuntimeEventSink) -> Result<Box<dyn EventSinkRuntime>>;
+}
+
+impl<T> ErasedEventSinkProvider for T
+where
+    T: EventSinkProvider,
+{
+    fn sink_type(&self) -> SinkTypeMetadata {
+        EventSinkProvider::sink_type(self)
+    }
+
+    fn normalize_delivery_target_config(&self, config_json: Value) -> Result<String, String> {
+        EventSinkProvider::normalize_delivery_target_config(self, config_json)
+    }
+
+    fn normalize_event_sink_config(&self, config_json: Value) -> Result<String, String> {
+        EventSinkProvider::normalize_event_sink_config(self, config_json)
+    }
+
+    fn build_sink(&self, sink: &RuntimeEventSink) -> Result<Box<dyn EventSinkRuntime>> {
+        let target_config =
+            <T::Sink as EventSink>::DeliveryTargetConfig::parse(sink.target.config_json.clone())
+                .map_err(anyhow::Error::msg)?;
+        let sink_config =
+            <T::Sink as EventSink>::EventSinkConfig::parse(sink.destination_json.clone())
+                .map_err(anyhow::Error::msg)?;
+
+        Ok(Box::new(T::Sink::from_config(target_config, sink_config)?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{provider_for, SinkTypeMetadata};
+    use serde_json::json;
+
+    #[test]
+    fn kafka_provider_exposes_metadata_and_normalizes_json_configs() {
+        let provider = provider_for("kafka").expect("kafka provider should be registered");
+
+        assert_eq!(
+            provider.sink_type(),
+            SinkTypeMetadata {
+                target_type: "kafka",
+                label: "Kafka",
+            }
+        );
+        assert_eq!(
+            provider
+                .normalize_delivery_target_config(json!({
+                    "bootstrap_servers": "127.0.0.1:9092"
+                }))
+                .expect("target config should normalize"),
+            r#"{"bootstrap_servers":"127.0.0.1:9092","delivery_timeout_ms":"3000","queue_buffering_max_ms":"0","batch_num_messages":"100","queue_buffering_max_messages":"300","linger_ms":"100"}"#
+        );
+        assert_eq!(
+            provider
+                .normalize_event_sink_config(json!({
+                    "topic": "events"
+                }))
+                .expect("destination should normalize"),
+            r#"{"topic":"events"}"#
+        );
+        assert!(provider
+            .normalize_event_sink_config(json!({
+                "table": "events"
+            }))
+            .is_err());
+    }
+}
+
+pub fn normalize_delivery_target_config(
+    target_type: &DeliveryTargetType,
+    config_json: Value,
+) -> Result<String, String> {
+    provider_for(target_type.as_str())
+        .ok_or_else(|| format!("unknown delivery target type `{}`", target_type.as_str()))?
+        .normalize_delivery_target_config(config_json)
+}
+
+pub fn normalize_event_sink_config(
+    target_type: &DeliveryTargetType,
+    destination_json: Value,
+) -> Result<String, String> {
+    provider_for(target_type.as_str())
+        .ok_or_else(|| format!("unknown delivery target type `{}`", target_type.as_str()))?
+        .normalize_event_sink_config(destination_json)
+}
+
+pub fn build_sink(sink: &RuntimeEventSink) -> Result<Box<dyn EventSinkRuntime>> {
+    provider_for(sink.target.target_type.as_str())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown delivery target type `{}`",
+                sink.target.target_type.as_str()
+            )
+        })?
+        .build_sink(sink)
+}
+
+pub fn registered_sink_types() -> &'static [SinkTypeMetadata] {
+    static TYPES: std::sync::OnceLock<Vec<SinkTypeMetadata>> = std::sync::OnceLock::new();
+    TYPES.get_or_init(|| {
+        providers()
+            .iter()
+            .map(|provider| provider.sink_type())
+            .collect()
+    })
+}
+
+pub fn is_registered_sink_type(target_type: &str) -> bool {
+    provider_for(target_type).is_some()
+}
+
+fn provider_for(target_type: &str) -> Option<&'static dyn ErasedEventSinkProvider> {
+    providers()
+        .iter()
+        .copied()
+        .find(|provider| provider.sink_type().target_type == target_type)
+}
+
+fn providers() -> &'static [&'static dyn ErasedEventSinkProvider] {
+    static PROVIDERS: [&dyn ErasedEventSinkProvider; 2] = [&kafka::PROVIDER, &stdout::PROVIDER];
+    &PROVIDERS
+}
+
+fn validate_required_string(field: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty() {
+        return Err(format!("{field} must not be empty"));
+    }
+
+    Ok(())
+}

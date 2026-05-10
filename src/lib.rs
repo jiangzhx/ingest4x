@@ -11,6 +11,7 @@ pub mod rules;
 pub mod server;
 pub mod services;
 pub mod settings;
+pub mod sinks;
 pub mod utils;
 pub mod wal;
 use std::time::{SystemTime, UNIX_EPOCH};

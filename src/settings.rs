@@ -1,6 +1,5 @@
 use config::{Config, ConfigError, File};
 use serde::Deserialize;
-use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
@@ -12,8 +11,6 @@ pub struct Settings {
     #[serde(default)]
     pub database: Option<DatabaseSettings>,
     pub wal: WalSettings,
-    #[serde(default)]
-    pub events: EventsSettings,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -50,62 +47,12 @@ pub struct ManagementSettings {
     pub admin_password: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
-#[allow(unused)]
-pub struct EventsSettings {
-    #[serde(default)]
-    pub sink: HashMap<String, EventSinkConfig>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-#[allow(unused)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum EventSinkConfig {
-    Kafka {
-        bootstrap_servers: String,
-        topic: String,
-        #[serde(default)]
-        auto_offset_reset: AutoOffsetReset,
-        #[serde(default = "default_kafka_delivery_timeout_ms")]
-        delivery_timeout_ms: String,
-        #[serde(default = "default_kafka_queue_buffering_max_ms")]
-        queue_buffering_max_ms: String,
-        #[serde(default = "default_kafka_batch_num_messages")]
-        batch_num_messages: String,
-        #[serde(default = "default_kafka_queue_buffering_max_messages")]
-        queue_buffering_max_messages: String,
-        #[serde(default = "default_kafka_linger_ms")]
-        linger_ms: String,
-    },
-    Stdout {
-        #[serde(default)]
-        auto_offset_reset: AutoOffsetReset,
-    },
-}
-
 #[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AutoOffsetReset {
     Earliest,
     #[default]
     Latest,
-}
-
-impl EventSinkConfig {
-    pub const fn auto_offset_reset(&self) -> AutoOffsetReset {
-        match self {
-            Self::Kafka {
-                auto_offset_reset, ..
-            }
-            | Self::Stdout { auto_offset_reset } => *auto_offset_reset,
-        }
-    }
-
-    pub const fn stdout() -> Self {
-        Self::Stdout {
-            auto_offset_reset: AutoOffsetReset::Latest,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -155,26 +102,6 @@ impl Default for CheckpointSettings {
             flush_bytes: default_checkpoint_flush_bytes(),
         }
     }
-}
-
-pub fn default_kafka_delivery_timeout_ms() -> String {
-    "3000".to_string()
-}
-
-pub fn default_kafka_queue_buffering_max_ms() -> String {
-    "0".to_string()
-}
-
-pub fn default_kafka_batch_num_messages() -> String {
-    "100".to_string()
-}
-
-pub fn default_kafka_queue_buffering_max_messages() -> String {
-    "300".to_string()
-}
-
-pub fn default_kafka_linger_ms() -> String {
-    "100".to_string()
 }
 
 pub const fn default_database_refresh_interval_secs() -> u64 {

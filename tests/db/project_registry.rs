@@ -6,10 +6,8 @@ use ingest4x::repositories::{CreateProjectInput, ProjectRepository, UpdateProjec
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    CheckpointSettings, DatabaseSettings, EventSinkConfig, EventsSettings, IngestSettings,
-    ManagementSettings, Settings, WalSettings,
+    CheckpointSettings, DatabaseSettings, IngestSettings, ManagementSettings, Settings, WalSettings,
 };
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -147,7 +145,6 @@ async fn build_app_state_initializes_mock_registry_with_default_project() {
         },
         database: None,
         wal: test_wal_settings(temp.path()),
-        events: test_events_settings(),
     });
 
     let app_state = build_app_state_with_test_processor(settings)
@@ -205,7 +202,6 @@ async fn build_app_state_allows_database_config_for_registry_backed_ingest() {
             refresh_interval_secs: 3,
         }),
         wal: test_wal_settings(temp.path()),
-        events: test_events_settings(),
     });
 
     build_app_state_with_test_processor(settings)
@@ -231,7 +227,6 @@ async fn build_app_state_seeds_local_kafka_delivery_target_without_toml_sinks() 
             refresh_interval_secs: 3,
         }),
         wal: test_wal_settings(temp.path()),
-        events: EventsSettings::default(),
     });
 
     let app_state = build_app_state_with_test_processor(settings)
@@ -310,7 +305,6 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
             refresh_interval_secs: 3,
         }),
         wal: test_wal_settings(temp.path()),
-        events: test_events_settings(),
     });
 
     let app_state = build_app_state_with_test_processor(settings)
@@ -349,12 +343,6 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
             .len(),
         1
     );
-}
-
-fn test_events_settings() -> EventsSettings {
-    EventsSettings {
-        sink: HashMap::from([("stdout".to_string(), EventSinkConfig::stdout())]),
-    }
 }
 
 fn test_wal_settings(dir: &Path) -> WalSettings {

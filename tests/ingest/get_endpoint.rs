@@ -3,8 +3,13 @@ use actix_http::StatusCode;
 use actix_web::{test, App};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use ingest4x::db::init_sqlite_database;
+use ingest4x::repositories::{
+    CreateDeliveryTargetInput, CreateEventSinkInput, CreateProjectInput, DeliveryTargetType,
+    EventSinkRepository, ProjectRepository,
+};
 use ingest4x::server;
-use ingest4x::settings::Settings;
+use ingest4x::settings::{AutoOffsetReset, Settings};
 use ingest4x::wal::read_all_records;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
@@ -34,38 +39,19 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
+[database]
+url = "{}"
+
 [wal]
 dir = "{}"
 flush_max_records = 1
-
-[events.sink.events]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
-
-[events.sink.events_error]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
 "#,
+            sqlite_url(temp.path()),
             wal_dir.display(),
-            kafka.bootstrap_servers,
-            kafka.topic,
-            kafka.bootstrap_servers,
-            kafka.error_topic
         ),
     )
     .expect("write config");
+    seed_kafka_event_sinks(sqlite_url(temp.path()).as_str(), &kafka).await;
 
     let settings = Arc::new(
         Settings::init_with_file(config_path.to_str().expect("config path"))
@@ -164,38 +150,19 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
+[database]
+url = "{}"
+
 [wal]
 dir = "{}"
 flush_max_records = 1
-
-[events.sink.events]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
-
-[events.sink.events_error]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
 "#,
+            sqlite_url(temp.path()),
             wal_dir.display(),
-            kafka.bootstrap_servers,
-            kafka.topic,
-            kafka.bootstrap_servers,
-            kafka.error_topic
         ),
     )
     .expect("write config");
+    seed_kafka_event_sinks(sqlite_url(temp.path()).as_str(), &kafka).await;
 
     let settings = Arc::new(
         Settings::init_with_file(config_path.to_str().expect("config path"))
@@ -265,37 +232,18 @@ bind_address = "127.0.0.1:8090"
 [management]
 bind_address = "127.0.0.1:18090"
 
+[database]
+url = "{}"
+
 [wal]
 dir = "{}"
-
-[events.sink.events]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
-
-[events.sink.events_error]
-type = "kafka"
-bootstrap_servers = "{}"
-topic = "{}"
-delivery_timeout_ms = "5000"
-queue_buffering_max_ms = "0"
-batch_num_messages = "1"
-queue_buffering_max_messages = "300"
-linger_ms = "0"
 "#,
+            sqlite_url(temp.path()),
             wal_dir.display(),
-            kafka.bootstrap_servers,
-            kafka.topic,
-            kafka.bootstrap_servers,
-            kafka.error_topic
         ),
     )
     .expect("write config");
+    seed_kafka_event_sinks(sqlite_url(temp.path()).as_str(), &kafka).await;
 
     let settings = Arc::new(
         Settings::init_with_file(config_path.to_str().expect("config path"))
@@ -360,6 +308,61 @@ fn create_kafka_config(prefix: &str) -> TestKafkaConfig {
         topic,
         error_topic,
         _kafka_cluster: kafka_cluster,
+    }
+}
+
+fn sqlite_url(dir: &std::path::Path) -> String {
+    format!("sqlite://{}?mode=rwc", dir.join("ingest4x.db").display())
+}
+
+async fn seed_kafka_event_sinks(db_url: &str, kafka: &TestKafkaConfig) {
+    let db = init_sqlite_database(db_url)
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            name: "APPID".to_string(),
+            enabled: true,
+            ingest_token: "igx_APPID".to_string(),
+        })
+        .await
+        .expect("project should be created");
+
+    let repository = EventSinkRepository::new(db);
+    let target = repository
+        .create_delivery_target(CreateDeliveryTargetInput {
+            target_id: "test_kafka".to_string(),
+            name: "Test Kafka".to_string(),
+            target_type: DeliveryTargetType::kafka(),
+            config_json: json!({
+                "bootstrap_servers": &kafka.bootstrap_servers,
+                "delivery_timeout_ms": "5000",
+                "queue_buffering_max_ms": "0",
+                "batch_num_messages": "1",
+                "queue_buffering_max_messages": "300",
+                "linger_ms": "0"
+            }),
+            enabled: true,
+        })
+        .await
+        .expect("kafka delivery target should be created");
+
+    for (sink_id, topic) in [
+        ("events", kafka.topic.as_str()),
+        ("events_error", kafka.error_topic.as_str()),
+    ] {
+        repository
+            .create_event_sink(CreateEventSinkInput {
+                sink_id: sink_id.to_string(),
+                name: sink_id.to_string(),
+                delivery_target_id: target.id,
+                destination_json: json!({ "topic": topic }),
+                auto_offset_reset: AutoOffsetReset::Latest,
+                enabled: true,
+            })
+            .await
+            .expect("event sink should be created");
     }
 }
 

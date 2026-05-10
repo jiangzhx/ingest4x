@@ -89,7 +89,7 @@ curl -X POST http://127.0.0.1:8090/ingest \
 6. replay 按 processor emit 的目标写入 DB 中的 `event_sinks`，例如 Kafka 或 stdout
 7. 每个 sink 使用 `wal/checkpoints/<sink>.json` 记录自己的 replay 位点；没有可用 checkpoint 时按该 sink 的 `auto_offset_reset` 决定从当前 WAL 最早还是最新位置开始
 
-配置文件不再要求 `[events.sink.*]`。服务初始化时会确保 DB 中有一个默认的 `Local Kafka` delivery target；如果 DB 中还没有 event sink，会创建默认的 stdout `events` / `events_error`，业务事件的其他 emit 目标请通过管理后台或管理 API 创建为 `event_sinks`。
+配置文件不再读取或支持 `[events.sink.*]`。服务初始化时会确保 DB 中有一个默认的 `Local Kafka` delivery target；如果 DB 中还没有 event sink，会创建默认的 stdout `events` / `events_error`，业务事件的其他 emit 目标请通过管理后台或管理 API 创建为 `event_sinks`。
 
 管理 API 的 sink 入口：
 

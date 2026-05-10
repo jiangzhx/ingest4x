@@ -17,7 +17,7 @@ async fn create_stdout_sink(repository: &EventSinkRepository, sink_id: &str) {
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: format!("{sink_id}_target"),
             name: format!("{sink_id} target"),
-            target_type: DeliveryTargetType::Stdout,
+            target_type: DeliveryTargetType::stdout(),
             config_json: json!({}),
             enabled: true,
         })

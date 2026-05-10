@@ -4,7 +4,7 @@ use actix_web::web::{self, Data, Path};
 use actix_web::{test, App, HttpResponse};
 use ingest4x::server;
 use ingest4x::settings::Settings;
-use ingest4x::utils::events::EventSinkState;
+use ingest4x::sinks::EventSinkState;
 use serde_json::{json, Value};
 use std::fs;
 use std::future::Future;
@@ -48,6 +48,39 @@ where
 
 fn with_admin_password(request: test::TestRequest) -> test::TestRequest {
     request.insert_header((ADMIN_PASSWORD_HEADER, TEST_ADMIN_PASSWORD))
+}
+
+#[actix_rt::test]
+async fn admin_can_list_registered_sink_types() {
+    with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
+        let app = create_app().await;
+
+        let response = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri("/api/admin/sink-types")
+                .to_request(),
+        )
+        .await;
+        let status = response.status();
+        let body: Value = test::read_body_json(response).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            json!([
+                {
+                    "target_type": "kafka",
+                    "label": "Kafka"
+                },
+                {
+                    "target_type": "stdout",
+                    "label": "stdout"
+                }
+            ])
+        );
+    })
+    .await;
 }
 
 #[actix_rt::test]
@@ -524,12 +557,6 @@ admin_password = "test-admin-password"
 
 [database]
 url = "sqlite::memory:"
-
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 
 [wal]
 dir = "{}"

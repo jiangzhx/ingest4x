@@ -1,26 +1,19 @@
 use crate::current_timestamp_as_u64;
 use crate::entities::{app_meta, delivery_targets, event_sinks};
-use crate::settings::{
-    default_kafka_batch_num_messages, default_kafka_delivery_timeout_ms, default_kafka_linger_ms,
-    default_kafka_queue_buffering_max_messages, default_kafka_queue_buffering_max_ms,
-    AutoOffsetReset,
-};
+use crate::settings::AutoOffsetReset;
+use crate::sinks;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
     IntoActiveModel, QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
 };
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 const EVENT_SINKS_VERSION_KEY: &str = "event_sinks_version";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeliveryTargetType {
-    Kafka,
-    Stdout,
-}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeliveryTargetType(String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeliveryTarget {
@@ -163,7 +156,8 @@ impl EventSinkRepository {
         let result = async {
             let now = current_timestamp();
             let target_id = input.target_id.clone();
-            let config_json = normalize_target_config(input.target_type, input.config_json)?;
+            let config_json =
+                normalize_delivery_target_config(&input.target_type, input.config_json)?;
 
             let target = delivery_targets::ActiveModel {
                 target_id: Set(input.target_id),
@@ -203,7 +197,8 @@ impl EventSinkRepository {
                 active_model.name = Set(name);
             }
             if let Some(config_json) = input.config_json {
-                active_model.config_json = Set(normalize_target_config(target_type, config_json)?);
+                active_model.config_json =
+                    Set(normalize_delivery_target_config(&target_type, config_json)?);
             }
             if let Some(enabled) = input.enabled {
                 active_model.enabled = Set(enabled);
@@ -255,7 +250,8 @@ impl EventSinkRepository {
         let result = async {
             let target = find_delivery_target_by_id(&txn, input.delivery_target_id).await?;
             let target_type = DeliveryTargetType::parse(&target.target_type)?;
-            let destination_json = normalize_sink_destination(target_type, input.destination_json)?;
+            let destination_json =
+                normalize_event_sink_config(&target_type, input.destination_json)?;
             let now = current_timestamp();
             let sink_id = input.sink_id.clone();
 
@@ -313,7 +309,7 @@ impl EventSinkRepository {
             }
             active_model.delivery_target_id = Set(delivery_target_id);
             active_model.destination_json =
-                Set(normalize_sink_destination(target_type, destination_json)?);
+                Set(normalize_event_sink_config(&target_type, destination_json)?);
             if let Some(auto_offset_reset) = input.auto_offset_reset {
                 active_model.auto_offset_reset =
                     Set(auto_offset_reset_as_str(auto_offset_reset).to_string());
@@ -470,42 +466,20 @@ where
         .ok_or(EventSinkRepositoryError::VersionMetadataMissing)
 }
 
-fn normalize_target_config(
-    target_type: DeliveryTargetType,
+fn normalize_delivery_target_config(
+    target_type: &DeliveryTargetType,
     config_json: Value,
 ) -> EventSinkRepositoryResult<String> {
-    match target_type {
-        DeliveryTargetType::Kafka => normalize_json::<KafkaDeliveryTargetConfig>(config_json),
-        DeliveryTargetType::Stdout => normalize_json::<StdoutDeliveryTargetConfig>(config_json),
-    }
+    sinks::normalize_delivery_target_config(target_type, config_json)
+        .map_err(|message| EventSinkRepositoryError::InvalidConfig { message })
 }
 
-fn normalize_sink_destination(
-    target_type: DeliveryTargetType,
+fn normalize_event_sink_config(
+    target_type: &DeliveryTargetType,
     destination_json: Value,
 ) -> EventSinkRepositoryResult<String> {
-    match target_type {
-        DeliveryTargetType::Kafka => {
-            require_json_field(&destination_json, "topic")?;
-            normalize_json::<KafkaSinkDestination>(destination_json)
-        }
-        DeliveryTargetType::Stdout => normalize_json::<StdoutSinkDestination>(destination_json),
-    }
-}
-
-fn normalize_json<T>(value: Value) -> EventSinkRepositoryResult<String>
-where
-    T: for<'de> Deserialize<'de> + Serialize + ValidateConfig,
-{
-    let config = serde_json::from_value::<T>(value).map_err(|error| {
-        EventSinkRepositoryError::InvalidConfig {
-            message: error.to_string(),
-        }
-    })?;
-    config.validate()?;
-    serde_json::to_string(&config).map_err(|error| EventSinkRepositoryError::InvalidConfig {
-        message: error.to_string(),
-    })
+    sinks::normalize_event_sink_config(target_type, destination_json)
+        .map_err(|message| EventSinkRepositoryError::InvalidConfig { message })
 }
 
 fn current_timestamp() -> i64 {
@@ -568,20 +542,25 @@ fn parse_auto_offset_reset(value: &str) -> EventSinkRepositoryResult<AutoOffsetR
 }
 
 impl DeliveryTargetType {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Kafka => "kafka",
-            Self::Stdout => "stdout",
-        }
+    pub fn kafka() -> Self {
+        Self("kafka".to_string())
     }
 
-    fn parse(value: &str) -> EventSinkRepositoryResult<Self> {
-        match value {
-            "kafka" => Ok(Self::Kafka),
-            "stdout" => Ok(Self::Stdout),
-            _ => Err(EventSinkRepositoryError::InvalidConfig {
+    pub fn stdout() -> Self {
+        Self("stdout".to_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn parse(value: &str) -> EventSinkRepositoryResult<Self> {
+        if sinks::is_registered_sink_type(value) {
+            Ok(Self(value.to_string()))
+        } else {
+            Err(EventSinkRepositoryError::InvalidConfig {
                 message: format!("unknown delivery target type `{value}`"),
-            }),
+            })
         }
     }
 }
@@ -627,91 +606,4 @@ impl TryFrom<event_sinks::Model> for EventSink {
             updated_at: value.updated_at,
         })
     }
-}
-
-trait ValidateConfig {
-    fn validate(&self) -> EventSinkRepositoryResult<()>;
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct KafkaDeliveryTargetConfig {
-    bootstrap_servers: String,
-    #[serde(default = "default_kafka_delivery_timeout_ms")]
-    delivery_timeout_ms: String,
-    #[serde(default = "default_kafka_queue_buffering_max_ms")]
-    queue_buffering_max_ms: String,
-    #[serde(default = "default_kafka_batch_num_messages")]
-    batch_num_messages: String,
-    #[serde(default = "default_kafka_queue_buffering_max_messages")]
-    queue_buffering_max_messages: String,
-    #[serde(default = "default_kafka_linger_ms")]
-    linger_ms: String,
-}
-
-impl ValidateConfig for KafkaDeliveryTargetConfig {
-    fn validate(&self) -> EventSinkRepositoryResult<()> {
-        validate_required_string("bootstrap_servers", &self.bootstrap_servers)?;
-        validate_required_string("delivery_timeout_ms", &self.delivery_timeout_ms)?;
-        validate_required_string("queue_buffering_max_ms", &self.queue_buffering_max_ms)?;
-        validate_required_string("batch_num_messages", &self.batch_num_messages)?;
-        validate_required_string(
-            "queue_buffering_max_messages",
-            &self.queue_buffering_max_messages,
-        )?;
-        validate_required_string("linger_ms", &self.linger_ms)?;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct KafkaSinkDestination {
-    topic: String,
-}
-
-impl ValidateConfig for KafkaSinkDestination {
-    fn validate(&self) -> EventSinkRepositoryResult<()> {
-        validate_required_string("topic", &self.topic)
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct StdoutDeliveryTargetConfig {}
-
-impl ValidateConfig for StdoutDeliveryTargetConfig {
-    fn validate(&self) -> EventSinkRepositoryResult<()> {
-        Ok(())
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct StdoutSinkDestination {}
-
-impl ValidateConfig for StdoutSinkDestination {
-    fn validate(&self) -> EventSinkRepositoryResult<()> {
-        Ok(())
-    }
-}
-
-fn validate_required_string(field: &str, value: &str) -> EventSinkRepositoryResult<()> {
-    if value.trim().is_empty() {
-        return Err(EventSinkRepositoryError::InvalidConfig {
-            message: format!("{field} must not be empty"),
-        });
-    }
-
-    Ok(())
-}
-
-fn require_json_field(value: &Value, field: &str) -> EventSinkRepositoryResult<()> {
-    if value.get(field).is_none() {
-        return Err(EventSinkRepositoryError::InvalidConfig {
-            message: format!("missing field `{field}`"),
-        });
-    }
-
-    Ok(())
 }

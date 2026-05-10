@@ -37,10 +37,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -120,10 +116,6 @@ bind_address = "127.0.0.1:18090"
 dir = "{}"
 flush_max_records = 1
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -190,10 +182,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -259,10 +247,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -314,10 +298,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -379,10 +359,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -443,10 +419,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -508,10 +480,6 @@ no_sync = true
 flush_max_interval = "1h"
 flush_max_records = 2
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),
@@ -577,10 +545,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.kafka_valid]
-type = "kafka"
-bootstrap_servers = "127.0.0.1:65535"
-topic = "unused-valid"
 "#,
             wal_dir.display()
         ),

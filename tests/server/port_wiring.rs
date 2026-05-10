@@ -126,11 +126,6 @@ bind_address = "127.0.0.1:18090"
 [wal]
 dir = "{}"
 
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 "#,
             temp.path().join("wal").display()
         ),

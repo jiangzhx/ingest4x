@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::support::sinks::init_kafka_event_sinks;
 use actix_http::Request;
 use actix_web::dev::{Service, ServiceResponse};
 use actix_web::web::Data;
@@ -14,10 +15,8 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    AutoOffsetReset, CheckpointSettings, EventSinkConfig, EventsSettings, IngestSettings,
-    ManagementSettings, Settings, WalSettings,
+    CheckpointSettings, IngestSettings, ManagementSettings, Settings, WalSettings,
 };
-use ingest4x::utils::events::init_event_sinks;
 use ingest4x::wal::replay::{
     initialize_sink_checkpoints, replay_once as replay_wal_once, WalReplayContext,
 };
@@ -96,7 +95,7 @@ pub struct TestService {
     pub error_topic: String,
     pub kafka_cluster: MockCluster<'static, DefaultProducerContext>,
     wal_dir: TempDir,
-    event_sinks: Data<ingest4x::utils::events::EventSinkState>,
+    event_sinks: Data<ingest4x::sinks::EventSinkState>,
     project_registry: Data<ProjectRegistryState>,
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
@@ -127,7 +126,6 @@ pub async fn create_configured_app(
         },
         database: None,
         wal: test_wal_settings(wal_dir.path()),
-        events: stdout_events_settings(),
     });
     let app_state = build_app_state_with_test_processor(settings)
         .await
@@ -198,12 +196,7 @@ async fn create_app_with_project_event_settings_and_processor(
     kafka_cluster
         .create_topic(ERROR_TOPIC, 1, 1)
         .expect("create kafka mock error topic");
-    let event_sinks = init_event_sinks(&kafka_events_settings(
-        bootstrap_servers.as_str(),
-        TOPIC,
-        ERROR_TOPIC,
-    ))
-    .expect("event sinks should initialize");
+    let event_sinks = init_kafka_event_sinks(bootstrap_servers.as_str(), TOPIC, ERROR_TOPIC);
     let (project_registry, rule_repository) = create_project_state(project).await;
     let project_registry = Data::new(project_registry);
     let rule_repository = Data::new(rule_repository);
@@ -254,52 +247,6 @@ pub async fn replay_once(testservice: &TestService) -> anyhow::Result<usize> {
         checkpoint: testservice.checkpoint.clone(),
     })
     .await
-}
-
-fn stdout_events_settings() -> EventsSettings {
-    EventsSettings {
-        sink: HashMap::from([
-            ("events".to_string(), EventSinkConfig::stdout()),
-            ("events_error".to_string(), EventSinkConfig::stdout()),
-        ]),
-    }
-}
-
-fn kafka_events_settings(
-    bootstrap_servers: &str,
-    topic: &str,
-    error_topic: &str,
-) -> EventsSettings {
-    let sink = HashMap::from([
-        (
-            "events".to_string(),
-            EventSinkConfig::Kafka {
-                bootstrap_servers: bootstrap_servers.to_string(),
-                topic: topic.to_string(),
-                auto_offset_reset: AutoOffsetReset::Latest,
-                delivery_timeout_ms: "5000".to_string(),
-                queue_buffering_max_ms: "0".to_string(),
-                batch_num_messages: "1".to_string(),
-                queue_buffering_max_messages: "300".to_string(),
-                linger_ms: "0".to_string(),
-            },
-        ),
-        (
-            "events_error".to_string(),
-            EventSinkConfig::Kafka {
-                bootstrap_servers: bootstrap_servers.to_string(),
-                topic: error_topic.to_string(),
-                auto_offset_reset: AutoOffsetReset::Latest,
-                delivery_timeout_ms: "5000".to_string(),
-                queue_buffering_max_ms: "0".to_string(),
-                batch_num_messages: "1".to_string(),
-                queue_buffering_max_messages: "300".to_string(),
-                linger_ms: "0".to_string(),
-            },
-        ),
-    ]);
-
-    EventsSettings { sink }
 }
 
 fn test_wal_settings(dir: &Path) -> WalSettings {

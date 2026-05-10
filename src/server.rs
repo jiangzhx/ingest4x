@@ -7,13 +7,12 @@ use crate::repositories::{
 };
 use crate::routes;
 use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
-use crate::settings::{
-    default_database_refresh_interval_secs, default_kafka_batch_num_messages,
-    default_kafka_delivery_timeout_ms, default_kafka_linger_ms,
+use crate::settings::{default_database_refresh_interval_secs, AutoOffsetReset, Settings};
+use crate::sinks::kafka::{
+    default_kafka_batch_num_messages, default_kafka_delivery_timeout_ms, default_kafka_linger_ms,
     default_kafka_queue_buffering_max_messages, default_kafka_queue_buffering_max_ms,
-    AutoOffsetReset, EventSinkConfig, EventsSettings, Settings,
 };
-use crate::utils::events::EventSinkState;
+use crate::sinks::EventSinkState;
 use crate::utils::get_host_ip;
 use crate::utils::prometheus::{
     init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
@@ -412,8 +411,8 @@ mod tests {
     use super::{register_current_service_node, wal_replay_retry_delay};
     use crate::repositories::ServiceNodeStatus;
     use crate::settings::{
-        CheckpointSettings, EventsSettings, IngestSettings, LoggingSettings, ManagementSettings,
-        Settings, WalSettings,
+        CheckpointSettings, IngestSettings, LoggingSettings, ManagementSettings, Settings,
+        WalSettings,
     };
     use std::sync::Arc;
     use std::time::Duration;
@@ -451,7 +450,6 @@ mod tests {
                 min_free_bytes: 0,
                 checkpoint: CheckpointSettings::default(),
             },
-            events: EventsSettings::default(),
         });
         let app_state = super::build_app_state(settings)
             .await
@@ -504,7 +502,6 @@ async fn init_repository_state(
     let processor_repository = ProcessorRepository::new(db.clone());
     let service_node_repository = ServiceNodeRepository::new(db);
     seed_default_delivery_targets(&event_sink_repository).await?;
-    import_config_event_sinks(&event_sink_repository, &settings.events).await?;
     seed_default_event_sinks(&event_sink_repository).await?;
     seed::run(&repository, &rule_repository, &processor_repository).await?;
     let project_registry = Data::new(
@@ -539,7 +536,7 @@ async fn seed_default_delivery_targets(repository: &EventSinkRepository) -> std:
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: "local_kafka".to_string(),
             name: "Local Kafka".to_string(),
-            target_type: DeliveryTargetType::Kafka,
+            target_type: DeliveryTargetType::kafka(),
             config_json: json!({
                 "bootstrap_servers": "127.0.0.1:9092",
                 "delivery_timeout_ms": default_kafka_delivery_timeout_ms(),
@@ -552,38 +549,6 @@ async fn seed_default_delivery_targets(repository: &EventSinkRepository) -> std:
         })
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-    Ok(())
-}
-
-async fn import_config_event_sinks(
-    repository: &EventSinkRepository,
-    settings: &EventsSettings,
-) -> std::io::Result<()> {
-    if settings.sink.is_empty() {
-        return Ok(());
-    }
-
-    let existing = repository
-        .list_event_sinks()
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    if !existing.is_empty() {
-        return Ok(());
-    }
-
-    for (sink_id, config) in &settings.sink {
-        let target_id = format!("{sink_id}_target");
-        let target = repository
-            .create_delivery_target(config_delivery_target_input(sink_id, &target_id, config))
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-        repository
-            .create_event_sink(config_event_sink_input(sink_id, target.id, config))
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-    }
 
     Ok(())
 }
@@ -614,7 +579,7 @@ async fn seed_default_event_sinks(repository: &EventSinkRepository) -> std::io::
             .create_delivery_target(CreateDeliveryTargetInput {
                 target_id: "default_stdout".to_string(),
                 name: "Default Stdout".to_string(),
-                target_type: DeliveryTargetType::Stdout,
+                target_type: DeliveryTargetType::stdout(),
                 config_json: json!({}),
                 enabled: true,
             })
@@ -637,67 +602,6 @@ async fn seed_default_event_sinks(repository: &EventSinkRepository) -> std::io::
     }
 
     Ok(())
-}
-
-fn config_delivery_target_input(
-    sink_id: &str,
-    target_id: &str,
-    config: &EventSinkConfig,
-) -> CreateDeliveryTargetInput {
-    match config {
-        EventSinkConfig::Kafka {
-            bootstrap_servers,
-            topic: _,
-            auto_offset_reset: _,
-            delivery_timeout_ms,
-            queue_buffering_max_ms,
-            batch_num_messages,
-            queue_buffering_max_messages,
-            linger_ms,
-        } => CreateDeliveryTargetInput {
-            target_id: target_id.to_string(),
-            name: format!("{sink_id} target"),
-            target_type: DeliveryTargetType::Kafka,
-            config_json: json!({
-                "bootstrap_servers": bootstrap_servers,
-                "delivery_timeout_ms": delivery_timeout_ms,
-                "queue_buffering_max_ms": queue_buffering_max_ms,
-                "batch_num_messages": batch_num_messages,
-                "queue_buffering_max_messages": queue_buffering_max_messages,
-                "linger_ms": linger_ms
-            }),
-            enabled: true,
-        },
-        EventSinkConfig::Stdout {
-            auto_offset_reset: _,
-        } => CreateDeliveryTargetInput {
-            target_id: target_id.to_string(),
-            name: format!("{sink_id} target"),
-            target_type: DeliveryTargetType::Stdout,
-            config_json: json!({}),
-            enabled: true,
-        },
-    }
-}
-
-fn config_event_sink_input(
-    sink_id: &str,
-    delivery_target_id: i32,
-    config: &EventSinkConfig,
-) -> CreateEventSinkInput {
-    let destination_json = match config {
-        EventSinkConfig::Kafka { topic, .. } => json!({ "topic": topic }),
-        EventSinkConfig::Stdout { .. } => json!({}),
-    };
-
-    CreateEventSinkInput {
-        sink_id: sink_id.to_string(),
-        name: sink_id.to_string(),
-        delivery_target_id,
-        destination_json,
-        auto_offset_reset: config.auto_offset_reset(),
-        enabled: true,
-    }
 }
 
 async fn import_mock_projects(

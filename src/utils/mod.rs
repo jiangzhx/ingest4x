@@ -5,8 +5,6 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::IpAddr;
 
-pub mod events;
-pub mod kafka;
 pub mod prometheus;
 
 pub fn insert_ip(req: &HttpRequest, xcontext: &mut HashMap<String, Value>) {

@@ -1,6 +1,6 @@
 use crate::services::ProjectRegistryState;
 use crate::settings::{default_max_event_bytes, Settings};
-use crate::utils::events::EventSinkState;
+use crate::sinks::EventSinkState;
 use crate::utils::get_ip;
 use crate::utils::prometheus::{IngestPrometheusMetrics, WalPrometheusMetrics};
 use crate::wal::{new_record, WalWriter};

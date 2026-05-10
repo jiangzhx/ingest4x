@@ -2,7 +2,7 @@ use crate::ingest::processor::{ProcessorRequestContext, ProcessorRuntime};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
 use crate::settings::{AutoOffsetReset, CheckpointSettings};
-use crate::utils::events::EventSinkState;
+use crate::sinks::EventSinkState;
 use crate::wal::{
     error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
     read_entries_after_limit, read_wal_bounds, remove_segments_covered_by_checkpoint, WalBounds,

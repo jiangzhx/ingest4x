@@ -31,11 +31,6 @@ bind_address = "127.0.0.1:18090"
 dir = "{}"
 flush_max_records = 1
 
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 "#,
             wal_dir.display()
         ),
@@ -124,11 +119,6 @@ bind_address = "127.0.0.1:18090"
 dir = "{}"
 flush_max_records = 1
 
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 "#,
             wal_dir.display()
         ),
@@ -234,11 +224,6 @@ bind_address = "127.0.0.1:18090"
 dir = "{}"
 flush_max_records = 1
 
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 "#,
             wal_dir.display()
         ),
@@ -331,11 +316,6 @@ bind_address = "127.0.0.1:18090"
 dir = "{}"
 flush_max_records = 1
 
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 "#,
             wal_dir.display()
         ),
@@ -423,11 +403,6 @@ bind_address = "127.0.0.1:18090"
 dir = "{}"
 min_free_bytes = 9223372036854775807
 
-[events.sink.events]
-type = "stdout"
-
-[events.sink.events_error]
-type = "stdout"
 "#,
             wal_dir.display()
         ),

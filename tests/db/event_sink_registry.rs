@@ -3,7 +3,7 @@ use ingest4x::repositories::{
     CreateDeliveryTargetInput, CreateEventSinkInput, DeliveryTargetType, EventSinkRepository,
 };
 use ingest4x::settings::AutoOffsetReset;
-use ingest4x::utils::events::EventSinkState;
+use ingest4x::sinks::EventSinkState;
 use serde_json::json;
 
 #[tokio::test]
@@ -17,7 +17,7 @@ async fn event_sink_state_refreshes_when_database_sinks_change() {
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: "stdout_main".to_string(),
             name: "Main stdout".to_string(),
-            target_type: DeliveryTargetType::Stdout,
+            target_type: DeliveryTargetType::stdout(),
             config_json: json!({}),
             enabled: true,
         })

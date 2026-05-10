@@ -17,7 +17,7 @@ async fn create_kafka_target_and_sink_with_valid_typed_json() {
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: "kafka_main".to_string(),
             name: "Main Kafka".to_string(),
-            target_type: DeliveryTargetType::Kafka,
+            target_type: DeliveryTargetType::kafka(),
             config_json: json!({
                 "bootstrap_servers": "127.0.0.1:9092",
                 "delivery_timeout_ms": "3000",
@@ -76,7 +76,7 @@ async fn rejects_kafka_target_config_unknown_fields() {
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: "kafka_main".to_string(),
             name: "Main Kafka".to_string(),
-            target_type: DeliveryTargetType::Kafka,
+            target_type: DeliveryTargetType::kafka(),
             config_json: json!({
                 "bootstrap_servers": "127.0.0.1:9092",
                 "unknown": true
@@ -104,7 +104,7 @@ async fn rejects_sink_destination_that_does_not_match_target_type() {
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: "kafka_main".to_string(),
             name: "Main Kafka".to_string(),
-            target_type: DeliveryTargetType::Kafka,
+            target_type: DeliveryTargetType::kafka(),
             config_json: json!({
                 "bootstrap_servers": "127.0.0.1:9092"
             }),
@@ -145,7 +145,7 @@ async fn rejects_deleting_delivery_target_used_by_event_sink() {
         .create_delivery_target(CreateDeliveryTargetInput {
             target_id: "stdout_main".to_string(),
             name: "Main stdout".to_string(),
-            target_type: DeliveryTargetType::Stdout,
+            target_type: DeliveryTargetType::stdout(),
             config_json: json!({}),
             enabled: true,
         })

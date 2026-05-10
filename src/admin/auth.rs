@@ -133,7 +133,6 @@ mod tests {
                 min_free_bytes: 0,
                 checkpoint: Default::default(),
             },
-            events: crate::settings::EventsSettings::default(),
         }
     }
 
