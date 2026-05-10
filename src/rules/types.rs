@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+use super::rhai_validation::RhaiValidationRules;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -82,6 +85,7 @@ impl CompiledEventRule {
 #[derive(Clone, Debug, Default)]
 pub struct Rules {
     pub(crate) events: HashMap<String, CompiledEventRule>,
+    pub(crate) rhai: Option<Arc<RhaiValidationRules>>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

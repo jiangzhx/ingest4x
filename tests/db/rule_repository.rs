@@ -6,6 +6,98 @@ use ingest4x::repositories::{
 use serde_json::json;
 
 #[tokio::test]
+async fn project_bound_rule_set_can_compile_single_rhai_validation_rule() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let projects = ProjectRepository::new(db.clone());
+    let rules = RuleRepository::new(db);
+
+    let project = projects
+        .create_project(CreateProjectInput {
+            name: "App 1".to_string(),
+            enabled: true,
+            ingest_token: "igx_app_1".to_string(),
+        })
+        .await
+        .expect("project should be created");
+
+    let rule_set = rules
+        .create_rule_set(CreateRuleSetInput {
+            name: "Rhai ingest".to_string(),
+            description: None,
+            enabled: true,
+        })
+        .await
+        .expect("rule set should be created");
+
+    let root_rule = rules
+        .create_rule(CreateRuleInput {
+            rule_set_id: rule_set.id,
+            parent_id: None,
+            name: "Rhai default".to_string(),
+            xwhat: None,
+            content: r#"
+fn validate(event) {
+    event.field("appid").required("string");
+    event.field("xcontext.installid").required("string");
+    event.result()
+}
+"#
+            .to_string(),
+            enabled: true,
+        })
+        .await
+        .expect("rhai rule should be created");
+
+    rules
+        .update_rule_set(
+            rule_set.id,
+            UpdateRuleSetInput {
+                name: None,
+                description: None,
+                enabled: None,
+                wildcard_rule_id: Some(Some(root_rule.id)),
+            },
+        )
+        .await
+        .expect("rhai rule should become wildcard rule");
+
+    rules
+        .assign_rule_set_to_project(
+            project.id,
+            CreateProjectRuleSetInput {
+                rule_set_id: rule_set.id,
+                enabled: true,
+            },
+        )
+        .await
+        .expect("rule set should be assigned");
+
+    let compiled = rules
+        .compile_project_rules(project.id)
+        .await
+        .expect("project rhai rules should compile");
+
+    compiled
+        .validate(
+            "ignored",
+            &json!({
+                "appid": "app-1",
+                "xcontext": {
+                    "installid": "iid-1"
+                }
+            }),
+        )
+        .expect("rhai validation should pass");
+
+    let error = compiled
+        .validate("ignored", &json!({"appid": "app-1", "xcontext": {}}))
+        .expect_err("missing installid should fail");
+    assert_eq!(error.path(), Some("xcontext.installid"));
+}
+
+#[tokio::test]
 async fn project_bound_rule_set_compiles_inherited_rule_for_xwhat() {
     let db = init_sqlite_database("sqlite::memory:")
         .await

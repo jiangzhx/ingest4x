@@ -22,6 +22,8 @@ pub enum RulesValidationCode {
     NumberConstraintFailed,
     // A conditional requirement matched and its required field set was absent.
     ConditionalRequiredMissing,
+    // A Rhai validation script failed to execute.
+    ScriptExecutionFailed,
 }
 
 impl RulesValidationError {
@@ -59,6 +61,7 @@ impl RulesValidationCode {
             Self::NumberParseFailed => "rules_number_parse_failed",
             Self::NumberConstraintFailed => "rules_number_constraint_failed",
             Self::ConditionalRequiredMissing => "rules_conditional_required_missing",
+            Self::ScriptExecutionFailed => "rules_script_execution_failed",
         }
     }
 }

@@ -198,7 +198,7 @@ impl RuleRepository {
         if let Some(parent_id) = input.parent_id {
             ensure_parent_in_rule_set(&self.db, input.rule_set_id, parent_id).await?;
         }
-        parse_rule_content(&input.content)?;
+        validate_rule_content(&input.content)?;
 
         let now = current_timestamp();
         rules::ActiveModel {
@@ -263,7 +263,7 @@ impl RuleRepository {
         }
 
         if let Some(content) = input.content.as_ref() {
-            parse_rule_content(content)?;
+            validate_rule_content(content)?;
         }
 
         let next_xwhat = input.xwhat.as_ref().unwrap_or(&existing.xwhat);
@@ -397,13 +397,18 @@ impl RuleRepository {
                 .one(&self.db)
                 .await?
             else {
-                return Ok(Rules { events });
+                return Ok(Rules { events, rhai: None });
             };
             if rule_set.enabled {
                 let rule_rows = rules::Entity::find()
                     .filter(rules::Column::RuleSetId.eq(rule_set_id))
                     .all(&self.db)
                     .await?;
+                if let Some(rhai_rules) =
+                    compile_rhai_rule_set(&rule_rows, rule_set.wildcard_rule_id)?
+                {
+                    return Ok(rhai_rules);
+                }
                 let by_id = rule_rows
                     .iter()
                     .cloned()
@@ -433,7 +438,7 @@ impl RuleRepository {
             }
         }
 
-        Ok(Rules { events })
+        Ok(Rules { events, rhai: None })
     }
 
     pub async fn enabled_rule_exists_for_xwhat(&self, xwhat: &str) -> RuleRepositoryResult<bool> {
@@ -474,18 +479,76 @@ fn merged_fragment_for_rule(
     let mut merged = RuleFragment::default();
     for rule in chain.into_iter().rev() {
         if rule.enabled {
-            merged = merge_fragments(merged, parse_rule_content(&rule.content)?);
+            merged = merge_fragments(merged, parse_legacy_rule_content(&rule.content)?);
         }
     }
     Ok(merged)
 }
 
-fn parse_rule_content(content: &str) -> RuleRepositoryResult<RuleFragment> {
+fn validate_rule_content(content: &str) -> RuleRepositoryResult<()> {
+    if is_rhai_validation_rule(content) {
+        Rules::from_rhai_script(content).map_err(|error| {
+            RuleRepositoryError::InvalidRuleContent {
+                message: error.to_string(),
+            }
+        })?;
+        return Ok(());
+    }
+
+    parse_legacy_rule_content(content).map(|_| ())
+}
+
+fn parse_legacy_rule_content(content: &str) -> RuleRepositoryResult<RuleFragment> {
     serde_yaml::from_str::<RuleFragment>(content).map_err(|error| {
         RuleRepositoryError::InvalidRuleContent {
             message: error.to_string(),
         }
     })
+}
+
+fn is_rhai_validation_rule(content: &str) -> bool {
+    content
+        .lines()
+        .map(str::trim_start)
+        .any(|line| line.starts_with("fn validate"))
+}
+
+fn compile_rhai_rule_set(
+    rule_rows: &[rules::Model],
+    wildcard_rule_id: Option<i32>,
+) -> RuleRepositoryResult<Option<Rules>> {
+    let enabled_rules = rule_rows
+        .iter()
+        .filter(|rule| rule.enabled)
+        .collect::<Vec<_>>();
+    let rhai_rules = enabled_rules
+        .iter()
+        .copied()
+        .filter(|rule| is_rhai_validation_rule(&rule.content))
+        .collect::<Vec<_>>();
+
+    if rhai_rules.is_empty() {
+        return Ok(None);
+    }
+    if rhai_rules.len() != 1 || enabled_rules.len() != 1 {
+        return Err(RuleRepositoryError::InvalidRuleContent {
+            message: "Rhai validation rule sets must contain exactly one enabled rule".to_string(),
+        });
+    }
+
+    let rule = rhai_rules[0];
+    if rule.parent_id.is_some() || has_event_xwhat(&rule.xwhat) || wildcard_rule_id != Some(rule.id)
+    {
+        return Err(RuleRepositoryError::InvalidRuleContent {
+            message: "Rhai validation rule must be the root wildcard rule".to_string(),
+        });
+    }
+
+    Rules::from_rhai_script(&rule.content)
+        .map(Some)
+        .map_err(|error| RuleRepositoryError::InvalidRuleContent {
+            message: error.to_string(),
+        })
 }
 
 async fn find_project_by_id(

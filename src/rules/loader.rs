@@ -66,7 +66,7 @@ pub(crate) fn load_rules_from_dir(path: impl AsRef<Path>) -> Result<Rules> {
         events.insert(event_name, compile_event_rule(&merged)?);
     }
 
-    Ok(Rules { events })
+    Ok(Rules { events, rhai: None })
 }
 
 fn collect_rule_files(root: &Path) -> Result<Vec<PathBuf>> {

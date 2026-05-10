@@ -4,124 +4,69 @@ use crate::repositories::{
     ProcessorScriptStatus, ProjectRepository, RuleRepository, UpdateRuleSetInput,
 };
 
-const DEFAULT_RULE_CONTENT: &str = r#"fields:
-  appid:
-    required: true
-    type: string
-  xwhat:
-    required: true
-    type: string
-  xcontext:
-    required: true
-    type: object
-  xcontext.installid:
-    required: true
-    type: string
-  xcontext.os:
-    required: true
-    type: string
-    enum:
-      - ios
-      - android
-      - harmony
-      - wechat
-      - toutiao
-      - tiktok
-    required_any_when:
-      - equals: ios
-        fields: [xcontext.idfa, xcontext.caid]
-      - equals: android
-        fields: [xcontext.oaid, xcontext.androidid]
-      - equals: harmony
-        fields: [xcontext.oaid, xcontext.androidid]
-      - equals: wechat
-        fields: [xcontext.openid, xcontext.unionid]
-    required_when:
-      - equals: toutiao
-        fields: [xcontext.openid]
-      - equals: tiktok
-        fields: [xcontext.openid]
-"#;
+const DEFAULT_RULE_CONTENT: &str = r#"fn validate(event) {
+    event.field("appid").required("string");
+    event.field("xwhat").required("string");
+    event.field("xcontext").required("object");
+    event.field("xcontext.installid").required("string");
 
-const INSTALL_RULE_CONTENT: &str = r#"fields:
-"#;
+    let os = event.field("xcontext.os");
 
-const STARTUP_RULE_CONTENT: &str = r#"fields:
-"#;
+    os.required("string").one_of([
+        "ios", "android", "harmony", "wechat", "toutiao", "tiktok",
+    ]);
 
-const USER_DEFAULT_RULE_CONTENT: &str = r#"fields:
-  xwho:
-    required: true
-    type: string
-"#;
+    if os.eq("ios") {
+        event.any(["xcontext.idfa", "xcontext.caid"]).required();
+    }
 
-const REGISTER_RULE_CONTENT: &str = r#"fields:
-"#;
+    if os.eq("android") || os.eq("harmony") {
+        event.any(["xcontext.oaid", "xcontext.androidid"]).required();
+    }
 
-const PAYMENT_RULE_CONTENT: &str = r#"fields:
-  xcontext.transactionid:
-    required: true
-    type: string
-  xcontext.paymenttype:
-    required: true
-    type: string
-  xcontext.currencytype:
-    required: true
-    type: string
-    enum:
-      - JPY
-      - EUR
-      - BRL
-      - HKD
-      - TWD
-      - COP
-      - MXN
-      - CHF
-      - CAD
-      - CLP
-      - AUD
-      - PEN
-      - GBP
-      - CRC
-      - PLN
-      - PYG
-      - BOB
-      - QAR
-      - ILS
-      - SEK
-      - RUB
-      - CNY
-      - ZAR
-      - SGD
-      - NZD
-      - BGN
-      - LKR
-      - IQD
-      - TRY
-      - AED
-      - DZD
-      - EGP
-      - IDR
-      - INR
-      - NGN
-      - NOK
-      - PHP
-      - PKR
-      - THB
-      - UAH
-      - VND
-  xcontext.currencyamount:
-    required: true
-    type: number
-  xcontext.paymentstatus:
-    type: boolean
-"#;
+    if os.eq("wechat") {
+        event.any(["xcontext.openid", "xcontext.unionid"]).required();
+    }
 
-const LEVELUP_RULE_CONTENT: &str = r#"fields:
-  xcontext.level:
-    required: true
-    type: integer
-    gt: 0
+    if os.eq("toutiao") || os.eq("tiktok") {
+        event.field("xcontext.openid").required("string");
+    }
+
+    if event.field("xwhat").eq("register") {
+        event.field("xwho").required("string");
+    }
+
+    if event.field("xwhat").eq("payment") {
+        event.field("xwho").required("string");
+        event.field("xcontext.transactionid").required("string");
+        event.field("xcontext.paymenttype").required("string");
+
+        event.field("xcontext.currencytype")
+            .required("string")
+            .one_of(currencies());
+
+        event.field("xcontext.currencyamount").required("number");
+        event.field("xcontext.paymentstatus").optional("boolean");
+    }
+
+    if event.field("xwhat").eq("levelup") {
+        event.field("xwho").required("string");
+        event.field("xcontext.level").required("integer").gt(0);
+    }
+
+    event.result()
+}
+
+fn currencies() {
+    [
+        "JPY", "EUR", "BRL", "HKD", "TWD", "COP", "MXN", "CHF",
+        "CAD", "CLP", "AUD", "PEN", "GBP", "CRC", "PLN", "PYG",
+        "BOB", "QAR", "ILS", "SEK", "RUB", "CNY", "ZAR", "SGD",
+        "NZD", "BGN", "LKR", "IQD", "TRY", "AED", "DZD", "EGP",
+        "IDR", "INR", "NGN", "NOK", "PHP", "PKR", "THB", "UAH",
+        "VND",
+    ]
+}
 "#;
 
 const DEFAULT_PROCESSOR_SCRIPT: &str = r#"
@@ -289,53 +234,6 @@ async fn import_default_ingest_rules(
         )
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-    for (name, xwhat, content) in [
-        ("安装", "install", INSTALL_RULE_CONTENT),
-        ("启动", "startup", STARTUP_RULE_CONTENT),
-    ] {
-        repository
-            .create_rule(CreateRuleInput {
-                rule_set_id,
-                parent_id: Some(base.id),
-                name: name.to_string(),
-                xwhat: Some(xwhat.to_string()),
-                content: content.to_string(),
-                enabled: true,
-            })
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-    }
-
-    let user = repository
-        .create_rule(CreateRuleInput {
-            rule_set_id,
-            parent_id: Some(base.id),
-            name: "用户事件基础规则".to_string(),
-            xwhat: None,
-            content: USER_DEFAULT_RULE_CONTENT.to_string(),
-            enabled: true,
-        })
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-    for (name, xwhat, content) in [
-        ("注册", "register", REGISTER_RULE_CONTENT),
-        ("支付", "payment", PAYMENT_RULE_CONTENT),
-        ("升级", "levelup", LEVELUP_RULE_CONTENT),
-    ] {
-        repository
-            .create_rule(CreateRuleInput {
-                rule_set_id,
-                parent_id: Some(user.id),
-                name: name.to_string(),
-                xwhat: Some(xwhat.to_string()),
-                content: content.to_string(),
-                enabled: true,
-            })
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-    }
 
     Ok(())
 }
