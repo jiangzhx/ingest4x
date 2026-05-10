@@ -10,8 +10,6 @@ use rhai::serde::to_dynamic;
 use rhai::{Dynamic, Engine, Module, Scope, AST};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -19,18 +17,12 @@ use std::sync::RwLock;
 use crate::repositories::{ProcessorRepository, RuntimeProcessorScript};
 pub use crate::rhai_ctx::ProcessorRequestContext;
 
-const DEFAULT_RHAI_PROCESSOR_PATH: &str = "pipeline/main.rhai";
 const DEFAULT_SINK_TARGETS: &[&str] = &["events", "events_error"];
 
 #[derive(Clone)]
 pub struct ProcessorState {
     engine: Arc<Engine>,
     ast: AST,
-}
-
-struct ProcessorScript {
-    entry: String,
-    modules: Vec<(String, String)>,
 }
 
 pub struct ProcessorOutput {
@@ -48,16 +40,6 @@ pub trait ProcessorRuntime: Send + Sync {
 }
 
 impl ProcessorState {
-    pub fn from_default_entry() -> Result<Self> {
-        let script = read_processor_script(DEFAULT_RHAI_PROCESSOR_PATH)?;
-        Self::new_with_sink_targets(
-            script.entry,
-            script.modules,
-            default_sink_targets(),
-            default_processor_max_operations(),
-        )
-    }
-
     pub fn new(script: String, max_operations: u64) -> Result<Self> {
         Self::new_with_modules(script, Vec::new(), max_operations)
     }
@@ -290,141 +272,36 @@ fn parse_processor_output(deliveries: Vec<ProcessorDelivery>) -> Result<Processo
     Ok(ProcessorOutput { deliveries })
 }
 
-fn read_processor_script(path: impl AsRef<Path>) -> Result<ProcessorScript> {
-    let path = path.as_ref();
-    match fs::read_to_string(path) {
-        Ok(script) => {
-            let modules = read_processor_modules(path)?;
-            Ok(ProcessorScript {
-                entry: script,
-                modules,
-            })
-        }
-        Err(err) => Err(anyhow!(
-            "failed to read Rhai processor `{}`: {err}",
-            path.display()
-        )),
-    }
-}
-
-fn read_processor_modules(entry_path: &Path) -> Result<Vec<(String, String)>> {
-    let directory = entry_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut paths = fs::read_dir(directory)
-        .map_err(|err| {
-            anyhow!(
-                "failed to read Rhai pipeline directory `{}`: {err}",
-                directory.display()
-            )
-        })?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<PathBuf>>>()
-        .map_err(|err| {
-            anyhow!(
-                "failed to list Rhai pipeline directory `{}`: {err}",
-                directory.display()
-            )
-        })?;
-
-    paths.sort();
-
-    let mut modules = Vec::new();
-    for path in paths {
-        if path == entry_path {
-            continue;
-        }
-        if path.extension().and_then(|value| value.to_str()) != Some("rhai") {
-            continue;
-        }
-
-        let module_name = rhai_module_name(&path)?;
-        let script = fs::read_to_string(&path)
-            .map_err(|err| anyhow!("failed to read Rhai processor `{}`: {err}", path.display()))?;
-        modules.push((module_name, script));
-    }
-
-    Ok(modules)
-}
-
-fn rhai_module_name(path: &Path) -> Result<String> {
-    let module_name = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            anyhow!(
-                "Rhai module file `{}` must have a valid name",
-                path.display()
-            )
-        })?;
-
-    let mut chars = module_name.chars();
-    let Some(first) = chars.next() else {
-        return Err(anyhow!(
-            "Rhai module file `{}` must have a non-empty name",
-            path.display()
-        ));
-    };
-    if !(first == '_' || first.is_ascii_alphabetic())
-        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        return Err(anyhow!(
-            "Rhai module file `{}` must be a valid identifier",
-            path.display()
-        ));
-    }
-
-    Ok(module_name.to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{compile_script, read_processor_script, ProcessorState};
+    use super::{compile_script, ProcessorState};
     use crate::ingest::processor::ProcessorRequestContext;
     use crate::rules::Rules;
     use serde_json::json;
-    use std::fs;
-    use tempfile::tempdir;
 
     #[test]
-    fn default_entry_loads_all_neighbor_rhai_files_before_main() {
-        let temp = tempdir().expect("temp dir");
-        let pipeline = temp.path().join("pipeline");
-        fs::create_dir(&pipeline).expect("create pipeline dir");
-        fs::write(
-            pipeline.join("main.rhai"),
-            r#"
+    fn compile_script_accepts_database_supplied_modules() {
+        let entry = r#"
 import "custom" as custom;
 
 fn process(event, request) {
     event = custom::custom_step(event);
     emit(SINK_STDOUT, event);
 }
-"#,
-        )
-        .expect("write main");
-        fs::write(
-            pipeline.join("custom.rhai"),
+"#;
+        let modules = vec![(
+            "custom".to_string(),
             r#"
 fn custom_step(event) {
     event["xcontext"]["custom_step"] = true;
     return event;
 }
-"#,
-        )
-        .expect("write custom");
+"#
+            .to_string(),
+        )];
 
-        let script = read_processor_script(pipeline.join("main.rhai")).expect("read pipeline");
-
-        assert!(script.entry.contains("import \"custom\" as custom;"));
-        assert!(script.entry.contains("fn process"));
-        assert_eq!(script.modules[0].0, "custom");
-        assert!(script.modules[0].1.contains("fn custom_step"));
-        compile_script(
-            &script.entry,
-            script.modules,
-            &["stdout".to_string()],
-            10_000,
-        )
-        .expect("compiled processor modules");
+        compile_script(entry, modules, &["stdout".to_string()], 10_000)
+            .expect("compiled processor modules");
     }
 
     #[test]

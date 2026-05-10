@@ -11,6 +11,7 @@ use ingest4x::repositories::{
 use ingest4x::rules::Rules;
 use ingest4x::settings::AutoOffsetReset;
 use serde_json::json;
+use std::path::Path;
 
 async fn create_stdout_sink(repository: &EventSinkRepository, sink_id: &str) {
     let target = repository
@@ -136,6 +137,11 @@ fn mark(event) {
 
 #[tokio::test]
 async fn seed_creates_minimal_default_processor_script() {
+    assert!(
+        !Path::new("pipeline/main.rhai").exists(),
+        "default processor seed should come from src/db/seed.rs instead of pipeline/main.rhai",
+    );
+
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
