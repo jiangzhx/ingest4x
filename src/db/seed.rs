@@ -52,8 +52,6 @@ const DEFAULT_RULE_CONTENT: &str = r#"fn validate(event) {
         event.required("xwho").string().min(1);
         event.required("xcontext.level").integer().gt(0);
     }
-
-    event.result()
 }
 
 fn currencies() {

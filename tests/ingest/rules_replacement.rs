@@ -40,6 +40,29 @@ fn rhai_rules_validation_matches_ingest_contract_cases() {
 }
 
 #[test]
+fn rhai_rules_do_not_require_event_result_return_value() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("appid").string().min(1);
+}
+"#,
+    )
+    .expect("rhai validation rules without event.result should compile");
+
+    rules
+        .validate("ignored", &json!({"appid": "app-1"}))
+        .expect("valid payload should pass without event.result");
+
+    let error = rules
+        .validate("ignored", &json!({}))
+        .expect_err("missing appid should fail without event.result");
+    assert!(error
+        .to_string()
+        .contains("missing required field `appid`"));
+}
+
+#[test]
 fn rhai_rules_can_use_switch_on_field_value() {
     let rules = Rules::from_rhai_script(
         r#"
@@ -725,8 +748,6 @@ fn validate(event) {
         event.required("xwho").string().min(1);
         event.required("xcontext.level").integer().gt(0);
     }
-
-    event.result()
 }
 
 fn currencies() {
