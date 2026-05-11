@@ -7,9 +7,6 @@ logs/
 web/admin/node_modules/
 web/admin/dist/
 /db/
-/ingest4x.db
-/ingest4x.db-shm
-/ingest4x.db-wal
 docs/features
 docs/superpowers
 /wal/
