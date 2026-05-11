@@ -119,6 +119,20 @@ project: test_app
 ingest token: igx_local_test_token
 ```
 
+管理后台入口：
+
+```text
+http://localhost:18090/admin/
+```
+
+默认管理员密码来自 `ingest4x.toml`：
+
+```text
+ingest4x
+```
+
+如果设置了环境变量 `INGEST4X_ADMIN_PASSWORD`，会优先使用环境变量里的密码。
+
 ### 3. 发送 POST 事件
 
 ```bash
