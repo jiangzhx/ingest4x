@@ -98,6 +98,233 @@ fn validate(event) {
     assert!(rules.can_validate("any_event_name"));
 }
 
+#[test]
+fn rhai_required_string_allows_empty_string_but_rejects_missing_null_and_non_string() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xwho").string();
+    event.result()
+}
+"#,
+    )
+    .expect("new required string API should compile");
+
+    rules
+        .validate("ignored", &json!({"xwho": ""}))
+        .expect("required string should allow empty string");
+
+    let missing = rules
+        .validate("ignored", &json!({}))
+        .expect_err("missing required string should fail");
+    assert!(missing
+        .to_string()
+        .contains("missing required field `xwho`"));
+
+    let null_value = rules
+        .validate("ignored", &json!({"xwho": null}))
+        .expect_err("null required string should fail");
+    assert!(null_value
+        .to_string()
+        .contains("missing required field `xwho`"));
+
+    let wrong_type = rules
+        .validate("ignored", &json!({"xwho": 1}))
+        .expect_err("non-string required string should fail");
+    assert!(wrong_type.to_string().contains("expected type `String`"));
+}
+
+#[test]
+fn rhai_optional_string_skips_missing_and_null_but_validates_present_values() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.optional("xwho").string();
+    event.result()
+}
+"#,
+    )
+    .expect("new optional string API should compile");
+
+    rules
+        .validate("ignored", &json!({}))
+        .expect("optional string should allow missing field");
+    rules
+        .validate("ignored", &json!({"xwho": null}))
+        .expect("optional string should allow null");
+    rules
+        .validate("ignored", &json!({"xwho": ""}))
+        .expect("optional string should allow empty string");
+
+    let wrong_type = rules
+        .validate("ignored", &json!({"xwho": 1}))
+        .expect_err("present optional string should validate type");
+    assert!(wrong_type.to_string().contains("expected type `String`"));
+}
+
+#[test]
+fn rhai_string_min_enforces_length_only_when_value_is_present() {
+    let required_rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xwho").string().min(1);
+    event.result()
+}
+"#,
+    )
+    .expect("required string min API should compile");
+
+    let empty_required = required_rules
+        .validate("ignored", &json!({"xwho": ""}))
+        .expect_err("empty required string with min should fail");
+    assert!(empty_required
+        .to_string()
+        .contains("field `xwho` length must be at least 1"));
+
+    required_rules
+        .validate("ignored", &json!({"xwho": "user-1"}))
+        .expect("non-empty required string should pass");
+
+    let optional_rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.optional("xwho").string().min(1);
+    event.result()
+}
+"#,
+    )
+    .expect("optional string min API should compile");
+
+    optional_rules
+        .validate("ignored", &json!({}))
+        .expect("missing optional string with min should pass");
+    optional_rules
+        .validate("ignored", &json!({"xwho": null}))
+        .expect("null optional string with min should pass");
+
+    let empty_optional = optional_rules
+        .validate("ignored", &json!({"xwho": ""}))
+        .expect_err("present empty optional string with min should fail");
+    assert!(empty_optional
+        .to_string()
+        .contains("field `xwho` length must be at least 1"));
+}
+
+#[test]
+fn rhai_typed_required_and_optional_fields_support_common_json_types() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xcontext").object();
+    event.required("xcontext.level").integer().gt(0);
+    event.required("xcontext.amount").number();
+    event.optional("xcontext.enabled").boolean();
+    event.result()
+}
+"#,
+    )
+    .expect("typed chain API should compile");
+
+    rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "level": 1,
+                    "amount": 1.5,
+                    "enabled": false
+                }
+            }),
+        )
+        .expect("valid typed payload should pass");
+
+    let float_level = rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "level": 1.5,
+                    "amount": 1.5
+                }
+            }),
+        )
+        .expect_err("integer field should reject floats");
+    assert!(float_level.to_string().contains("expected type `Integer`"));
+}
+
+#[test]
+fn rhai_number_constraints_support_gt_gte_lt_and_lte() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("level").integer().gte(1).lte(10);
+    event.required("amount").number().gt(0).lt(100);
+    event.result()
+}
+"#,
+    )
+    .expect("number constraints should compile");
+
+    rules
+        .validate("ignored", &json!({"level": 1, "amount": 99.9}))
+        .expect("values inside inclusive and exclusive ranges should pass");
+
+    let low_level = rules
+        .validate("ignored", &json!({"level": 0, "amount": 1}))
+        .expect_err("gte should reject lower values");
+    assert!(low_level
+        .to_string()
+        .contains("field `level` must be greater than or equal to 1"));
+
+    let high_amount = rules
+        .validate("ignored", &json!({"level": 1, "amount": 100}))
+        .expect_err("lt should reject equal upper boundary");
+    assert!(high_amount
+        .to_string()
+        .contains("field `amount` must be less than 100"));
+}
+
+#[test]
+fn rhai_string_enum_rejects_unknown_values_and_invalid_rule_definitions() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xcontext.os").string().enum(["ios", "android"]);
+    event.result()
+}
+"#,
+    )
+    .expect("string enum API should compile");
+
+    rules
+        .validate("ignored", &json!({"xcontext": {"os": "ios"}}))
+        .expect("known enum value should pass");
+
+    let unknown = rules
+        .validate("ignored", &json!({"xcontext": {"os": "symbian"}}))
+        .expect_err("unknown enum value should fail");
+    assert!(unknown
+        .to_string()
+        .contains("field `xcontext.os` must be one of [ios, android]"));
+
+    let invalid_values = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("x").string().enum(["ios", 1, true]);
+    event.result()
+}
+"#,
+    )
+    .expect("invalid enum value types are detected when the rule runs");
+
+    let error = invalid_values
+        .validate("ignored", &json!({"x": "ios"}))
+        .expect_err("mixed enum values should be a rule definition error");
+    assert!(error
+        .to_string()
+        .contains("enum values for field `x` must all be strings"));
+}
+
 #[tokio::test]
 async fn seed_imports_single_rhai_validation_rule() {
     let db = init_sqlite_database("sqlite::memory:")
@@ -178,15 +405,14 @@ fn validate(rules: &Rules, payload: &Value) -> Result<(), String> {
 fn default_rhai_rules() -> &'static str {
     r#"
 fn validate(event) {
-    event.field("appid").required("string");
-    event.field("xwhat").required("string");
-    event.field("xcontext").required("object");
-    event.field("xcontext.installid").required("string");
+    event.required("appid").string().min(1);
+    let xwhat = event.required("xwhat").string().min(1);
 
-    let os = event.field("xcontext.os");
+    event.required("xcontext").object();
+    event.required("xcontext.installid").string().min(1);
 
-    os.required("string").one_of([
-        "ios", "android", "harmony", "wechat", "toutiao", "tiktok",
+    let os = event.required("xcontext.os").string().enum([
+        "ios", "iOS", "android", "harmony", "wechat", "toutiao", "tiktok",
     ]);
 
     if os.eq("ios") {
@@ -202,29 +428,29 @@ fn validate(event) {
     }
 
     if os.eq("toutiao") || os.eq("tiktok") {
-        event.field("xcontext.openid").required("string");
+        event.required("xcontext.openid").string().min(1);
     }
 
-    if event.field("xwhat").eq("register") {
-        event.field("xwho").required("string");
+    if xwhat.eq("register") {
+        event.required("xwho").string().min(1);
     }
 
-    if event.field("xwhat").eq("payment") {
-        event.field("xwho").required("string");
-        event.field("xcontext.transactionid").required("string");
-        event.field("xcontext.paymenttype").required("string");
+    if xwhat.eq("payment") {
+        event.required("xwho").string().min(1);
+        event.required("xcontext.transactionid").string().min(1);
+        event.required("xcontext.paymenttype").string().min(1);
 
-        event.field("xcontext.currencytype")
-            .required("string")
-            .one_of(currencies());
+        event.required("xcontext.currencytype")
+            .string()
+            .enum(currencies());
 
-        event.field("xcontext.currencyamount").required("number");
-        event.field("xcontext.paymentstatus").optional("boolean");
+        event.required("xcontext.currencyamount").number();
+        event.optional("xcontext.paymentstatus").boolean();
     }
 
-    if event.field("xwhat").eq("levelup") {
-        event.field("xwho").required("string");
-        event.field("xcontext.level").required("integer").gt(0);
+    if xwhat.eq("levelup") {
+        event.required("xwho").string().min(1);
+        event.required("xcontext.level").integer().gt(0);
     }
 
     event.result()

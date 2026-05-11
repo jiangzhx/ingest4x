@@ -5,15 +5,14 @@ use crate::repositories::{
 };
 
 const DEFAULT_RULE_CONTENT: &str = r#"fn validate(event) {
-    event.field("appid").required("string");
-    event.field("xwhat").required("string");
-    event.field("xcontext").required("object");
-    event.field("xcontext.installid").required("string");
+    event.required("appid").string().min(1);
+    let xwhat = event.required("xwhat").string().min(1);
 
-    let os = event.field("xcontext.os");
+    event.required("xcontext").object();
+    event.required("xcontext.installid").string().min(1);
 
-    os.required("string").one_of([
-        "ios", "android", "harmony", "wechat", "toutiao", "tiktok",
+    let os = event.required("xcontext.os").string().enum([
+        "ios", "iOS", "android", "harmony", "wechat", "toutiao", "tiktok",
     ]);
 
     if os.eq("ios") {
@@ -29,29 +28,29 @@ const DEFAULT_RULE_CONTENT: &str = r#"fn validate(event) {
     }
 
     if os.eq("toutiao") || os.eq("tiktok") {
-        event.field("xcontext.openid").required("string");
+        event.required("xcontext.openid").string().min(1);
     }
 
-    if event.field("xwhat").eq("register") {
-        event.field("xwho").required("string");
+    if xwhat.eq("register") {
+        event.required("xwho").string().min(1);
     }
 
-    if event.field("xwhat").eq("payment") {
-        event.field("xwho").required("string");
-        event.field("xcontext.transactionid").required("string");
-        event.field("xcontext.paymenttype").required("string");
+    if xwhat.eq("payment") {
+        event.required("xwho").string().min(1);
+        event.required("xcontext.transactionid").string().min(1);
+        event.required("xcontext.paymenttype").string().min(1);
 
-        event.field("xcontext.currencytype")
-            .required("string")
-            .one_of(currencies());
+        event.required("xcontext.currencytype")
+            .string()
+            .enum(currencies());
 
-        event.field("xcontext.currencyamount").required("number");
-        event.field("xcontext.paymentstatus").optional("boolean");
+        event.required("xcontext.currencyamount").number();
+        event.optional("xcontext.paymentstatus").boolean();
     }
 
-    if event.field("xwhat").eq("levelup") {
-        event.field("xwho").required("string");
-        event.field("xcontext.level").required("integer").gt(0);
+    if xwhat.eq("levelup") {
+        event.required("xwho").string().min(1);
+        event.required("xcontext.level").integer().gt(0);
     }
 
     event.result()
