@@ -17,12 +17,19 @@
 
 ## 项目概览
 
+`ingest4x` 的事件处理结果最终会通过 event sink 投递到下游系统。当前内置支持的 sink 数据源：
+
+| Sink 类型 | 适用场景 | 主要配置 | 状态 |
+| --- | --- | --- | --- |
+| `kafka` | 投递到 Kafka topic，适合接入实时计算、数据平台或后续消费链路。 | delivery target 配置 `bootstrap_servers`；event sink 配置 `topic`。 | 已支持 |
+| `stdout` | 输出到标准输出，适合本地开发、规则调试和默认 seed 验证。 | 无额外配置。 | 已支持 |
+
 - HTTP 接入：`POST /ingest` 和 `GET /ingest?data=<base64-json>`。
 - 项目鉴权：通过 `x-ingest-token` 或 `Authorization: Bearer <token>` 鉴权，token 来自已启用的项目。
 - WAL：本地分段写入、checkpoint、按 sink replay、失败重试，详见 [WAL](docs/wal.md)。
 - Rules：数据库内置 Rhai validation rule，支持按项目绑定 rule set。
 - Processor：Rhai `process(event, request)`，通过 `validate(event)` 和 `emit(target, event)` 处理事件。
-- Sinks：当前内置 `stdout` 和 `kafka` provider，运行时配置来自数据库。
+- Sinks：运行时配置来自数据库，当前内置投递目标见上表。
 - Admin：管理后台、OpenAPI、Swagger UI、Prometheus metrics、service node 注册和心跳。
 - 存储：SQLite / MySQL，启动时自动执行 migration 和默认 seed。
 
