@@ -234,7 +234,7 @@ fn currencies() {
     [
         "JPY", "EUR", "BRL", "HKD", "TWD", "COP", "MXN", "CHF",
         "CAD", "CLP", "AUD", "PEN", "GBP", "CRC", "PLN", "PYG",
-        "BOB", "QAR", "ILS", "SEK", "RUB", "CNY", "ZAR", "SGD",
+        "BOB", "QAR", "ILS", "SEK", "RUB", "CNY", "USD", "ZAR", "SGD",
         "NZD", "BGN", "LKR", "IQD", "TRY", "AED", "DZD", "EGP",
         "IDR", "INR", "NGN", "NOK", "PHP", "PKR", "THB", "UAH",
         "VND",

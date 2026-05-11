@@ -95,7 +95,7 @@ missing required field `xcontext.currencytype`
 }
 ----
 fail
-field `xcontext.currencytype` must be one of [JPY, EUR, BRL, HKD, TWD, COP, MXN, CHF, CAD, CLP, AUD, PEN, GBP, CRC, PLN, PYG, BOB, QAR, ILS, SEK, RUB, CNY, ZAR, SGD, NZD, BGN, LKR, IQD, TRY, AED, DZD, EGP, IDR, INR, NGN, NOK, PHP, PKR, THB, UAH, VND]
+field `xcontext.currencytype` must be one of [JPY, EUR, BRL, HKD, TWD, COP, MXN, CHF, CAD, CLP, AUD, PEN, GBP, CRC, PLN, PYG, BOB, QAR, ILS, SEK, RUB, CNY, USD, ZAR, SGD, NZD, BGN, LKR, IQD, TRY, AED, DZD, EGP, IDR, INR, NGN, NOK, PHP, PKR, THB, UAH, VND]
 
 # 付费事件，缺乏currencyamount属性
 {

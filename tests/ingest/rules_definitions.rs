@@ -187,3 +187,27 @@ async fn shipped_rules_require_xwho_for_register() {
         .validate("register", &valid)
         .expect("register with xwho should pass");
 }
+
+#[tokio::test]
+async fn shipped_rules_allow_usd_currency_for_payment() {
+    let rules = load_rules().await;
+
+    let payment = json!({
+        "appid": "APPID",
+        "xwhat": "payment",
+        "xwho": "user-1",
+        "xcontext": {
+            "installid": "iid",
+            "os": "ios",
+            "idfa": "idfa-1",
+            "transactionid": "tx-1",
+            "paymenttype": "apple",
+            "currencytype": "USD",
+            "currencyamount": 6.5
+        }
+    });
+
+    rules
+        .validate("payment", &payment)
+        .expect("USD currency should pass");
+}
