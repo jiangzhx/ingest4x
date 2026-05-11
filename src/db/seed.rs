@@ -11,8 +11,8 @@ const DEFAULT_RULE_CONTENT: &str = r#"fn validate(event) {
     event.required("xcontext").object();
     event.required("xcontext.installid").string().min(1);
 
-    let os = event.required("xcontext.os").string().enum([
-        "ios", "iOS", "android", "harmony", "wechat", "toutiao", "tiktok",
+    let os = event.required("xcontext.os").string().ignore_case().enum([
+        "ios", "android", "harmony", "wechat", "toutiao", "tiktok",
     ]);
 
     if os.eq("ios") {

@@ -325,6 +325,279 @@ fn validate(event) {
         .contains("enum values for field `x` must all be strings"));
 }
 
+#[test]
+fn rhai_string_rules_can_explicitly_ignore_case_for_enum_and_eq() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    let os = event.required("xcontext.os")
+        .string()
+        .ignore_case()
+        .enum(["ios", "android"]);
+
+    if os.eq("ios") {
+        event.required("xcontext.idfa").string();
+    }
+
+    event.result()
+}
+"#,
+    )
+    .expect("ignore_case string rule should compile");
+
+    rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "os": "iOS",
+                    "idfa": ""
+                }
+            }),
+        )
+        .expect("ignore_case enum and eq should accept different case");
+
+    let strict_rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xcontext.os").string().enum(["ios", "android"]);
+    event.result()
+}
+"#,
+    )
+    .expect("strict string enum rule should compile");
+
+    let err = strict_rules
+        .validate("ignored", &json!({"xcontext": {"os": "iOS"}}))
+        .expect_err("plain enum should stay case-sensitive");
+    assert!(err
+        .to_string()
+        .contains("field `xcontext.os` must be one of [ios, android]"));
+}
+
+#[test]
+fn rhai_string_rules_can_match_regular_expressions() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xcontext.installid")
+        .string()
+        .matches("^[A-Za-z0-9_-]+$");
+    event.optional("xcontext.channel")
+        .string()
+        .matches("^ch-[0-9]+$");
+    event.result()
+}
+"#,
+    )
+    .expect("regex string rules should compile");
+
+    rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "installid": "install_123"
+                }
+            }),
+        )
+        .expect("missing optional regex field should pass");
+
+    rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "installid": "install-123",
+                    "channel": "ch-12"
+                }
+            }),
+        )
+        .expect("matching required and optional regex fields should pass");
+
+    let err = rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "installid": "install 123"
+                }
+            }),
+        )
+        .expect_err("non-matching regex field should fail");
+    assert!(err
+        .to_string()
+        .contains("field `xcontext.installid` must match regex `^[A-Za-z0-9_-]+$`"));
+}
+
+#[test]
+fn rhai_string_regex_can_reuse_ignore_case_and_reject_invalid_patterns() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xcontext.os")
+        .string()
+        .ignore_case()
+        .matches("^ios$");
+    event.result()
+}
+"#,
+    )
+    .expect("ignore_case regex rule should compile");
+
+    rules
+        .validate("ignored", &json!({"xcontext": {"os": "iOS"}}))
+        .expect("ignore_case should make regex matching case-insensitive");
+
+    let invalid_regex = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("x").string().matches("[");
+    event.result()
+}
+"#,
+    )
+    .expect("invalid regex is detected when the rule runs");
+
+    let err = invalid_regex
+        .validate("ignored", &json!({"x": "value"}))
+        .expect_err("invalid regex pattern should be a rule definition error");
+    assert!(err.to_string().contains("invalid regex for field `x`"));
+}
+
+#[test]
+fn rhai_string_rules_can_validate_dates_with_chrono_formatters() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xcontext.day").string().date("%Y-%m-%d");
+    event.optional("xcontext.expires_on").string().date("%Y-%m-%d");
+    event.result()
+}
+"#,
+    )
+    .expect("date string rule should compile");
+
+    rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "day": "2024-02-29"
+                }
+            }),
+        )
+        .expect("valid leap-day date should pass");
+
+    let wrong_shape = rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "day": "2024-2-29"
+                }
+            }),
+        )
+        .expect_err("date must use fixed yyyy-mm-dd shape");
+    assert!(wrong_shape
+        .to_string()
+        .contains("field `xcontext.day` must be a valid date matching format `%Y-%m-%d`"));
+
+    let invalid_calendar_date = rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "day": "2024-02-30"
+                }
+            }),
+        )
+        .expect_err("date must be a real calendar date");
+    assert!(invalid_calendar_date
+        .to_string()
+        .contains("field `xcontext.day` must be a valid date matching format `%Y-%m-%d`"));
+}
+
+#[test]
+fn rhai_string_date_uses_the_user_supplied_chrono_formatter() {
+    let slash_rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("x").string().date("%d/%m/%Y");
+    event.result()
+}
+"#,
+    )
+    .expect("custom chrono date format should compile");
+
+    slash_rules
+        .validate("ignored", &json!({"x": "29/02/2024"}))
+        .expect("custom chrono date format should pass");
+
+    let wrong_order = slash_rules
+        .validate("ignored", &json!({"x": "2024/02/29"}))
+        .expect_err("date must match the configured formatter");
+    assert!(wrong_order
+        .to_string()
+        .contains("field `x` must be a valid date matching format `%d/%m/%Y`"));
+}
+
+#[test]
+fn rhai_string_rules_can_validate_times_and_datetimes_with_chrono_formatters() {
+    let rules = Rules::from_rhai_script(
+        r#"
+fn validate(event) {
+    event.required("xcontext.time").string().time("%H:%M:%S");
+    event.required("xcontext.created_at").string().datetime("%Y-%m-%d %H:%M:%S");
+    event.result()
+}
+"#,
+    )
+    .expect("time and datetime string rules should compile");
+
+    rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "time": "23:59:58",
+                    "created_at": "2024-02-29 23:59:58"
+                }
+            }),
+        )
+        .expect("valid time and datetime should pass");
+
+    let invalid_time = rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "time": "24:00:00",
+                    "created_at": "2024-02-29 23:59:58"
+                }
+            }),
+        )
+        .expect_err("invalid time should fail");
+    assert!(invalid_time
+        .to_string()
+        .contains("field `xcontext.time` must be a valid time matching format `%H:%M:%S`"));
+
+    let invalid_datetime = rules
+        .validate(
+            "ignored",
+            &json!({
+                "xcontext": {
+                    "time": "23:59:58",
+                    "created_at": "2024-02-30 23:59:58"
+                }
+            }),
+        )
+        .expect_err("invalid datetime should fail");
+    assert!(invalid_datetime.to_string().contains(
+        "field `xcontext.created_at` must be a valid datetime matching format `%Y-%m-%d %H:%M:%S`"
+    ));
+}
+
 #[tokio::test]
 async fn seed_imports_single_rhai_validation_rule() {
     let db = init_sqlite_database("sqlite::memory:")
@@ -411,8 +684,8 @@ fn validate(event) {
     event.required("xcontext").object();
     event.required("xcontext.installid").string().min(1);
 
-    let os = event.required("xcontext.os").string().enum([
-        "ios", "iOS", "android", "harmony", "wechat", "toutiao", "tiktok",
+    let os = event.required("xcontext.os").string().ignore_case().enum([
+        "ios", "android", "harmony", "wechat", "toutiao", "tiktok",
     ]);
 
     if os.eq("ios") {

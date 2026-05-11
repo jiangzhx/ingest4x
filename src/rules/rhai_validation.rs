@@ -1,5 +1,7 @@
 use super::error::{RulesValidationCode, RulesValidationError};
 use anyhow::{Context, Result};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
+use regex::RegexBuilder;
 use rhai::serde::to_dynamic;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Scope, AST};
 use serde_json::Value;
@@ -22,6 +24,7 @@ struct FieldRef {
     path: String,
     presence: FieldPresence,
     field_type: Option<FieldType>,
+    ignore_case: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +114,7 @@ impl ValidationEvent {
             path: path.to_string(),
             presence: FieldPresence::Inspect,
             field_type: None,
+            ignore_case: false,
         }
     }
 
@@ -120,6 +124,7 @@ impl ValidationEvent {
             path: path.to_string(),
             presence: FieldPresence::Required,
             field_type: None,
+            ignore_case: false,
         };
         field.validate_required_presence();
         field
@@ -131,6 +136,7 @@ impl ValidationEvent {
             path: path.to_string(),
             presence: FieldPresence::Optional,
             field_type: None,
+            ignore_case: false,
         }
     }
 
@@ -209,6 +215,11 @@ impl FieldRef {
         self.min_length(threshold)
     }
 
+    fn ignore_case(&mut self) -> FieldRef {
+        self.ignore_case = true;
+        self.clone()
+    }
+
     fn enum_strings(&mut self, values: Array) -> std::result::Result<FieldRef, Box<EvalAltResult>> {
         let enum_values = dynamic_array_to_string_enum(values, &self.path)?;
         if enum_values.is_empty() {
@@ -234,13 +245,112 @@ impl FieldRef {
                 .push(type_mismatch_error(&self.path, FieldType::String));
             return Ok(self.clone());
         };
-        if !enum_values.iter().any(|expected| expected == actual) {
+        if !enum_values
+            .iter()
+            .any(|expected| strings_equal(actual, expected, self.ignore_case))
+        {
             state.errors.push(rules_error(
                 RulesValidationCode::EnumValueInvalid,
                 format!(
                     "field `{}` must be one of [{}]",
                     self.path,
                     enum_values.join(", ")
+                ),
+                Some(self.path.clone()),
+            ));
+        }
+        Ok(self.clone())
+    }
+
+    fn matches_pattern(
+        &mut self,
+        pattern: &str,
+    ) -> std::result::Result<FieldRef, Box<EvalAltResult>> {
+        if self.field_type != Some(FieldType::String) {
+            return Err(script_error(format!(
+                "regex for field `{}` must follow string()",
+                self.path
+            )));
+        }
+        let regex = RegexBuilder::new(pattern)
+            .case_insensitive(self.ignore_case)
+            .build()
+            .map_err(|error| {
+                script_error(format!("invalid regex for field `{}`: {error}", self.path))
+            })?;
+
+        let mut state = self.state.lock().expect("validation state lock poisoned");
+        let Some(value) = self.value_for_chained_validation(&state) else {
+            return Ok(self.clone());
+        };
+        let Some(actual) = value.as_str() else {
+            state
+                .errors
+                .push(type_mismatch_error(&self.path, FieldType::String));
+            return Ok(self.clone());
+        };
+        if !regex.is_match(actual) {
+            state.errors.push(rules_error(
+                RulesValidationCode::FieldTypeMismatch,
+                format!("field `{}` must match regex `{pattern}`", self.path),
+                Some(self.path.clone()),
+            ));
+        }
+        Ok(self.clone())
+    }
+
+    fn date(&mut self, formatter: &str) -> std::result::Result<FieldRef, Box<EvalAltResult>> {
+        self.validate_temporal_string(formatter, "date", |value, formatter| {
+            NaiveDate::parse_from_str(value, formatter)
+                .map(|date| date.format(formatter).to_string() == value)
+                .unwrap_or(false)
+        })
+    }
+
+    fn time(&mut self, formatter: &str) -> std::result::Result<FieldRef, Box<EvalAltResult>> {
+        self.validate_temporal_string(formatter, "time", |value, formatter| {
+            NaiveTime::parse_from_str(value, formatter)
+                .map(|time| time.format(formatter).to_string() == value)
+                .unwrap_or(false)
+        })
+    }
+
+    fn datetime(&mut self, formatter: &str) -> std::result::Result<FieldRef, Box<EvalAltResult>> {
+        self.validate_temporal_string(formatter, "datetime", |value, formatter| {
+            NaiveDateTime::parse_from_str(value, formatter)
+                .map(|datetime| datetime.format(formatter).to_string() == value)
+                .unwrap_or(false)
+        })
+    }
+
+    fn validate_temporal_string(
+        &mut self,
+        formatter: &str,
+        kind: &str,
+        is_valid: impl FnOnce(&str, &str) -> bool,
+    ) -> std::result::Result<FieldRef, Box<EvalAltResult>> {
+        if self.field_type != Some(FieldType::String) {
+            return Err(script_error(format!(
+                "{kind} for field `{}` must follow string()",
+                self.path
+            )));
+        }
+        let mut state = self.state.lock().expect("validation state lock poisoned");
+        let Some(value) = self.value_for_chained_validation(&state) else {
+            return Ok(self.clone());
+        };
+        let Some(actual) = value.as_str() else {
+            state
+                .errors
+                .push(type_mismatch_error(&self.path, FieldType::String));
+            return Ok(self.clone());
+        };
+        if !is_valid(actual, formatter) {
+            state.errors.push(rules_error(
+                RulesValidationCode::FieldTypeMismatch,
+                format!(
+                    "field `{}` must be a valid {kind} matching format `{formatter}`",
+                    self.path,
                 ),
                 Some(self.path.clone()),
             ));
@@ -320,7 +430,7 @@ impl FieldRef {
         let Ok(expected) = dynamic_to_json(expected) else {
             return false;
         };
-        values_equal(actual, &expected)
+        values_equal(actual, &expected, self.ignore_case)
     }
 
     fn exists(&mut self) -> bool {
@@ -460,7 +570,12 @@ fn register_validation_api(engine: &mut Engine) {
     engine.register_fn("object", FieldRef::object);
     engine.register_fn("array", FieldRef::array);
     engine.register_fn("min", FieldRef::min_int);
+    engine.register_fn("ignore_case", FieldRef::ignore_case);
     engine.register_fn("enum", FieldRef::enum_strings);
+    engine.register_fn("matches", FieldRef::matches_pattern);
+    engine.register_fn("date", FieldRef::date);
+    engine.register_fn("time", FieldRef::time);
+    engine.register_fn("datetime", FieldRef::datetime);
     engine.register_fn("one_of", FieldRef::one_of);
     engine.register_fn("gt", FieldRef::gt_int);
     engine.register_fn("gt", FieldRef::gt_float);
@@ -658,10 +773,20 @@ fn script_error(message: String) -> Box<EvalAltResult> {
     ))
 }
 
-fn values_equal(actual: &Value, expected: &Value) -> bool {
+fn values_equal(actual: &Value, expected: &Value, ignore_case: bool) -> bool {
     match (actual, expected) {
-        (Value::String(actual), Value::String(expected)) => actual.eq_ignore_ascii_case(expected),
+        (Value::String(actual), Value::String(expected)) => {
+            strings_equal(actual, expected, ignore_case)
+        }
         _ => actual == expected,
+    }
+}
+
+fn strings_equal(actual: &str, expected: &str, ignore_case: bool) -> bool {
+    if ignore_case {
+        actual.to_lowercase() == expected.to_lowercase()
+    } else {
+        actual == expected
     }
 }
 
