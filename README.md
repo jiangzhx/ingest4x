@@ -265,7 +265,7 @@ flush_bytes = 67108864
 - 事件校验：`fn validate(event)`，负责校验事件字段。
 - 事件加工：`fn process(event, request)`，负责调用校验规则、改写或补充事件并 `emit` 到 event sinks。
 
-详细说明见 [事件处理](docs/event-processing/README.md)。
+详细说明见 [事件处理](docs/event-processing/index.md)。
 
 ## WAL 和投递
 
@@ -295,7 +295,7 @@ npm run check
 ## 更多文档
 
 - [WAL](docs/wal.md)
-- [事件处理](docs/event-processing/README.md)
+- [事件处理](docs/event-processing/index.md)
 - [管理后台和 API](docs/admin-api.md)
 - [发布和版本](docs/release-versioning.md)
 - [项目结构](docs/project-structure.md)

@@ -46,8 +46,9 @@
 
 | 路径 | 说明 |
 | --- | --- |
+| `docs/index.md` | GitHub Pages 文档首页 |
 | `docs/wal.md` | WAL、checkpoint 和 replay |
-| `docs/event-processing/README.md` | 事件处理总览 |
+| `docs/event-processing/index.md` | 事件处理总览 |
 | `docs/event-processing/event-validation.md` | 事件校验 |
 | `docs/event-processing/event-transformation.md` | 事件加工和投递 |
 | `docs/admin-api.md` | 管理后台和 API |
