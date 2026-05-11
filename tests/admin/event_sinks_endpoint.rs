@@ -70,6 +70,10 @@ async fn admin_can_list_registered_sink_types() {
             body,
             json!([
                 {
+                    "target_type": "blackhole",
+                    "label": "Blackhole"
+                },
+                {
                     "target_type": "kafka",
                     "label": "Kafka"
                 },

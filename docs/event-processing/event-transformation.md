@@ -89,6 +89,8 @@ Processor 脚本存在数据库里，支持：
 | `emit` 目标不存在 | WAL replay 将该 record 视为 delivery plan 错误并进入 quarantine |
 | Sink 投递失败 | 不进入 quarantine；对应 sink checkpoint 不推进，后续重试 |
 
+`blackhole` sink 是一个生产可用的诊断 sink。`mode = "ok"` 会丢弃事件并推进 checkpoint；`mode = "slow"` 会按 `delay_ms` 延迟后成功；`mode = "fail"` 会返回投递失败，用来验证失败 sink 不推进 checkpoint 和 WAL 积压行为。
+
 ## 默认脚本
 
 默认 seed 会创建一套 rules 和 processor。默认 processor 的策略很简单：

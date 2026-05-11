@@ -5,6 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod blackhole;
 pub mod kafka;
 pub mod state;
 pub mod stdout;
@@ -172,6 +173,41 @@ mod tests {
             }))
             .is_err());
     }
+
+    #[test]
+    fn blackhole_provider_exposes_metadata_and_normalizes_json_configs() {
+        let provider = provider_for("blackhole").expect("blackhole provider should be registered");
+
+        assert_eq!(
+            provider.sink_type(),
+            SinkTypeMetadata {
+                target_type: "blackhole",
+                label: "Blackhole",
+            }
+        );
+        assert_eq!(
+            provider
+                .normalize_delivery_target_config(json!({}))
+                .expect("target config should normalize"),
+            r#"{}"#
+        );
+        assert_eq!(
+            provider
+                .normalize_event_sink_config(json!({
+                    "mode": "slow",
+                    "delay_ms": 25
+                }))
+                .expect("destination config should normalize"),
+            r#"{"mode":"slow","delay_ms":25}"#
+        );
+        assert!(provider
+            .normalize_event_sink_config(json!({
+                "mode": "slow",
+                "delay_ms": 25,
+                "unknown": true
+            }))
+            .is_err());
+    }
 }
 
 pub fn normalize_delivery_target_config(
@@ -225,7 +261,8 @@ fn provider_for(target_type: &str) -> Option<&'static dyn ErasedEventSinkProvide
 }
 
 fn providers() -> &'static [&'static dyn ErasedEventSinkProvider] {
-    static PROVIDERS: [&dyn ErasedEventSinkProvider; 2] = [&kafka::PROVIDER, &stdout::PROVIDER];
+    static PROVIDERS: [&dyn ErasedEventSinkProvider; 3] =
+        [&blackhole::PROVIDER, &kafka::PROVIDER, &stdout::PROVIDER];
     &PROVIDERS
 }
 

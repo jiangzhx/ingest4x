@@ -85,6 +85,31 @@ pub fn stdout_runtime_sink(sink_id: &str, auto_offset_reset: AutoOffsetReset) ->
 }
 
 #[allow(dead_code)]
+pub fn blackhole_runtime_sink(
+    sink_id: &str,
+    destination_json: serde_json::Value,
+    auto_offset_reset: AutoOffsetReset,
+) -> RuntimeEventSink {
+    RuntimeEventSink {
+        sink_id: sink_id.to_string(),
+        name: sink_id.to_string(),
+        destination_json,
+        auto_offset_reset,
+        target: DeliveryTarget {
+            id: 1,
+            target_id: format!("{sink_id}_target"),
+            name: format!("{sink_id} target"),
+            target_type: DeliveryTargetType::parse("blackhole")
+                .expect("blackhole target type should be registered"),
+            config_json: json!({}),
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        },
+    }
+}
+
+#[allow(dead_code)]
 pub fn kafka_runtime_sink(
     sink_id: &str,
     bootstrap_servers: &str,

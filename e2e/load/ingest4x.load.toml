@@ -1,0 +1,27 @@
+[logging]
+level = "info"
+format = "json"
+
+[ingest]
+bind_address = "127.0.0.1:18091"
+max_event_bytes = 262144
+
+[management]
+bind_address = "127.0.0.1:18092"
+admin_password = "ingest4x-load"
+
+[database]
+url = "sqlite://e2e/load/runtime/ingest4x-load.db?mode=rwc"
+refresh_interval_secs = 1
+
+[wal]
+dir = "e2e/load/runtime/wal"
+flush_max_interval = "10ms"
+flush_max_records = 1000
+no_sync = false
+wal_segment_max_bytes = 134217728
+
+[wal.checkpoint]
+flush_interval = "1s"
+flush_records = 1000
+flush_bytes = 67108864

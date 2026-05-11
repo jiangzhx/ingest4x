@@ -1,0 +1,10 @@
+{
+  "appid": "LOADTEST_APP",
+  "xwhat": "startup",
+  "xcontext": {
+    "installid": "loadtest-static",
+    "os": "ios",
+    "idfa": "loadtest-idfa",
+    "test_run_id": "manual"
+  }
+}

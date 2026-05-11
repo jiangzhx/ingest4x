@@ -21,6 +21,7 @@
 
 | Sink 类型 | 适用场景 | 主要配置 | 状态 |
 | --- | --- | --- | --- |
+| `blackhole` | 丢弃事件，适合生产或客户集群压测、容量评估和下游故障模拟。 | delivery target 无配置；event sink 可配置 `mode` 和 `delay_ms`。 | 已支持 |
 | `kafka` | 投递到 Kafka topic，适合接入实时计算、数据平台或后续消费链路。 | delivery target 配置 `bootstrap_servers`；event sink 配置 `topic`。 | 已支持 |
 | `stdout` | 输出到标准输出，适合本地开发、规则调试和默认 seed 验证。 | 无额外配置。 | 已支持 |
 
@@ -101,6 +102,26 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
+
+HTTP e2e 压测独立放在 `e2e/load/`，默认使用 `blackhole` sink 避开 Kafka 和下游瓶颈：
+
+```bash
+e2e/load/run.sh
+```
+
+最近一次本地 `blackhole` 压测摘要：
+
+- 环境：Apple M5，arm64，10 logical CPUs，24 GiB RAM，macOS 26.3.1 (25D771280a)
+- 启动方式：`cargo run --bin ingest4x -- server -c e2e/load/ingest4x.load.toml`
+- 每档压测时长：1m
+
+| Target rate | Actual rate | WAL received | Failed requests | p95 latency | Replay backlog after drain window | Result |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 500 req/s | 499.936677 req/s | 30001 | 0.0000% | 20.399 ms | 0 | Pass |
+| 1000 req/s | 999.835627 req/s | 60000 | 0.0000% | 22.209 ms | 22288 | HTTP pass; replay backlog |
+| 3000 req/s | 2999.213727 req/s | 180001 | 0.0000% | 24.182 ms | 153377 | HTTP pass; replay backlog |
+
+完整压测记录见 [本地 blackhole 压测报告](docs/load-test-local-blackhole.md)。
 
 ### 2. 启动服务
 
@@ -230,6 +251,8 @@ fn process(event, request) {
 
 启动时也会创建一个 `Local Kafka` delivery target，指向 `127.0.0.1:9092`。如果要把事件投递到 Kafka，需要在管理后台或管理 API 中创建/启用对应的 event sink。
 
+如果要在生产或客户集群做压测，但不希望 Kafka、内网或下游消费能力成为瓶颈，可以创建 `blackhole` sink。它会完整参与 WAL replay、processor、sink checkpoint 和 metrics 链路，但不会把事件写入外部系统。
+
 ## 配置
 
 最小配置结构：
@@ -322,5 +345,6 @@ npm run check
 - [WAL](docs/wal.md)
 - [事件处理](docs/event-processing/index.md)
 - [管理后台和 API](docs/admin-api.md)
+- [本地 blackhole 压测报告](docs/load-test-local-blackhole.md)
 - [发布和版本](docs/release-versioning.md)
 - [项目结构](docs/project-structure.md)

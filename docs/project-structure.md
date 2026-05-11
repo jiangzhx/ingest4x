@@ -34,6 +34,7 @@
 | `tests/jlt/core` | 默认规则的 JLT 用例 |
 | `tests/ingest` | `/ingest` 接入、规则兼容和 seed 相关测试 |
 | `tests/wal_tests` | WAL append、replay、checkpoint 和故障处理测试 |
+| `e2e/load` | 基于 k6 + `blackhole` sink 的 HTTP e2e 压测套件 |
 
 ## 配置
 

@@ -1,5 +1,5 @@
 use crate::support::mock_services::build_app_state_with_test_processor;
-use crate::support::sinks::{kafka_runtime_sink, stdout_runtime_sink};
+use crate::support::sinks::{blackhole_runtime_sink, kafka_runtime_sink, stdout_runtime_sink};
 use actix_http::StatusCode;
 use actix_web::{test, App};
 use base64::engine::general_purpose::STANDARD;
@@ -989,6 +989,157 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
     .expect("sink checkpoint json");
     assert_eq!(sink_checkpoint["checkpoint_lsn"], json!(1));
     assert!(!wal_dir.join("checkpoint.json").exists());
+}
+
+#[actix_rt::test]
+async fn wal_replay_sends_records_to_blackhole_and_advances_checkpoint() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            name: "APPID".to_string(),
+            enabled: true,
+            ingest_token: "igx_APPID".to_string(),
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![blackhole_runtime_sink(
+        "blackhole",
+        json!({}),
+        AutoOffsetReset::Earliest,
+    )])
+    .expect("event sinks should initialize");
+    let processor = processor_with_sinks(
+        r#"
+            fn process(event, request) {
+                emit(SINK_BLACKHOLE, event);
+            }
+        "#,
+        &["blackhole"],
+    );
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-blackhole-ok",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("blackhole replay should succeed"),
+        1
+    );
+
+    let checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/blackhole.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
+}
+
+#[actix_rt::test]
+async fn wal_replay_blocks_failed_blackhole_sink_without_advancing_checkpoint() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            name: "APPID".to_string(),
+            enabled: true,
+            ingest_token: "igx_APPID".to_string(),
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![blackhole_runtime_sink(
+        "blackhole",
+        json!({ "mode": "fail" }),
+        AutoOffsetReset::Earliest,
+    )])
+    .expect("event sinks should initialize");
+    initialize_sink_checkpoints(&wal_dir, &event_sinks).expect("initialize sink checkpoints");
+    let processor = processor_with_sinks(
+        r#"
+            fn process(event, request) {
+                emit(SINK_BLACKHOLE, event);
+            }
+        "#,
+        &["blackhole"],
+    );
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-blackhole-fail",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    let error = replay_once(WalReplayContext {
+        dir: &wal_dir,
+        event_sinks: &event_sinks,
+        project_registry: &project_registry,
+        rule_repository: &rule_repository,
+        processor: &processor,
+        checkpoint: CheckpointSettings::default(),
+    })
+    .await
+    .expect_err("failed blackhole sink should block replay");
+
+    assert!(error.to_string().contains("blackhole"));
+    assert!(!wal_dir.join("checkpoints/blackhole.json").exists());
 }
 
 #[actix_rt::test]

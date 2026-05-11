@@ -48,6 +48,14 @@ OpenAPI 和 Swagger UI 不需要管理员密码；`/api/admin/*` 业务接口需
 | Event sinks | `/api/admin/event-sinks` |
 | Service nodes | `/api/admin/service-nodes` |
 
+内置 sink type：
+
+| Sink type | 用途 | 配置 |
+| --- | --- | --- |
+| `blackhole` | 丢弃事件，用于生产诊断、客户集群压测和下游故障模拟 | delivery target 使用 `{}`；event sink 可使用 `{ "mode": "ok" }`、`{ "mode": "slow", "delay_ms": 20 }` 或 `{ "mode": "fail" }` |
+| `kafka` | 投递到 Kafka topic | delivery target 配置 `bootstrap_servers`；event sink 配置 `topic` |
+| `stdout` | 输出到标准输出 | delivery target 和 event sink 都使用 `{}` |
+
 ## Metrics 和健康检查
 
 管理面提供：

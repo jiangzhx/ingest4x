@@ -10,6 +10,7 @@ web/admin/dist/
 docs/features
 docs/superpowers
 /wal/
+/e2e/load/runtime/
 .graphify_*
 /graphify-out/
 /AGENTS.md
