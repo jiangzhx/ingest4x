@@ -46,14 +46,45 @@ pub struct WalRecord {
     pub lsn: u64,
     #[serde(default)]
     pub node_id: String,
+    pub envelope: WalEnvelope,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalEnvelope {
     pub project_id: i32,
     pub received_at_ms: u64,
+    pub source: WalSourceEnvelope,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WalSourceEnvelope {
+    Http(WalHttpEnvelope),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalHttpEnvelope {
     pub method: String,
     pub path: String,
     pub query: Option<String>,
     pub remote_addr: Option<String>,
     pub headers: BTreeMap<String, String>,
-    pub body: Vec<u8>,
+}
+
+impl WalRecord {
+    pub fn project_id(&self) -> i32 {
+        self.envelope.project_id
+    }
+
+    pub fn received_at_ms(&self) -> u64 {
+        self.envelope.received_at_ms
+    }
+
+    pub fn http(&self) -> &WalHttpEnvelope {
+        match &self.envelope.source {
+            WalSourceEnvelope::Http(http) => http,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -479,14 +510,18 @@ pub fn new_record(
         record_id: format!("wal-{received_at_ms}-{sequence}"),
         lsn: 0,
         node_id: String::new(),
-        project_id,
-        received_at_ms,
-        method: method.into(),
-        path: path.into(),
-        query,
-        remote_addr,
-        headers,
-        body,
+        envelope: WalEnvelope {
+            project_id,
+            received_at_ms,
+            source: WalSourceEnvelope::Http(WalHttpEnvelope {
+                method: method.into(),
+                path: path.into(),
+                query,
+                remote_addr,
+                headers,
+            }),
+        },
+        payload: body,
     }
 }
 
@@ -744,7 +779,7 @@ fn serialize_frame(record: &WalRecord) -> io::Result<Vec<u8>> {
     frame.push(RECORD_FLAGS_NONE);
     frame.extend_from_slice(&[0_u8; 2]);
     frame.extend_from_slice(&record.lsn.to_be_bytes());
-    frame.extend_from_slice(&record.received_at_ms.to_be_bytes());
+    frame.extend_from_slice(&record.received_at_ms().to_be_bytes());
     frame.extend_from_slice(&node_id_len.to_be_bytes());
     frame.extend_from_slice(&payload_len.to_be_bytes());
     frame.extend_from_slice(&payload_crc.to_be_bytes());
@@ -1030,7 +1065,10 @@ fn read_record_frame(
     let record = bitcode::deserialize::<WalRecord>(&payload).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("invalid wal record payload: {error}"),
+            format!(
+                "wal record payload is not compatible with this ingest4x version: {error}; segment={}; record_version={version}; payload_codec=bitcode(WalRecord); this usually means the WAL was written with a different WalRecord schema and there is no payload schema version marker yet; use a compatible WAL migration or drain/remove old WAL only after confirming pending events are no longer needed",
+                path.display()
+            ),
         )
     })?;
     if record.lsn != lsn {
@@ -1039,7 +1077,7 @@ fn read_record_frame(
             format!("wal record lsn mismatch: {}", path.display()),
         ));
     }
-    if record.received_at_ms != received_at_ms {
+    if record.received_at_ms() != received_at_ms {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("wal record timestamp mismatch: {}", path.display()),

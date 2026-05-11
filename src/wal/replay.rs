@@ -247,7 +247,8 @@ fn quarantine_replay_issue(
 
 fn quarantine_record<'a>(entry: &'a WalEntry, issue: &'a ReplayIssue) -> QuarantinedWalRecord<'a> {
     let error = issue.to_string();
-    let body_xwhat = quarantine_event_xwhat(&entry.record.body);
+    let http = entry.record.http();
+    let body_xwhat = quarantine_event_xwhat(&entry.record.payload);
     QuarantinedWalRecord {
         schema: QUARANTINE_SCHEMA,
         code: issue.code(),
@@ -256,15 +257,15 @@ fn quarantine_record<'a>(entry: &'a WalEntry, issue: &'a ReplayIssue) -> Quarant
         position: entry.position,
         next_position: entry.next_position,
         node_id: entry.record.node_id.as_str(),
-        received_at_ms: entry.record.received_at_ms,
-        method: entry.record.method.as_str(),
-        path: entry.record.path.as_str(),
-        query: entry.record.query.as_deref(),
+        received_at_ms: entry.record.received_at_ms(),
+        method: http.method.as_str(),
+        path: http.path.as_str(),
+        query: http.query.as_deref(),
         xwhat: body_xwhat.or_else(|| issue.xwhat().map(str::to_string)),
         target: issue.target().map(str::to_string),
         message: issue.message(),
         error,
-        body_base64: STANDARD.encode(&entry.record.body),
+        body_base64: STANDARD.encode(&entry.record.payload),
     }
 }
 
@@ -357,7 +358,7 @@ async fn process_record(
     context: &WalReplayContext<'_>,
     record: &WalRecord,
 ) -> std::result::Result<Vec<crate::rhai_ctx::ProcessorDelivery>, ReplayIssue> {
-    let json = match serde_json::from_slice::<Value>(&record.body) {
+    let json = match serde_json::from_slice::<Value>(&record.payload) {
         Ok(json) => json,
         Err(error) => {
             warn!(
@@ -374,20 +375,20 @@ async fn process_record(
         .map(ToString::to_string);
     if !context
         .project_registry
-        .contains_project_id(record.project_id)
+        .contains_project_id(record.project_id())
     {
-        return Err(ReplayIssue::unknown_project_id(record.project_id, xwhat));
+        return Err(ReplayIssue::unknown_project_id(record.project_id(), xwhat));
     }
 
     let rules = context
         .rule_repository
-        .compile_project_rules(record.project_id)
+        .compile_project_rules(record.project_id())
         .await
-        .map_err(|error| ReplayIssue::from_rule_repository(record.project_id, error))?;
+        .map_err(|error| ReplayIssue::from_rule_repository(record.project_id(), error))?;
     let output = context
         .processor
         .process_event(
-            record.project_id,
+            record.project_id(),
             json.clone(),
             rules,
             request_context(record),
@@ -532,18 +533,18 @@ fn sink_failures(sink_states: &HashMap<String, SinkReplayState>) -> Vec<String> 
 }
 
 fn request_context(record: &WalRecord) -> ProcessorRequestContext {
+    let http = record.http();
     ProcessorRequestContext::new(
-        record.remote_addr.clone(),
-        record.method.clone(),
-        record.path.clone(),
-        record
-            .headers
+        http.remote_addr.clone(),
+        http.method.clone(),
+        http.path.clone(),
+        http.headers
             .iter()
             .map(|(name, value)| (name.to_ascii_lowercase(), value.clone()))
             .collect::<HashMap<_, _>>(),
     )
     .with_request_id(record.record_id.clone())
-    .with_received_at_ms(record.received_at_ms)
+    .with_received_at_ms(record.received_at_ms())
 }
 
 fn sink_checkpoint_path(dir: &Path, sink_name: &str) -> PathBuf {

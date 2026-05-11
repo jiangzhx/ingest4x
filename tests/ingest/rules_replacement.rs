@@ -57,9 +57,7 @@ fn validate(event) {
     let error = rules
         .validate("ignored", &json!({}))
         .expect_err("missing appid should fail without event.result");
-    assert!(error
-        .to_string()
-        .contains("missing required field `appid`"));
+    assert!(error.to_string().contains("missing required field `appid`"));
 }
 
 #[test]

@@ -90,13 +90,14 @@ flush_max_records = 1
     assert_eq!(status_code, StatusCode::OK);
     assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
     let records = read_all_records(&wal_dir).expect("read wal records");
-    assert_eq!(records[0].project_id, 1);
-    assert!(!records[0].headers.contains_key("x-ingest-token"));
-    assert!(!records[0]
+    assert_eq!(records[0].project_id(), 1);
+    let http = records[0].http();
+    assert!(!http.headers.contains_key("x-ingest-token"));
+    assert!(!http
         .headers
         .values()
         .any(|value| value.contains("igx_APPID")));
-    let received_at_ms = records[0].received_at_ms;
+    let received_at_ms = records[0].received_at_ms();
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert_eq!(
         server::replay_wal_once(&app_state)

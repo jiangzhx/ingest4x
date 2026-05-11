@@ -83,18 +83,19 @@ dir = "{}"
     let records = read_all_records(&wal_dir).expect("read wal records");
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record.method, "POST");
-    assert_eq!(record.path, "/ingest");
+    let http = record.http();
+    assert_eq!(http.method, "POST");
+    assert_eq!(http.path, "/ingest");
     assert_eq!(
-        record.headers.get("x-test-header").map(String::as_str),
+        http.headers.get("x-test-header").map(String::as_str),
         Some("kept")
     );
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
+        serde_json::from_slice::<serde_json::Value>(&record.payload).expect("raw json payload"),
         payload
     );
     assert!(record.record_id.starts_with("wal-"));
-    assert!(record.received_at_ms > 0);
+    assert!(record.received_at_ms() > 0);
 }
 
 #[actix_rt::test]
@@ -221,10 +222,11 @@ dir = "{}"
     let records = read_all_records(&wal_dir).expect("read wal records");
     assert_eq!(records.len(), 1);
     let record = &records[0];
-    assert_eq!(record.method, "GET");
-    assert_eq!(record.path, "/ingest");
+    let http = record.http();
+    assert_eq!(http.method, "GET");
+    assert_eq!(http.path, "/ingest");
     assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&record.body).expect("raw json body"),
+        serde_json::from_slice::<serde_json::Value>(&record.payload).expect("raw json payload"),
         payload
     );
 }
@@ -674,6 +676,41 @@ dir = "{}"
                 .as_bytes()));
 }
 
+#[actix_rt::test]
+async fn read_all_records_explains_incompatible_wal_record_payload_schema() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let writer = WalWriter::new(&wal_settings(&wal_dir)).expect("wal writer");
+    writer.append(&test_record("first")).expect("append record");
+    drop(writer);
+
+    let path = wal_segment_path(&wal_dir);
+    let mut bytes = fs::read(&path).expect("read wal segment");
+    let frame_offset = 512;
+    let record_header_len = u16::from_be_bytes(
+        bytes[frame_offset + 10..frame_offset + 12]
+            .try_into()
+            .expect("record header length"),
+    ) as usize;
+    let payload_len = u32::from_be_bytes(
+        bytes[frame_offset + 34..frame_offset + 38]
+            .try_into()
+            .expect("payload length"),
+    ) as usize;
+    let payload_start = frame_offset + record_header_len;
+    let payload_end = payload_start + payload_len;
+    bytes[payload_start..payload_end].fill(0xff);
+    let payload_crc = crc32fast::hash(&bytes[payload_start..payload_end]);
+    bytes[frame_offset + 38..frame_offset + 42].copy_from_slice(&payload_crc.to_be_bytes());
+    fs::write(&path, bytes).expect("rewrite wal segment");
+
+    let error = read_all_records(&wal_dir).expect_err("payload schema mismatch should fail");
+
+    assert!(error
+        .to_string()
+        .contains("wal record payload is not compatible with this ingest4x version"));
+}
+
 fn wal_segment_path(wal_dir: &Path) -> std::path::PathBuf {
     wal_dir.join("0000000000000001.wal")
 }
@@ -1032,7 +1069,7 @@ async fn durable_append_waits_for_interval_flush_when_record_threshold_not_reach
     let records = read_all_records(&wal_dir).expect("read wal records");
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].lsn, 1);
-    assert_eq!(records[0].body, b"wait-for-flush");
+    assert_eq!(records[0].payload, b"wait-for-flush");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1102,8 +1139,8 @@ async fn durable_append_flushes_when_record_threshold_is_reached() {
     assert_eq!(second_position.lsn, 2);
     let records = read_all_records(&wal_dir).expect("read wal records");
     assert_eq!(records.len(), 2);
-    assert_eq!(records[0].body, b"first-threshold");
-    assert_eq!(records[1].body, b"second-threshold");
+    assert_eq!(records[0].payload, b"first-threshold");
+    assert_eq!(records[1].payload, b"second-threshold");
 }
 
 #[actix_rt::test]
