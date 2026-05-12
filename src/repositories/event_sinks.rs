@@ -550,6 +550,10 @@ impl DeliveryTargetType {
         Self("stdout".to_string())
     }
 
+    pub fn blackhole() -> Self {
+        Self("blackhole".to_string())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

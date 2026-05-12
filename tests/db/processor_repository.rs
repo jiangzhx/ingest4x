@@ -151,7 +151,7 @@ async fn seed_creates_minimal_default_processor_script() {
     let processors = ProcessorRepository::new(db);
     create_default_sinks(&sinks).await;
 
-    seed::run(&projects, &rules, &processors)
+    seed::run(&projects, &rules, &sinks, &processors)
         .await
         .expect("seed should run");
 
@@ -168,6 +168,60 @@ async fn seed_creates_minimal_default_processor_script() {
     assert!(runtime
         .entry_source
         .contains("emit(SINK_EVENTS_ERROR, event)"));
+
+    let loadtest_project = projects
+        .find_enabled_project_by_ingest_token("igx_loadtest_token")
+        .await
+        .expect("loadtest project lookup should succeed")
+        .expect("loadtest project should be seeded");
+    let loadtest_runtime = processors
+        .runtime_script_for_project(loadtest_project.id)
+        .await
+        .expect("loadtest processor should load");
+
+    assert_eq!(loadtest_runtime.script_key, "loadtest_blackhole_processor");
+    assert!(loadtest_runtime
+        .entry_source
+        .contains("emit(SINK_LOADTEST_EVENTS, event)"));
+}
+
+#[tokio::test]
+async fn seed_keeps_disabled_loadtest_project_without_duplicate_token_error() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let projects = ProjectRepository::new(db.clone());
+    let rules = RuleRepository::new(db.clone());
+    let sinks = EventSinkRepository::new(db.clone());
+    let processors = ProcessorRepository::new(db);
+
+    projects
+        .create_project(CreateProjectInput {
+            name: "loadtest_app".to_string(),
+            enabled: false,
+            ingest_token: "igx_loadtest_token".to_string(),
+        })
+        .await
+        .expect("disabled loadtest project should be created");
+
+    seed::run(&projects, &rules, &sinks, &processors)
+        .await
+        .expect("seed should tolerate disabled loadtest project");
+
+    let loadtest_project = projects
+        .list_projects()
+        .await
+        .expect("projects should load")
+        .into_iter()
+        .find(|project| project.ingest_token == "igx_loadtest_token")
+        .expect("loadtest project should still exist");
+    assert!(!loadtest_project.enabled);
+
+    let runtime = processors
+        .runtime_script_for_project(loadtest_project.id)
+        .await
+        .expect("loadtest processor binding should still be maintained");
+    assert_eq!(runtime.script_key, "loadtest_blackhole_processor");
 }
 
 #[tokio::test]

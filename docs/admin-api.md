@@ -50,11 +50,15 @@ OpenAPI 和 Swagger UI 不需要管理员密码；`/api/admin/*` 业务接口需
 
 内置 sink type：
 
+[sink 参数说明](sink-parameters.md) 里有每种类型的完整 `delivery target` 和 `event sink` 字段清单。
+
 | Sink type | 用途 | 配置 |
 | --- | --- | --- |
-| `blackhole` | 丢弃事件，用于生产诊断、客户集群压测和下游故障模拟 | delivery target 使用 `{}`；event sink 可使用 `{ "mode": "ok" }`、`{ "mode": "slow", "delay_ms": 20 }` 或 `{ "mode": "fail" }` |
-| `kafka` | 投递到 Kafka topic | delivery target 配置 `bootstrap_servers`；event sink 配置 `topic` |
-| `stdout` | 输出到标准输出 | delivery target 和 event sink 都使用 `{}` |
+| `blackhole` | 丢弃事件，用于生产诊断、客户集群压测和下游故障模拟 | `delivery target`: `{}`，`event sink`：`mode` / `delay_ms` |
+| `kafka` | 投递到 Kafka topic | `delivery target`: `bootstrap_servers` 等连接参数，`event sink`: `topic` |
+| `stdout` | 输出到标准输出 | `delivery target` 和 `event sink` 都不需要额外参数 |
+
+默认 seed 会创建 `loadtest_app`、`igx_loadtest_token`、`loadtest_blackhole`、`loadtest_events` 和 `loadtest_blackhole_processor`，用于 e2e 压测。`igx_loadtest_token` 是真实 ingest token；生产或客户集群如果不希望保留默认压测入口，应禁用 `loadtest_app` 或替换 token。
 
 ## Metrics 和健康检查
 

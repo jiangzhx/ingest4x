@@ -262,6 +262,16 @@ async fn build_app_state_seeds_local_kafka_delivery_target_without_toml_sinks() 
         local_kafka["config_json"]["bootstrap_servers"],
         "127.0.0.1:9092"
     );
+    let loadtest_blackhole = targets
+        .as_array()
+        .expect("targets should be an array")
+        .iter()
+        .find(|target| target["target_id"] == "loadtest_blackhole")
+        .expect("loadtest blackhole delivery target should be seeded");
+
+    assert_eq!(loadtest_blackhole["name"], "Loadtest Blackhole");
+    assert_eq!(loadtest_blackhole["target_type"], "blackhole");
+    assert_eq!(loadtest_blackhole["enabled"], true);
 
     let response = test::call_service(
         &app,
@@ -284,7 +294,7 @@ async fn build_app_state_seeds_local_kafka_delivery_target_without_toml_sinks() 
                 .expect("sink_id should be a string")
         })
         .collect::<Vec<_>>();
-    assert_eq!(sink_ids, vec!["events", "events_error"]);
+    assert_eq!(sink_ids, vec!["events", "events_error", "loadtest_events"]);
 }
 
 #[actix_rt::test]
@@ -324,6 +334,15 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
     )
     .await;
     assert_eq!(seeded_project.status(), StatusCode::OK);
+
+    let loadtest_project = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri("/registry/igx_loadtest_token")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(loadtest_project.status(), StatusCode::OK);
 
     let assignments = test::call_service(
         &app,

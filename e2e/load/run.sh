@@ -14,12 +14,17 @@ ADMIN_URL="${ADMIN_URL:-http://127.0.0.1:18092}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-ingest4x-load}"
 INGEST_TOKEN="${INGEST_TOKEN:-igx_loadtest_token}"
 LOADTEST_APPID="${LOADTEST_APPID:-LOADTEST_APP}"
+LOADTEST_PROJECT_NAME="${LOADTEST_PROJECT_NAME:-loadtest_app}"
+LOADTEST_TARGET_ID="${LOADTEST_TARGET_ID:-loadtest_blackhole}"
+LOADTEST_SINK_ID="${LOADTEST_SINK_ID:-loadtest_events}"
+LOADTEST_PROCESSOR_KEY="${LOADTEST_PROCESSOR_KEY:-loadtest_blackhole_processor}"
 LOADTEST_SINK_MODE="${LOADTEST_SINK_MODE:-ok}"
 LOADTEST_DELAY_MS="${LOADTEST_DELAY_MS:-0}"
 LOADTEST_RUN_ID="${LOADTEST_RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 WAIT_DRAIN_TIMEOUT="${WAIT_DRAIN_TIMEOUT:-60}"
 
-export ADMIN_URL ADMIN_PASSWORD INGEST_TOKEN LOADTEST_APPID
+export ADMIN_URL ADMIN_PASSWORD INGEST_TOKEN LOADTEST_APPID LOADTEST_PROJECT_NAME
+export LOADTEST_TARGET_ID LOADTEST_SINK_ID LOADTEST_PROCESSOR_KEY
 export LOADTEST_SINK_MODE LOADTEST_DELAY_MS LOADTEST_RUN_ID
 export INGEST_URL
 
@@ -64,9 +69,21 @@ fi
 
 wait_for_url "$ADMIN_URL/healthz" 60
 
-echo "Configuring loadtest project, processor, and blackhole sink"
-python3 "$LOAD_DIR/scripts/setup_blackhole.py" >"$RESULTS_DIR/setup.json"
+cat <<EOF >"$RESULTS_DIR/setup.json"
+{
+  "admin_url": "${ADMIN_URL}",
+  "project": "${LOADTEST_PROJECT_NAME}",
+  "ingest_token": "${INGEST_TOKEN}",
+  "delivery_target": "${LOADTEST_TARGET_ID}",
+  "event_sink": "${LOADTEST_SINK_ID}",
+  "processor_script": "${LOADTEST_PROCESSOR_KEY}",
+  "mode": "${LOADTEST_SINK_MODE}",
+  "delay_ms": ${LOADTEST_DELAY_MS},
+  "source": "seeded_or_preconfigured"
+}
+EOF
 cat "$RESULTS_DIR/setup.json"
+echo "Using preconfigured loadtest project/sink/processor resources."
 
 if ! command -v k6 >/dev/null 2>&1; then
   echo "k6 is required to run the load scenario. Install it, then rerun this script." >&2

@@ -1,7 +1,7 @@
 use crate::support::sinks::create_default_event_sinks;
 use ingest4x::db::{init_sqlite_database, seed};
 use ingest4x::repositories::{
-    CreateProjectInput, ProcessorRepository, ProjectRepository, RuleRepository,
+    CreateProjectInput, EventSinkRepository, ProcessorRepository, ProjectRepository, RuleRepository,
 };
 use ingest4x::rules::Rules;
 use serde_json::json;
@@ -13,6 +13,7 @@ async fn load_rules() -> Rules {
     create_default_event_sinks(&db).await;
     let projects = ProjectRepository::new(db.clone());
     let rules = RuleRepository::new(db.clone());
+    let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
 
     let project = projects
@@ -23,7 +24,7 @@ async fn load_rules() -> Rules {
         })
         .await
         .expect("project should be created");
-    seed::run(&projects, &rules, &processors)
+    seed::run(&projects, &rules, &sinks, &processors)
         .await
         .expect("seed should run");
 

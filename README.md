@@ -21,9 +21,9 @@
 
 | Sink 类型 | 适用场景 | 主要配置 | 状态 |
 | --- | --- | --- | --- |
-| `blackhole` | 丢弃事件，适合生产或客户集群压测、容量评估和下游故障模拟。 | delivery target 无配置；event sink 可配置 `mode` 和 `delay_ms`。 | 已支持 |
-| `kafka` | 投递到 Kafka topic，适合接入实时计算、数据平台或后续消费链路。 | delivery target 配置 `bootstrap_servers`；event sink 配置 `topic`。 | 已支持 |
-| `stdout` | 输出到标准输出，适合本地开发、规则调试和默认 seed 验证。 | 无额外配置。 | 已支持 |
+| [`blackhole`](docs/sink-parameters.md#blackhole) | 丢弃事件，适合生产或客户集群压测、容量评估和下游故障模拟。 | delivery target 无配置；event sink 可配置 `mode` 和 `delay_ms`。 | 已支持 |
+| [`kafka`](docs/sink-parameters.md#kafka) | 投递到 Kafka topic，适合接入实时计算、数据平台或后续消费链路。 | delivery target 配置 `bootstrap_servers`；event sink 配置 `topic`。 | 已支持 |
+| [`stdout`](docs/sink-parameters.md#stdout) | 输出到标准输出，适合本地开发、规则调试和默认 seed 验证。 | 无额外配置。 | 已支持 |
 
 - HTTP 接入：`POST /ingest` 和 `GET /ingest?data=<base64-json>`。
 - 项目鉴权：通过 `x-ingest-token` 或 `Authorization: Bearer <token>` 鉴权，token 来自已启用的项目。
@@ -108,6 +108,8 @@ HTTP e2e 压测独立放在 `e2e/load/`，默认使用 `blackhole` sink 避开 K
 ```bash
 e2e/load/run.sh
 ```
+
+启动 seed 会内置压测资源：`loadtest_app` project、`igx_loadtest_token` ingest token、`loadtest_blackhole` delivery target、`loadtest_events` event sink 和 `loadtest_blackhole_processor`。如果部署到公网或客户集群，需要把这个默认 token 当作可写入 WAL 的正式 token 管理；不用压测时可以在管理后台禁用 `loadtest_app`。
 
 最近一次本地 `blackhole` 压测摘要：
 
@@ -251,7 +253,15 @@ fn process(event, request) {
 
 启动时也会创建一个 `Local Kafka` delivery target，指向 `127.0.0.1:9092`。如果要把事件投递到 Kafka，需要在管理后台或管理 API 中创建/启用对应的 event sink。
 
-如果要在生产或客户集群做压测，但不希望 Kafka、内网或下游消费能力成为瓶颈，可以创建 `blackhole` sink。它会完整参与 WAL replay、processor、sink checkpoint 和 metrics 链路，但不会把事件写入外部系统。
+为了方便生产或客户集群压测，默认 seed 还会创建：
+
+- project: `loadtest_app`
+- ingest token: `igx_loadtest_token`
+- delivery target: `loadtest_blackhole`
+- event sink: `loadtest_events`
+- processor script: `loadtest_blackhole_processor`
+
+这条链路使用 `blackhole` sink，完整参与 WAL replay、processor、sink checkpoint 和 metrics 链路，但不会把事件写入外部系统。`igx_loadtest_token` 是可写入 WAL 的真实 token；如果当前环境不允许压测入口常开，应在管理后台禁用 `loadtest_app` 或替换 token。
 
 ## 配置
 

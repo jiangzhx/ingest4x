@@ -8,6 +8,7 @@
 - [WAL、checkpoint 和 replay](wal.md)
 - [事件处理](event-processing/)
 - [管理后台和 API](admin-api.md)
+- [Sink 参数说明](sink-parameters.md)
 - [本地 blackhole 压测报告](load-test-local-blackhole.md)
 - [发布和版本](release-versioning.md)
 - [项目结构](project-structure.md)

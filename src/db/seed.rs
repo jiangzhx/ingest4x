@@ -1,8 +1,16 @@
 use crate::repositories::{
-    CreateProcessorScriptInput, CreateProcessorScriptModuleInput, CreateProjectInput,
-    CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, ProcessorRepository,
-    ProcessorScriptStatus, ProjectRepository, RuleRepository, UpdateRuleSetInput,
+    CreateDeliveryTargetInput, CreateEventSinkInput, CreateProcessorScriptInput,
+    CreateProcessorScriptModuleInput, CreateProjectInput, CreateProjectRuleSetInput,
+    CreateRuleInput, CreateRuleSetInput, DeliveryTargetType, EventSinkRepository,
+    ProcessorRepository, ProcessorScriptStatus, Project, ProjectRepository, RuleRepository,
+    UpdateRuleSetInput,
 };
+use crate::settings::AutoOffsetReset;
+use crate::sinks::kafka::{
+    default_kafka_batch_num_messages, default_kafka_delivery_timeout_ms, default_kafka_linger_ms,
+    default_kafka_queue_buffering_max_messages, default_kafka_queue_buffering_max_ms,
+};
+use serde_json::json;
 
 const DEFAULT_RULE_CONTENT: &str = r#"fn validate(event) {
     event.required("appid").string().min(1);
@@ -77,25 +85,179 @@ fn process(event, request) {
 }
 "#;
 
+const LOADTEST_PROCESSOR_SCRIPT: &str = r#"
+fn process(event, request) {
+    let validation = validate(event);
+    if !validation["ok"] {
+        if !event.contains("xcontext") || event["xcontext"] == () {
+            event["xcontext"] = #{};
+        }
+        let xcontext = event["xcontext"];
+        xcontext["loadtest_validation_code"] = validation["code"];
+        event["xcontext"] = xcontext;
+    }
+    emit(SINK_LOADTEST_EVENTS, event);
+}
+"#;
+
 pub async fn run(
     project_repository: &ProjectRepository,
     rule_repository: &RuleRepository,
+    event_sink_repository: &EventSinkRepository,
     processor_repository: &ProcessorRepository,
 ) -> std::io::Result<()> {
+    ensure_local_kafka_delivery_target(event_sink_repository).await?;
+    ensure_default_event_sinks(event_sink_repository).await?;
+    ensure_loadtest_event_sink(event_sink_repository).await?;
     ensure_test_project(project_repository).await?;
+    ensure_loadtest_project(project_repository).await?;
     ensure_default_rule_set_imported(rule_repository, project_repository).await?;
     ensure_default_processor_script(processor_repository).await?;
-    ensure_default_processor_bindings(processor_repository).await
+    ensure_loadtest_processor_script(processor_repository).await?;
+    ensure_default_processor_bindings(processor_repository).await?;
+    ensure_loadtest_processor_binding(project_repository, processor_repository).await
+}
+
+async fn ensure_local_kafka_delivery_target(
+    repository: &EventSinkRepository,
+) -> std::io::Result<()> {
+    let existing = repository
+        .list_delivery_targets()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if existing
+        .iter()
+        .any(|target| target.target_id == "local_kafka")
+    {
+        return Ok(());
+    }
+
+    repository
+        .create_delivery_target(CreateDeliveryTargetInput {
+            target_id: "local_kafka".to_string(),
+            name: "Local Kafka".to_string(),
+            target_type: DeliveryTargetType::kafka(),
+            config_json: json!({
+                "bootstrap_servers": "127.0.0.1:9092",
+                "delivery_timeout_ms": default_kafka_delivery_timeout_ms(),
+                "queue_buffering_max_ms": default_kafka_queue_buffering_max_ms(),
+                "batch_num_messages": default_kafka_batch_num_messages(),
+                "queue_buffering_max_messages": default_kafka_queue_buffering_max_messages(),
+                "linger_ms": default_kafka_linger_ms()
+            }),
+            enabled: true,
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    Ok(())
+}
+
+async fn ensure_default_event_sinks(repository: &EventSinkRepository) -> std::io::Result<()> {
+    let existing = repository
+        .list_event_sinks()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let missing_sink_ids = ["events", "events_error"]
+        .into_iter()
+        .filter(|sink_id| !existing.iter().any(|sink| sink.sink_id == *sink_id))
+        .collect::<Vec<_>>();
+    if missing_sink_ids.is_empty() {
+        return Ok(());
+    }
+
+    let targets = repository
+        .list_delivery_targets()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let target = match targets
+        .into_iter()
+        .find(|target| target.target_id == "default_stdout")
+    {
+        Some(target) => target,
+        None => repository
+            .create_delivery_target(CreateDeliveryTargetInput {
+                target_id: "default_stdout".to_string(),
+                name: "Default Stdout".to_string(),
+                target_type: DeliveryTargetType::stdout(),
+                config_json: json!({}),
+                enabled: true,
+            })
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    };
+
+    for sink_id in missing_sink_ids {
+        repository
+            .create_event_sink(CreateEventSinkInput {
+                sink_id: sink_id.to_string(),
+                name: sink_id.to_string(),
+                delivery_target_id: target.id,
+                destination_json: json!({}),
+                auto_offset_reset: AutoOffsetReset::Latest,
+                enabled: true,
+            })
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+    }
+
+    Ok(())
+}
+
+async fn ensure_loadtest_event_sink(repository: &EventSinkRepository) -> std::io::Result<()> {
+    let targets = repository
+        .list_delivery_targets()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let target = match targets
+        .into_iter()
+        .find(|target| target.target_id == "loadtest_blackhole")
+    {
+        Some(target) => target,
+        None => repository
+            .create_delivery_target(CreateDeliveryTargetInput {
+                target_id: "loadtest_blackhole".to_string(),
+                name: "Loadtest Blackhole".to_string(),
+                target_type: DeliveryTargetType::blackhole(),
+                config_json: json!({}),
+                enabled: true,
+            })
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?,
+    };
+
+    let existing = repository
+        .list_event_sinks()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    if existing
+        .iter()
+        .any(|sink| sink.sink_id == "loadtest_events")
+    {
+        return Ok(());
+    }
+
+    repository
+        .create_event_sink(CreateEventSinkInput {
+            sink_id: "loadtest_events".to_string(),
+            name: "Loadtest Events".to_string(),
+            delivery_target_id: target.id,
+            destination_json: json!({}),
+            auto_offset_reset: AutoOffsetReset::Latest,
+            enabled: true,
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    Ok(())
 }
 
 async fn ensure_test_project(repository: &ProjectRepository) -> std::io::Result<()> {
     const TEST_PROJECT_NAME: &str = "test_app";
     const TEST_INGEST_TOKEN: &str = "igx_local_test_token";
 
-    if repository
-        .find_enabled_project_by_ingest_token(TEST_INGEST_TOKEN)
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?
+    if find_project_by_ingest_token(repository, TEST_INGEST_TOKEN)
+        .await?
         .is_some()
     {
         return Ok(());
@@ -111,6 +273,41 @@ async fn ensure_test_project(repository: &ProjectRepository) -> std::io::Result<
         .map_err(|error| std::io::Error::other(error.to_string()))?;
 
     Ok(())
+}
+
+async fn ensure_loadtest_project(repository: &ProjectRepository) -> std::io::Result<()> {
+    const LOADTEST_PROJECT_NAME: &str = "loadtest_app";
+    const LOADTEST_INGEST_TOKEN: &str = "igx_loadtest_token";
+
+    if find_project_by_ingest_token(repository, LOADTEST_INGEST_TOKEN)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    repository
+        .create_project(CreateProjectInput {
+            name: LOADTEST_PROJECT_NAME.to_string(),
+            enabled: true,
+            ingest_token: LOADTEST_INGEST_TOKEN.to_string(),
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    Ok(())
+}
+
+async fn find_project_by_ingest_token(
+    repository: &ProjectRepository,
+    ingest_token: &str,
+) -> std::io::Result<Option<Project>> {
+    Ok(repository
+        .list_projects()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .into_iter()
+        .find(|project| project.ingest_token == ingest_token))
 }
 
 async fn ensure_default_processor_script(repository: &ProcessorRepository) -> std::io::Result<()> {
@@ -135,11 +332,64 @@ async fn ensure_default_processor_script(repository: &ProcessorRepository) -> st
     Ok(())
 }
 
+async fn ensure_loadtest_processor_script(repository: &ProcessorRepository) -> std::io::Result<()> {
+    if repository
+        .list_scripts()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .into_iter()
+        .any(|script| script.script_key == "loadtest_blackhole_processor")
+    {
+        return Ok(());
+    }
+
+    repository
+        .create_script(CreateProcessorScriptInput {
+            script_key: "loadtest_blackhole_processor".to_string(),
+            name: "Loadtest blackhole processor".to_string(),
+            entry_module: "main".to_string(),
+            status: ProcessorScriptStatus::Active,
+            modules: vec![CreateProcessorScriptModuleInput {
+                module_name: "main".to_string(),
+                source: LOADTEST_PROCESSOR_SCRIPT.to_string(),
+            }],
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    Ok(())
+}
+
 async fn ensure_default_processor_bindings(
     repository: &ProcessorRepository,
 ) -> std::io::Result<()> {
     repository
         .ensure_default_project_processors()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+
+    Ok(())
+}
+
+async fn ensure_loadtest_processor_binding(
+    project_repository: &ProjectRepository,
+    processor_repository: &ProcessorRepository,
+) -> std::io::Result<()> {
+    let Some(project) =
+        find_project_by_ingest_token(project_repository, "igx_loadtest_token").await?
+    else {
+        return Ok(());
+    };
+    let script = processor_repository
+        .list_scripts()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+        .into_iter()
+        .find(|script| script.script_key == "loadtest_blackhole_processor")
+        .ok_or_else(|| std::io::Error::other("loadtest processor seed is missing"))?;
+
+    processor_repository
+        .assign_project_processor(project.id, script.id, true)
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))?;
 

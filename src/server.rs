@@ -1,17 +1,12 @@
 use crate::db::{init_database, seed};
 use crate::ingest::processor::{ProcessorRegistryState, ProcessorState};
 use crate::repositories::{
-    CreateDeliveryTargetInput, CreateEventSinkInput, CreateProjectInput, DeliveryTargetType,
-    EventSinkRepository, ProcessorRepository, ProjectRepository, RegisterServiceNodeInput,
-    RuleRepository, ServiceNodeRepository, ServiceNodeStatus,
+    CreateProjectInput, EventSinkRepository, ProcessorRepository, ProjectRepository,
+    RegisterServiceNodeInput, RuleRepository, ServiceNodeRepository, ServiceNodeStatus,
 };
 use crate::routes;
 use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
-use crate::settings::{default_database_refresh_interval_secs, AutoOffsetReset, Settings};
-use crate::sinks::kafka::{
-    default_kafka_batch_num_messages, default_kafka_delivery_timeout_ms, default_kafka_linger_ms,
-    default_kafka_queue_buffering_max_messages, default_kafka_queue_buffering_max_ms,
-};
+use crate::settings::{default_database_refresh_interval_secs, Settings};
 use crate::sinks::EventSinkState;
 use crate::utils::get_host_ip;
 use crate::utils::prometheus::{
@@ -22,7 +17,6 @@ use crate::wal::WalWriter;
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{App, HttpResponse, HttpServer};
 use prometheus::Registry;
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -501,9 +495,13 @@ async fn init_repository_state(
     let event_sink_repository = EventSinkRepository::new(db.clone());
     let processor_repository = ProcessorRepository::new(db.clone());
     let service_node_repository = ServiceNodeRepository::new(db);
-    seed_default_delivery_targets(&event_sink_repository).await?;
-    seed_default_event_sinks(&event_sink_repository).await?;
-    seed::run(&repository, &rule_repository, &processor_repository).await?;
+    seed::run(
+        &repository,
+        &rule_repository,
+        &event_sink_repository,
+        &processor_repository,
+    )
+    .await?;
     let project_registry = Data::new(
         ProjectRegistryState::load(repository.clone())
             .await
@@ -518,90 +516,6 @@ async fn init_repository_state(
         Data::new(service_node_repository),
         project_registry,
     ))
-}
-
-async fn seed_default_delivery_targets(repository: &EventSinkRepository) -> std::io::Result<()> {
-    let existing = repository
-        .list_delivery_targets()
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    if existing
-        .iter()
-        .any(|target| target.target_id == "local_kafka")
-    {
-        return Ok(());
-    }
-
-    repository
-        .create_delivery_target(CreateDeliveryTargetInput {
-            target_id: "local_kafka".to_string(),
-            name: "Local Kafka".to_string(),
-            target_type: DeliveryTargetType::kafka(),
-            config_json: json!({
-                "bootstrap_servers": "127.0.0.1:9092",
-                "delivery_timeout_ms": default_kafka_delivery_timeout_ms(),
-                "queue_buffering_max_ms": default_kafka_queue_buffering_max_ms(),
-                "batch_num_messages": default_kafka_batch_num_messages(),
-                "queue_buffering_max_messages": default_kafka_queue_buffering_max_messages(),
-                "linger_ms": default_kafka_linger_ms()
-            }),
-            enabled: true,
-        })
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-    Ok(())
-}
-
-async fn seed_default_event_sinks(repository: &EventSinkRepository) -> std::io::Result<()> {
-    let existing = repository
-        .list_event_sinks()
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let missing_sink_ids = ["events", "events_error"]
-        .into_iter()
-        .filter(|sink_id| !existing.iter().any(|sink| sink.sink_id == *sink_id))
-        .collect::<Vec<_>>();
-    if missing_sink_ids.is_empty() {
-        return Ok(());
-    }
-
-    let targets = repository
-        .list_delivery_targets()
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let target = match targets
-        .into_iter()
-        .find(|target| target.target_id == "default_stdout")
-    {
-        Some(target) => target,
-        None => repository
-            .create_delivery_target(CreateDeliveryTargetInput {
-                target_id: "default_stdout".to_string(),
-                name: "Default Stdout".to_string(),
-                target_type: DeliveryTargetType::stdout(),
-                config_json: json!({}),
-                enabled: true,
-            })
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))?,
-    };
-
-    for sink_id in missing_sink_ids {
-        repository
-            .create_event_sink(CreateEventSinkInput {
-                sink_id: sink_id.to_string(),
-                name: sink_id.to_string(),
-                delivery_target_id: target.id,
-                destination_json: json!({}),
-                auto_offset_reset: AutoOffsetReset::Latest,
-                enabled: true,
-            })
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-    }
-
-    Ok(())
 }
 
 async fn import_mock_projects(
