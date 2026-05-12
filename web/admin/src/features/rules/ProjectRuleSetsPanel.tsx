@@ -32,17 +32,17 @@ export function ProjectRuleSetsPanel({
     currentAssignment === undefined
       ? null
       : ruleSetById.get(currentAssignment.rule_set_id)?.name ??
-        `规则集 #${currentAssignment.rule_set_id}`;
+        `Rule set #${currentAssignment.rule_set_id}`;
 
   return (
     <Space direction="vertical" size={12} style={{ display: "flex" }}>
       <Typography.Title level={4} style={{ margin: 0 }}>
-        规则集绑定
+        Rule Set Binding
       </Typography.Title>
       {projectId !== null ? (
         <Space.Compact style={{ width: "100%" }}>
           <Select
-            placeholder="选择启用规则集"
+            placeholder="Select enabled rule set"
             value={currentAssignment?.rule_set_id}
             options={ruleSetOptions}
             loading={loading}
@@ -57,25 +57,25 @@ export function ProjectRuleSetsPanel({
               loading={updatingRuleSetId === currentAssignment.rule_set_id}
               onClick={() => onUnassign(currentAssignment.rule_set_id)}
             >
-              解绑
+              Unassign
             </Button>
           ) : null}
         </Space.Compact>
       ) : (
-        <Alert type="info" showIcon message="保存项目后即可绑定规则集" />
+        <Alert type="info" showIcon message="Save the project before assigning a rule set." />
       )}
       {projectId !== null ? (
         <Typography.Text type="secondary">
-          当前项目：{projectName ? `${projectName} (#${projectId})` : `#${projectId}`}
+          Current project: {projectName ? `${projectName} (#${projectId})` : `#${projectId}`}
         </Typography.Text>
       ) : null}
       {currentRuleSetName ? (
         <Space size={8}>
-          <Typography.Text>当前启用规则集：{currentRuleSetName}</Typography.Text>
-          <Tag color="success">已启用</Tag>
+          <Typography.Text>Current enabled rule set: {currentRuleSetName}</Typography.Text>
+          <Tag color="success">Enabled</Tag>
         </Space>
       ) : (
-        <Alert type="info" showIcon message="当前项目未绑定规则集" />
+        <Alert type="info" showIcon message="Current project has no assigned rule set" />
       )}
     </Space>
   );

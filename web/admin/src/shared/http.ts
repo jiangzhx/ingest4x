@@ -15,7 +15,7 @@ export class HttpError extends Error {
 
 export class AdminUnauthorizedError extends HttpError {
   constructor() {
-    super(401, "管理员认证已失效，请重新登录");
+    super(401, "Admin authentication expired, please sign in again");
   }
 }
 
@@ -69,7 +69,7 @@ async function buildHttpError(response: Response): Promise<HttpError> {
   }
 
   if (!message) {
-    message = `请求失败（HTTP ${response.status}）`;
+    message = `Request failed (HTTP ${response.status})`;
   }
 
   return new HttpError(response.status, message);
@@ -111,7 +111,7 @@ export async function requestJson<T>(
 
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
-    throw new HttpError(response.status, "响应不是 JSON");
+    throw new HttpError(response.status, "Response is not JSON");
   }
 
   const text = await response.text();
@@ -119,6 +119,6 @@ export async function requestJson<T>(
   try {
     return JSON.parse(text) as T;
   } catch {
-    throw new HttpError(response.status, "响应 JSON 解析失败");
+    throw new HttpError(response.status, "Failed to parse JSON response");
   }
 }

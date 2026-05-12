@@ -39,7 +39,7 @@ export function formatProcessorTimestamp(timestamp: number | null): string {
 
 export function getErrorMessage(
   error: unknown,
-  fallback = "请求失败，请稍后重试。",
+  fallback = "Request failed, please try again later.",
 ): string {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -57,7 +57,7 @@ export function toCreateProcessorScriptPayload(
   }));
 
   if (modules.length === 0) {
-    throw new Error("至少需要一个 Rhai module");
+    throw new Error("At least one Rhai module is required");
   }
 
   return {
@@ -78,7 +78,7 @@ export function toUpdateProcessorScriptPayload(
   }));
 
   if (modules.length === 0) {
-    throw new Error("至少需要一个 Rhai module");
+    throw new Error("At least one Rhai module is required");
   }
 
   return {
@@ -98,7 +98,7 @@ export function toValidateProcessorScriptPayload(
   }));
 
   if (modules.length === 0) {
-    throw new Error("至少需要一个 Rhai module");
+    throw new Error("At least one Rhai module is required");
   }
 
   return {

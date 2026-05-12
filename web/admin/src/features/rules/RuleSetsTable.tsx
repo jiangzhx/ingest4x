@@ -24,7 +24,7 @@ export function RuleSetsTable({
 }: RuleSetsTableProps) {
   const columns: ColumnsType<RuleSet> = [
     {
-      title: "规则集",
+      title: "Rule Set",
       dataIndex: "name",
       key: "name",
       render: (value: string, ruleSet) => (
@@ -37,15 +37,15 @@ export function RuleSetsTable({
       ),
     },
     {
-      title: "状态",
+      title: "Status",
       dataIndex: "enabled",
       key: "enabled",
       width: 120,
       render: (enabled: boolean) =>
-        enabled ? <Tag color="success">已启用</Tag> : <Tag>已停用</Tag>,
+        enabled ? <Tag color="success">Enabled</Tag> : <Tag>Disabled</Tag>,
     },
     {
-      title: "更新时间",
+      title: "Updated At",
       dataIndex: "updated_at",
       key: "updated_at",
       width: 180,
@@ -56,7 +56,7 @@ export function RuleSetsTable({
       ),
     },
     {
-      title: "操作",
+      title: "Actions",
       key: "actions",
       width: 220,
       render: (_, ruleSet) => {
@@ -65,20 +65,20 @@ export function RuleSetsTable({
         return (
           <Space size={8}>
             <Button size="small" onClick={() => onSelect(ruleSet)}>
-              查看
+              View
             </Button>
             <Button
               size="small"
               disabled={actionsDisabled}
               onClick={() => onEdit(ruleSet)}
             >
-              编辑
+              Edit
             </Button>
             <Popconfirm
-              title="删除规则集"
-              description={`将删除规则集 ${ruleSet.name}，该操作不可恢复。`}
-              okText="删除"
-              cancelText="取消"
+              title="Delete rule set"
+              description={`Rule set ${ruleSet.name} will be deleted and cannot be undone.`}
+              okText="Delete"
+              cancelText="Cancel"
               disabled={actionsDisabled}
               okButtonProps={{ danger: true, loading: isDeleting }}
               onConfirm={() => onDelete(ruleSet)}
@@ -89,7 +89,7 @@ export function RuleSetsTable({
                 disabled={actionsDisabled}
                 loading={isDeleting}
               >
-                删除
+                Delete
               </Button>
             </Popconfirm>
           </Space>
@@ -109,7 +109,10 @@ export function RuleSetsTable({
       }
       locale={{
         emptyText: (
-          <Empty description="当前还没有规则集" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            <Empty
+              description="No rule sets are configured yet"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
         ),
       }}
       scroll={{ x: 860 }}

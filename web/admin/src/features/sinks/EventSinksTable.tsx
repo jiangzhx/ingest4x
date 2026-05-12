@@ -61,7 +61,7 @@ export function EventSinksTable({
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
     },
     {
-      title: "展示名",
+      title: "Display Name",
       dataIndex: "name",
       key: "name",
       width: 220,
@@ -89,7 +89,7 @@ export function EventSinksTable({
       },
     },
     {
-      title: "投递目标",
+      title: "Destination",
       dataIndex: "destination_json",
       key: "destination_json",
       width: 240,
@@ -112,15 +112,15 @@ export function EventSinksTable({
       render: (value: EventSink["auto_offset_reset"]) => <Tag>{value}</Tag>,
     },
     {
-      title: "状态",
+      title: "Status",
       dataIndex: "enabled",
       key: "enabled",
       width: 120,
       render: (enabled: boolean) =>
-        enabled ? <Tag color="success">已启用</Tag> : <Tag>已停用</Tag>,
+        enabled ? <Tag color="success">Enabled</Tag> : <Tag>Disabled</Tag>,
     },
     {
-      title: "更新时间",
+      title: "Updated At",
       dataIndex: "updated_at",
       key: "updated_at",
       width: 180,
@@ -131,7 +131,7 @@ export function EventSinksTable({
       ),
     },
     {
-      title: "操作",
+      title: "Actions",
       key: "actions",
       width: 160,
       fixed: "right",
@@ -146,13 +146,13 @@ export function EventSinksTable({
               disabled={actionsDisabled}
               onClick={() => onEdit(sink)}
             >
-              编辑
+              Edit
             </Button>
             <Popconfirm
-              title="删除 Event Sink"
-              description={`将删除 ${sink.sink_id}，对应 checkpoint 文件不会被删除。`}
-              okText="删除"
-              cancelText="取消"
+              title="Delete Event Sink"
+              description={`Event sink ${sink.sink_id} will be deleted. Associated checkpoint files will remain.`}
+              okText="Delete"
+              cancelText="Cancel"
               disabled={disableRowActions || isDeleting}
               okButtonProps={{ danger: true, loading: isDeleting }}
               onConfirm={() => onDelete(sink)}
@@ -163,7 +163,7 @@ export function EventSinksTable({
                 disabled={disableRowActions}
                 loading={isDeleting}
               >
-                删除
+                Delete
               </Button>
             </Popconfirm>
           </Space>
@@ -182,7 +182,7 @@ export function EventSinksTable({
       locale={{
         emptyText: (
           <Empty
-            description="当前还没有 event sink"
+            description="No event sinks are configured yet"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ),

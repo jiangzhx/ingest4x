@@ -8,23 +8,23 @@ export function HomePage() {
         Admin Console
       </Typography.Title>
       <Typography.Paragraph style={{ marginBottom: 0 }}>
-        管理项目、规则、事件投递 sink 和 Rhai processor。
+        Manage projects, rules, event sink delivery, and Rhai processors.
       </Typography.Paragraph>
       <Space>
         <Button type="primary">
-          <Link to="/projects">项目管理</Link>
+          <Link to="/projects">Projects</Link>
         </Button>
         <Button>
-          <Link to="/rules">规则管理</Link>
+          <Link to="/rules">Rules</Link>
         </Button>
         <Button>
-          <Link to="/sinks">Sink 管理</Link>
+          <Link to="/sinks">Sink Management</Link>
         </Button>
         <Button>
-          <Link to="/processors">Processor 管理</Link>
+          <Link to="/processors">Processor Management</Link>
         </Button>
         <Button>
-          <Link to="/service-nodes">节点管理</Link>
+          <Link to="/service-nodes">Service Nodes</Link>
         </Button>
       </Space>
     </Space>

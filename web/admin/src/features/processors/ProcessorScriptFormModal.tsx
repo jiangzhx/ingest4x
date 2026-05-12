@@ -249,19 +249,19 @@ export function ProcessorScriptFormModal({
       destroyOnHidden
       open={open}
       width={900}
-      title={mode === "edit" ? "编辑 Processor Script" : "创建 Processor Script"}
+      title={mode === "edit" ? "Edit Processor Script" : "Create Processor Script"}
       loading={loading}
       onCancel={onCancel}
       footer={
         <Space style={{ display: "flex", justifyContent: "flex-end" }}>
-          <Button onClick={onCancel}>取消</Button>
+          <Button onClick={onCancel}>Cancel</Button>
           <Button
             loading={validateLoading}
             onClick={() => {
               void validateScript(true).catch(() => {});
             }}
           >
-            检查
+            Validate
           </Button>
           <Button
             type="primary"
@@ -270,7 +270,7 @@ export function ProcessorScriptFormModal({
               void handleOk().catch(() => {});
             }}
           >
-            {mode === "edit" ? "保存" : "创建"}
+            {mode === "edit" ? "Save" : "Create"}
           </Button>
         </Space>
       }
@@ -285,40 +285,40 @@ export function ProcessorScriptFormModal({
             label="Script Key"
             name="script_key"
             rules={[
-              { required: true, message: "请输入 script_key" },
-              { whitespace: true, message: "script_key 不能为空" },
+              { required: true, message: "Please enter script_key" },
+              { whitespace: true, message: "script_key cannot be empty" },
             ]}
           >
             <Input
               disabled={mode === "edit"}
-              placeholder="例如：payment_pipeline"
+              placeholder="For example: payment_pipeline"
               style={{ width: 260 }}
             />
           </Form.Item>
           <Form.Item<ProcessorScriptFormValues>
-            label="展示名"
+            label="Display Name"
             name="name"
             rules={[
-              { required: true, message: "请输入展示名" },
-              { whitespace: true, message: "展示名不能为空" },
+              { required: true, message: "Please enter display name" },
+              { whitespace: true, message: "Display name cannot be empty" },
             ]}
           >
-            <Input placeholder="例如：支付事件处理脚本" style={{ width: 260 }} />
+            <Input placeholder="For example: payment event processor" style={{ width: 260 }} />
           </Form.Item>
           <Form.Item<ProcessorScriptFormValues>
             label="Entry Module"
             name="entry_module"
             rules={[
-              { required: true, message: "请输入 entry_module" },
-              { whitespace: true, message: "entry_module 不能为空" },
+              { required: true, message: "Please enter entry_module" },
+              { whitespace: true, message: "entry_module cannot be empty" },
             ]}
           >
             <Input placeholder="main" style={{ width: 160 }} />
           </Form.Item>
           <Form.Item<ProcessorScriptFormValues>
-            label="状态"
+            label="Status"
             name="status"
-            rules={[{ required: true, message: "请选择状态" }]}
+            rules={[{ required: true, message: "Please select a status" }]}
           >
             <Select options={statusOptions} style={{ width: 130 }} />
           </Form.Item>
@@ -389,8 +389,8 @@ export function ProcessorScriptFormModal({
                     noStyle
                     name={[field.name, "module_name"]}
                     rules={[
-                      { required: true, message: "请输入 module_name" },
-                      { whitespace: true, message: "module_name 不能为空" },
+                      { required: true, message: "Please enter module_name" },
+                      { whitespace: true, message: "module_name cannot be empty" },
                     ]}
                   >
                     <ModuleNameTabLabel
@@ -410,16 +410,16 @@ export function ProcessorScriptFormModal({
                     size={12}
                     style={{ display: "flex" }}
                   >
-                    <Form.Item
-                      label={renderRhaiSourceLabel(
-                        sourceErrorForField(field.name),
-                      )}
-                      name={[field.name, "source"]}
-                      rules={[
-                        { required: true, message: "请输入 Rhai source" },
-                        { whitespace: true, message: "source 不能为空" },
-                      ]}
-                    >
+                        <Form.Item
+                          label={renderRhaiSourceLabel(
+                            sourceErrorForField(field.name),
+                          )}
+                          name={[field.name, "source"]}
+                          rules={[
+                            { required: true, message: "Please enter Rhai source" },
+                            { whitespace: true, message: "source cannot be empty" },
+                          ]}
+                        >
                       <RhaiEditor />
                     </Form.Item>
                   </Space>
@@ -445,7 +445,7 @@ export function ProcessorScriptFormModal({
                 tabBarGutter={8}
                 tabBarExtraContent={
                   <Space>
-                    <Button onClick={handleAddModule}>添加 Module</Button>
+                    <Button onClick={handleAddModule}>Add Module</Button>
                   </Space>
                 }
               />

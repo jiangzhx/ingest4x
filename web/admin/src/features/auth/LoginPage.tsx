@@ -44,14 +44,14 @@ export function LoginPage() {
   const handleSubmit = async ({ password }: LoginFormValues) => {
     setSubmitting(true);
 
-    try {
+      try {
       await loginWithPassword(password);
       setAdminPassword(password);
-      message.success("登录成功");
+      message.success("Login successful");
       await navigate({ to: getLoginRedirectPath() as "/" });
     } catch (error) {
       clearAdminPassword();
-      message.error(error instanceof Error ? error.message : "登录失败");
+      message.error(error instanceof Error ? error.message : "Login failed");
     } finally {
       setSubmitting(false);
     }
@@ -80,30 +80,32 @@ export function LoginPage() {
           <div>
             <Typography.Text type="secondary">Ingest4x Admin</Typography.Text>
             <Typography.Title level={2} style={{ margin: "8px 0 0" }}>
-              登录管理后台
+              Admin Login
             </Typography.Title>
           </div>
           <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            输入管理员密码后，前端会保存在当前浏览器会话中，并在后续
-            `/api/admin/*` 请求中自动附带；刷新页面会保持登录状态。
+            After entering the admin password, it is saved in the current browser
+            session and automatically attached to subsequent `/api/admin/*`
+            requests. The login state is kept after page refresh.
           </Typography.Paragraph>
           {passwordExistsInSession ? (
             <Typography.Paragraph style={{ marginBottom: 0 }}>
-              当前浏览器会话中已有管理员密码，你可以重新登录以覆盖它。
+              There is an existing admin password in this browser session. You can
+              sign in again to overwrite it.
             </Typography.Paragraph>
           ) : null}
           <Form<LoginFormValues>
             layout="vertical"
             onFinish={(values) => void handleSubmit(values)}
           >
-            <Form.Item
-              label="管理员密码"
+              <Form.Item
+              label="Admin Password"
               name="password"
-              rules={[{ required: true, message: "请输入管理员密码" }]}
+              rules={[{ required: true, message: "Please enter admin password" }]}
             >
               <Input.Password
                 autoComplete="current-password"
-                placeholder="输入密码"
+                placeholder="Enter password"
                 size="large"
               />
             </Form.Item>
@@ -114,7 +116,7 @@ export function LoginPage() {
               size="large"
               type="primary"
             >
-              登录
+              Sign In
             </Button>
           </Form>
         </Space>

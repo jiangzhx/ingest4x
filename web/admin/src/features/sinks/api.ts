@@ -40,12 +40,12 @@ type EventSinkResponse = {
 };
 
 function invalidSinkData(message: string): Error {
-  return new Error(`Sink 接口响应无效：${message}`);
+  return new Error(`Invalid Sink API response: ${message}`);
 }
 
 function normalizePositiveInteger(value: unknown, fieldName: string): number {
   if (!Number.isInteger(value) || typeof value !== "number" || value <= 0) {
-    throw invalidSinkData(`${fieldName} 缺失或不是有效整数`);
+    throw invalidSinkData(`${fieldName} is missing or not a valid integer`);
   }
 
   return value;
@@ -53,13 +53,13 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number {
 
 function normalizeRequiredString(value: unknown, fieldName: string): string {
   if (typeof value !== "string") {
-    throw invalidSinkData(`${fieldName} 缺失或不是字符串`);
+    throw invalidSinkData(`${fieldName} is missing or not a string`);
   }
 
   const normalized = value.trim();
 
   if (!normalized) {
-    throw invalidSinkData(`${fieldName} 不能为空`);
+    throw invalidSinkData(`${fieldName} cannot be empty`);
   }
 
   return normalized;
@@ -67,7 +67,7 @@ function normalizeRequiredString(value: unknown, fieldName: string): string {
 
 function normalizeTimestamp(value: unknown, fieldName: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw invalidSinkData(`${fieldName} 缺失或不是有效时间戳`);
+    throw invalidSinkData(`${fieldName} is missing or not a valid timestamp`);
   }
 
   return Math.trunc(value);
@@ -75,7 +75,7 @@ function normalizeTimestamp(value: unknown, fieldName: string): number {
 
 function normalizeObject(value: unknown, fieldName: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw invalidSinkData(`${fieldName} 缺失或不是对象`);
+    throw invalidSinkData(`${fieldName} is missing or not an object`);
   }
 
   return value as Record<string, unknown>;
@@ -88,7 +88,7 @@ function normalizeDeliveryTargetType(
   const targetType = normalizeRequiredString(value, "target_type");
 
   if (!sinkTypes.some((sinkType) => sinkType.target_type === targetType)) {
-    throw invalidSinkData("target_type 不是已注册的类型");
+    throw invalidSinkData("target_type is not a registered type");
   }
 
   return targetType;
@@ -96,7 +96,7 @@ function normalizeDeliveryTargetType(
 
 function normalizeAutoOffsetReset(value: unknown): AutoOffsetReset {
   if (value !== "latest" && value !== "earliest") {
-    throw invalidSinkData("auto_offset_reset 不是支持的值");
+    throw invalidSinkData("auto_offset_reset is not a supported value");
   }
 
   return value;
@@ -107,11 +107,11 @@ export function normalizeDeliveryTargetResponse(
   sinkTypes: SinkTypeMetadata[],
 ): DeliveryTarget {
   if (!value || typeof value !== "object") {
-    throw invalidSinkData("delivery target 数据不是对象");
+    throw invalidSinkData("delivery target data is not an object");
   }
 
   if (typeof value.enabled !== "boolean") {
-    throw invalidSinkData("enabled 缺失或不是布尔值");
+    throw invalidSinkData("enabled is missing or not a boolean");
   }
 
   return {
@@ -131,11 +131,13 @@ export function normalizeDeliveryTargetsResponse(
   sinkTypes: SinkTypeMetadata[] = [],
 ): DeliveryTarget[] {
   if (!Array.isArray(response)) {
-    throw invalidSinkData("delivery target 列表不是数组");
+    throw invalidSinkData("delivery target list is not an array");
   }
 
   if (response.length > 0 && sinkTypes.length === 0) {
-    throw invalidSinkData("delivery target 规范化必须传入已注册 sink type 列表");
+    throw invalidSinkData(
+      "sink types must be provided to normalize delivery target response",
+    );
   }
 
   return response.map((target) => normalizeDeliveryTargetResponse(target, sinkTypes));
@@ -143,7 +145,7 @@ export function normalizeDeliveryTargetsResponse(
 
 export function normalizeSinkTypeResponse(value: SinkTypeResponse): SinkTypeMetadata {
   if (!value || typeof value !== "object") {
-    throw invalidSinkData("sink type 数据不是对象");
+    throw invalidSinkData("sink type data is not an object");
   }
 
   return {
@@ -154,7 +156,7 @@ export function normalizeSinkTypeResponse(value: SinkTypeResponse): SinkTypeMeta
 
 export function normalizeSinkTypesResponse(response: unknown): SinkTypeMetadata[] {
   if (!Array.isArray(response)) {
-    throw invalidSinkData("sink type 列表不是数组");
+    throw invalidSinkData("sink type list is not an array");
   }
 
   return response.map((sinkType) => normalizeSinkTypeResponse(sinkType));
@@ -162,11 +164,11 @@ export function normalizeSinkTypesResponse(response: unknown): SinkTypeMetadata[
 
 export function normalizeEventSinkResponse(value: EventSinkResponse): EventSink {
   if (!value || typeof value !== "object") {
-    throw invalidSinkData("event sink 数据不是对象");
+    throw invalidSinkData("event sink data is not an object");
   }
 
   if (typeof value.enabled !== "boolean") {
-    throw invalidSinkData("enabled 缺失或不是布尔值");
+    throw invalidSinkData("enabled is missing or not a boolean");
   }
 
   return {
@@ -187,7 +189,7 @@ export function normalizeEventSinkResponse(value: EventSinkResponse): EventSink 
 
 export function normalizeEventSinksResponse(response: unknown): EventSink[] {
   if (!Array.isArray(response)) {
-    throw invalidSinkData("event sink 列表不是数组");
+    throw invalidSinkData("event sink list is not an array");
   }
 
   return response.map((sink) => normalizeEventSinkResponse(sink));

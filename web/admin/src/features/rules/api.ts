@@ -43,18 +43,18 @@ type ProjectRuleSetAssignmentResponse = {
 };
 
 function invalidRulesData(message: string): Error {
-  return new Error(`规则接口响应无效：${message}`);
+  return new Error(`Invalid rule API response: ${message}`);
 }
 
 function normalizeRequiredString(value: unknown, fieldName: string): string {
   if (typeof value !== "string") {
-    throw invalidRulesData(`${fieldName} 缺失或不是字符串`);
+    throw invalidRulesData(`${fieldName} is missing or not a string`);
   }
 
   const normalized = value.trim();
 
   if (!normalized) {
-    throw invalidRulesData(`${fieldName} 不能为空`);
+    throw invalidRulesData(`${fieldName} cannot be empty`);
   }
 
   return normalized;
@@ -62,11 +62,11 @@ function normalizeRequiredString(value: unknown, fieldName: string): string {
 
 function normalizeRequiredContent(value: unknown): string {
   if (typeof value !== "string") {
-    throw invalidRulesData("content 缺失或不是字符串");
+    throw invalidRulesData("content is missing or not a string");
   }
 
   if (!value.trim()) {
-    throw invalidRulesData("content 不能为空");
+    throw invalidRulesData("content cannot be empty");
   }
 
   return value;
@@ -78,7 +78,7 @@ function normalizeOptionalString(value: unknown, fieldName: string): string | nu
   }
 
   if (typeof value !== "string") {
-    throw invalidRulesData(`${fieldName} 不是字符串`);
+    throw invalidRulesData(`${fieldName} is not a string`);
   }
 
   const normalized = value.trim();
@@ -87,7 +87,7 @@ function normalizeOptionalString(value: unknown, fieldName: string): string | nu
 
 function normalizeInteger(value: unknown, fieldName: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-    throw invalidRulesData(`${fieldName} 缺失或不是有效整数`);
+    throw invalidRulesData(`${fieldName} is missing or not a valid integer`);
   }
 
   return value;
@@ -103,7 +103,7 @@ function normalizeNullableInteger(value: unknown, fieldName: string): number | n
 
 function normalizeTimestamp(value: unknown, fieldName: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw invalidRulesData(`${fieldName} 缺失或不是有效时间戳`);
+    throw invalidRulesData(`${fieldName} is missing or not a valid timestamp`);
   }
 
   return Math.trunc(value);
@@ -111,7 +111,7 @@ function normalizeTimestamp(value: unknown, fieldName: string): number {
 
 function normalizeBoolean(value: unknown, fieldName: string): boolean {
   if (typeof value !== "boolean") {
-    throw invalidRulesData(`${fieldName} 缺失或不是布尔值`);
+    throw invalidRulesData(`${fieldName} is missing or not a boolean`);
   }
 
   return value;
@@ -119,7 +119,7 @@ function normalizeBoolean(value: unknown, fieldName: string): boolean {
 
 export function normalizeRuleSetResponse(value: RuleSetResponse): RuleSet {
   if (!value || typeof value !== "object") {
-    throw invalidRulesData("规则集数据不是对象");
+    throw invalidRulesData("rule set data is not an object");
   }
 
   return {
@@ -138,7 +138,7 @@ export function normalizeRuleSetResponse(value: RuleSetResponse): RuleSet {
 
 export function normalizeRuleSetsResponse(response: unknown): RuleSet[] {
   if (!Array.isArray(response)) {
-    throw invalidRulesData("规则集列表不是数组");
+    throw invalidRulesData("rule set list is not an array");
   }
 
   return response.map((ruleSet) => normalizeRuleSetResponse(ruleSet));
@@ -146,7 +146,7 @@ export function normalizeRuleSetsResponse(response: unknown): RuleSet[] {
 
 export function normalizeRuleResponse(value: RuleResponse): Rule {
   if (!value || typeof value !== "object") {
-    throw invalidRulesData("规则数据不是对象");
+    throw invalidRulesData("rule data is not an object");
   }
 
   return {
@@ -164,7 +164,7 @@ export function normalizeRuleResponse(value: RuleResponse): Rule {
 
 export function normalizeRulesResponse(response: unknown): Rule[] {
   if (!Array.isArray(response)) {
-    throw invalidRulesData("规则列表不是数组");
+    throw invalidRulesData("rule list is not an array");
   }
 
   return response.map((rule) => normalizeRuleResponse(rule));
@@ -174,7 +174,7 @@ export function normalizeProjectRuleSetAssignmentResponse(
   value: ProjectRuleSetAssignmentResponse,
 ): ProjectRuleSetAssignment {
   if (!value || typeof value !== "object") {
-    throw invalidRulesData("项目规则集绑定数据不是对象");
+    throw invalidRulesData("project-rule-set assignment data is not an object");
   }
 
   return {
@@ -191,7 +191,7 @@ export function normalizeProjectRuleSetAssignmentsResponse(
   response: unknown,
 ): ProjectRuleSetAssignment[] {
   if (!Array.isArray(response)) {
-    throw invalidRulesData("项目规则集绑定列表不是数组");
+    throw invalidRulesData("project-rule-set assignment list is not an array");
   }
 
   return response.map((assignment) =>

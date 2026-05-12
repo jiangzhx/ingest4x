@@ -51,9 +51,9 @@ export function RuleSetFormModal({
     <Modal
       destroyOnHidden
       open={open}
-      title={mode === "create" ? "创建规则集" : "编辑规则集"}
-      okText={mode === "create" ? "创建" : "保存"}
-      cancelText="取消"
+      title={mode === "create" ? "Create Rule Set" : "Edit Rule Set"}
+      okText={mode === "create" ? "Create" : "Save"}
+      cancelText="Cancel"
       confirmLoading={confirmLoading}
       onCancel={onCancel}
       onOk={() => {
@@ -66,24 +66,28 @@ export function RuleSetFormModal({
         initialValues={toFormValues(ruleSet)}
       >
         <Form.Item<RuleSetFormValues>
-          label="规则集名称"
+          label="Rule Set Name"
           name="name"
           rules={[
-            { required: true, message: "请输入规则集名称" },
-            { whitespace: true, message: "规则集名称不能为空" },
+            { required: true, message: "Please enter a rule set name" },
+            { whitespace: true, message: "Rule set name cannot be empty" },
           ]}
         >
-          <Input placeholder="例如：默认 ingest 规则集" maxLength={120} />
+          <Input placeholder="For example: default ingest rule set" maxLength={120} />
         </Form.Item>
-        <Form.Item<RuleSetFormValues> label="描述" name="description">
-          <Input.TextArea rows={3} placeholder="请输入规则集说明" maxLength={500} />
+        <Form.Item<RuleSetFormValues> label="Description" name="description">
+          <Input.TextArea
+            rows={3}
+            placeholder="Enter rule set description"
+            maxLength={500}
+          />
         </Form.Item>
         <Form.Item<RuleSetFormValues>
-          label="启用状态"
+          label="Enabled"
           name="enabled"
           valuePropName="checked"
         >
-          <Switch checkedChildren="已启用" unCheckedChildren="已停用" />
+          <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
         </Form.Item>
       </Form>
     </Modal>

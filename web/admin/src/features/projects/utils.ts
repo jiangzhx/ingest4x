@@ -24,7 +24,7 @@ export function formatProjectTimestamp(timestamp: number): string {
 
 export function getErrorMessage(
   error: unknown,
-  fallback = "请求失败，请稍后重试。",
+  fallback = "Request failed, please try again later.",
 ): string {
   if (error instanceof Error && error.message) {
     return error.message;

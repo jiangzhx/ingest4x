@@ -98,7 +98,7 @@ export function RulesPage() {
     [rules, selectedRuleSet],
   );
   const ruleSetOptions = ruleSets.map((ruleSet) => ({
-    label: `${ruleSet.name}${ruleSet.enabled ? "" : "（已停用）"}`,
+    label: `${ruleSet.name}${ruleSet.enabled ? "" : " (disabled)"}`,
     value: ruleSet.id,
   }));
   const isRuleSetSubmitting =
@@ -143,19 +143,21 @@ export function RulesPage() {
         );
         setSelectedRuleSetId(created.id);
         setScriptContent(EMPTY_RHAI_RULE_CONTENT);
-        message.success(`规则集 ${created.name} 创建成功`);
+        message.success(`Rule set ${created.name} created`);
       } else if (editingRuleSet) {
         await updateRuleSetMutation.mutateAsync({
           ruleSetId: editingRuleSet.id,
           payload: toUpdateRuleSetPayload(values),
         });
-        message.success(`规则集 ${editingRuleSet.name} 保存成功`);
+        message.success(`Rule set ${editingRuleSet.name} saved`);
       }
 
       setIsRuleSetModalOpen(false);
       setEditingRuleSet(null);
     } catch (error) {
-      message.error(getErrorMessage(error, "保存规则集失败，请稍后重试。"));
+      message.error(
+        getErrorMessage(error, "Failed to save the rule set, please try again later."),
+      );
       throw error;
     }
   };
@@ -168,9 +170,11 @@ export function RulesPage() {
         setSelectedRuleSetId(null);
         setScriptContent(EMPTY_RHAI_RULE_CONTENT);
       }
-      message.success(`规则集 ${ruleSet.name} 删除成功`);
+      message.success(`Rule set ${ruleSet.name} deleted`);
     } catch (error) {
-      message.error(getErrorMessage(error, "删除规则集失败，请稍后重试。"));
+      message.error(
+        getErrorMessage(error, "Failed to delete the rule set, please try again later."),
+      );
     } finally {
       setDeletingRuleSetId(null);
     }
@@ -186,9 +190,14 @@ export function RulesPage() {
         content: scriptContent.trim(),
         enabled: true,
       });
-      message.success("Rhai 校验脚本保存成功");
+      message.success("Rhai validation script saved");
     } catch (error) {
-      message.error(getErrorMessage(error, "保存 Rhai 校验脚本失败，请稍后重试。"));
+      message.error(
+        getErrorMessage(
+          error,
+          "Failed to save the Rhai validation script, please try again later.",
+        ),
+      );
     }
   };
 
@@ -202,10 +211,10 @@ export function RulesPage() {
       >
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            规则管理
+            Rule Management
           </Typography.Title>
           <Typography.Paragraph type="secondary" style={{ margin: "8px 0 0" }}>
-            管理规则集和 Rhai 校验脚本。
+            Manage rule sets and Rhai validation scripts.
           </Typography.Paragraph>
         </div>
       </Space>
@@ -214,7 +223,7 @@ export function RulesPage() {
         <div style={{ display: "grid", minHeight: 240, placeItems: "center" }}>
           <Space direction="vertical" align="center" size={12}>
             <Spin size="large" />
-            <Typography.Text type="secondary">正在加载规则集...</Typography.Text>
+            <Typography.Text type="secondary">Loading rule sets...</Typography.Text>
           </Space>
         </div>
       ) : null}
@@ -222,11 +231,11 @@ export function RulesPage() {
       {showInitialError ? (
         <Result
           status="error"
-          title="规则集加载失败"
+          title="Failed to load rule sets"
           subTitle={getErrorMessage(ruleSetsQuery.error)}
           extra={
             <Button type="primary" onClick={() => void ruleSetsQuery.refetch()}>
-              重试
+              Retry
             </Button>
           }
         />
@@ -234,17 +243,21 @@ export function RulesPage() {
 
       {!ruleSetsQuery.isLoading && !showInitialError ? (
         <Space direction="vertical" size={16} style={{ display: "flex" }}>
-          <Alert type="info" showIcon message={`共 ${ruleSets.length} 个规则集`} />
+          <Alert
+            type="info"
+            showIcon
+            message={`Total ${ruleSets.length} rule sets`}
+          />
           <Space
             align="center"
             wrap
             style={{ justifyContent: "space-between", width: "100%" }}
           >
             <Space align="center" wrap>
-              <Typography.Text strong>规则集</Typography.Text>
+              <Typography.Text strong>Rule Set</Typography.Text>
               <Select
                 showSearch
-                placeholder="选择规则集"
+                placeholder="Select rule set"
                 value={selectedRuleSetId ?? undefined}
                 options={ruleSetOptions}
                 optionFilterProp="label"
@@ -253,9 +266,9 @@ export function RulesPage() {
               />
               {selectedRuleSet ? (
                 selectedRuleSet.enabled ? (
-                  <Tag color="success">已启用</Tag>
+                  <Tag color="success">Enabled</Tag>
                 ) : (
-                  <Tag>已停用</Tag>
+                  <Tag>Disabled</Tag>
                 )
               ) : null}
             </Space>
@@ -264,10 +277,10 @@ export function RulesPage() {
                 onClick={() => void ruleSetsQuery.refetch()}
                 loading={ruleSetsQuery.isFetching}
               >
-                刷新
+                Refresh
               </Button>
               <Button type="primary" onClick={openCreateRuleSetModal}>
-                新建规则集
+                Create Rule Set
               </Button>
               <Button
                 disabled={!selectedRuleSet || ruleSetActionsDisabled}
@@ -277,17 +290,17 @@ export function RulesPage() {
                   }
                 }}
               >
-                编辑规则集
+                Edit Rule Set
               </Button>
               <Popconfirm
-                title="删除规则集"
+                title="Delete rule set"
                 description={
                   selectedRuleSet
-                    ? `将删除规则集 ${selectedRuleSet.name}，该操作不可恢复。`
-                    : "请选择规则集"
+                    ? `Rule set ${selectedRuleSet.name} will be deleted and cannot be undone.`
+                    : "Please select a rule set"
                 }
-                okText="删除"
-                cancelText="取消"
+                okText="Delete"
+                cancelText="Cancel"
                 disabled={!selectedRuleSet || ruleSetActionsDisabled}
                 okButtonProps={{
                   danger: true,
@@ -310,7 +323,7 @@ export function RulesPage() {
                       : false
                   }
                 >
-                  删除规则集
+                  Delete Rule Set
                 </Button>
               </Popconfirm>
             </Space>
@@ -322,7 +335,7 @@ export function RulesPage() {
               style={{ justifyContent: "space-between", width: "100%" }}
             >
               <Typography.Title level={4} style={{ margin: 0 }}>
-                Rhai 校验脚本
+                Rhai Validation Script
               </Typography.Title>
               <Button
                 type="primary"
@@ -330,11 +343,11 @@ export function RulesPage() {
                 loading={isScriptSaving}
                 onClick={() => void handleSaveScript()}
               >
-                保存脚本
+                Save Script
               </Button>
             </Space>
             {rulesQuery.isFetching ? (
-              <Typography.Text type="secondary">正在同步脚本...</Typography.Text>
+              <Typography.Text type="secondary">Syncing script...</Typography.Text>
             ) : null}
             <LazyRhaiEditor value={scriptContent} onChange={setScriptContent} />
           </Space>

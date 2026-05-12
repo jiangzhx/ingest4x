@@ -25,7 +25,7 @@ export function ServiceNodesTable({ nodes }: ServiceNodesTableProps) {
       ),
     },
     {
-      title: "状态",
+      title: "Status",
       dataIndex: "status",
       key: "status",
       width: 120,
@@ -36,7 +36,7 @@ export function ServiceNodesTable({ nodes }: ServiceNodesTableProps) {
       ),
     },
     {
-      title: "主机",
+      title: "Host",
       key: "host",
       width: 220,
       render: (_, node) => (
@@ -47,7 +47,7 @@ export function ServiceNodesTable({ nodes }: ServiceNodesTableProps) {
       ),
     },
     {
-      title: "监听地址",
+      title: "Listen Addresses",
       key: "addresses",
       width: 260,
       render: (_, node) => (
@@ -60,28 +60,26 @@ export function ServiceNodesTable({ nodes }: ServiceNodesTableProps) {
       ),
     },
     {
-      title: "版本",
+      title: "Version",
       dataIndex: "version",
       key: "version",
       width: 120,
       render: (value: string) => <Tag>{value}</Tag>,
     },
     {
-      title: "最近心跳",
+      title: "Latest Heartbeat",
       dataIndex: "last_seen_at",
       key: "last_seen_at",
       width: 220,
       render: (value: number) => (
         <Space direction="vertical" size={2}>
           <Typography.Text>{formatServiceNodeTimestamp(value)}</Typography.Text>
-          <Typography.Text type="secondary">
-            {getHeartbeatAge(value)} 前
-          </Typography.Text>
+          <Typography.Text type="secondary">{getHeartbeatAge(value)} ago</Typography.Text>
         </Space>
       ),
     },
     {
-      title: "启动时间",
+      title: "Start Time",
       dataIndex: "started_at",
       key: "started_at",
       width: 200,
@@ -102,7 +100,7 @@ export function ServiceNodesTable({ nodes }: ServiceNodesTableProps) {
       locale={{
         emptyText: (
           <Empty
-            description="当前还没有已注册节点"
+            description="No registered nodes are available"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ),

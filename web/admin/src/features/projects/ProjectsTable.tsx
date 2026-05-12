@@ -61,11 +61,11 @@ async function copyTextToClipboard(text: string): Promise<boolean> {
 async function handleCopyToken(tokenText: string) {
   const copied = await copyTextToClipboard(tokenText);
   if (copied) {
-    message.success("Token 已复制");
+    message.success("Token copied");
     return;
   }
 
-  message.error("Token 复制失败，请手动复制");
+  message.error("Failed to copy token, please copy manually");
 }
 
 function projectProcessorLabel(
@@ -126,7 +126,7 @@ export function ProjectsTable({
               {tokenText}
             </Typography.Text>
             <Button
-              aria-label="复制 Token"
+              aria-label="Copy token"
               icon={<CopyOutlined />}
               size="small"
               type="text"
@@ -139,18 +139,18 @@ export function ProjectsTable({
       },
     },
     {
-      title: "项目名称",
+      title: "Project Name",
       dataIndex: "name",
       key: "name",
       render: (value: string) => <Typography.Text strong>{value}</Typography.Text>,
     },
     {
-      title: "启用状态",
+      title: "Enabled",
       dataIndex: "enabled",
       key: "enabled",
       width: 140,
       render: (enabled: boolean) =>
-        enabled ? <Tag color="success">已启用</Tag> : <Tag>已停用</Tag>,
+        enabled ? <Tag color="success">Enabled</Tag> : <Tag>Disabled</Tag>,
     },
     {
       title: "Processor",
@@ -160,7 +160,7 @@ export function ProjectsTable({
         projectProcessorLabel(project, processorScripts, processorBindings),
     },
     {
-      title: "创建时间",
+      title: "Created At",
       dataIndex: "created_at",
       key: "created_at",
       width: 200,
@@ -171,7 +171,7 @@ export function ProjectsTable({
       ),
     },
     {
-      title: "更新时间",
+      title: "Updated At",
       dataIndex: "updated_at",
       key: "updated_at",
       width: 200,
@@ -182,14 +182,14 @@ export function ProjectsTable({
       ),
     },
     {
-      title: "操作",
+      title: "Actions",
       key: "actions",
       width: 180,
       fixed: "right",
       render: (_, project) => {
         const isDeleting = deletingProjectId === project.id;
         const disableRowActions = actionsDisabled && !isDeleting;
-        const deleteButtonLabel = isDeleting ? "删除中..." : "删除";
+        const deleteButtonLabel = isDeleting ? "Deleting..." : "Delete";
 
         return (
           <Space size={8}>
@@ -198,17 +198,17 @@ export function ProjectsTable({
               disabled={actionsDisabled}
               onClick={() => onEdit(project)}
             >
-              编辑
+              Edit
             </Button>
             <Popconfirm
-              title="删除项目"
+              title="Delete project"
               description={
                 isDeleting
-                  ? `正在删除项目 ${project.name}...`
-                  : `将删除项目 ${project.name}，该操作不可恢复。`
+                  ? `Deleting project ${project.name}...`
+                  : `Project ${project.name} will be deleted and cannot be undone.`
               }
-              okText="删除"
-              cancelText="取消"
+              okText="Delete"
+              cancelText="Cancel"
               disabled={disableRowActions || isDeleting}
               okButtonProps={{ danger: true, loading: isDeleting }}
               onConfirm={() => onDelete(project)}
@@ -237,7 +237,7 @@ export function ProjectsTable({
       locale={{
         emptyText: (
           <Empty
-            description="当前还没有项目"
+            description="No projects are configured"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ),

@@ -8,27 +8,27 @@ const { Header, Content, Sider } = Layout;
 const menuItems = [
   {
     key: "/",
-    label: <Link to="/">概览</Link>,
+    label: <Link to="/">Overview</Link>,
   },
   {
     key: "/projects",
-    label: <Link to="/projects">项目管理</Link>,
+    label: <Link to="/projects">Projects</Link>,
   },
   {
     key: "/rules",
-    label: <Link to="/rules">规则管理</Link>,
+    label: <Link to="/rules">Rules</Link>,
   },
   {
     key: "/sinks",
-    label: <Link to="/sinks">Sink 管理</Link>,
+    label: <Link to="/sinks">Sink Management</Link>,
   },
   {
     key: "/processors",
-    label: <Link to="/processors">Processor 管理</Link>,
+    label: <Link to="/processors">Processor Management</Link>,
   },
   {
     key: "/service-nodes",
-    label: <Link to="/service-nodes">节点管理</Link>,
+    label: <Link to="/service-nodes">Service Nodes</Link>,
   },
 ];
 
@@ -52,7 +52,7 @@ export function AdminShell({ children }: PropsWithChildren) {
           <Typography.Title level={4} style={{ margin: 0 }}>
             Ingest4x
           </Typography.Title>
-          <Typography.Text type="secondary">管理后台</Typography.Text>
+          <Typography.Text type="secondary">Admin Console</Typography.Text>
         </div>
         <Menu
           mode="inline"
@@ -70,12 +70,12 @@ export function AdminShell({ children }: PropsWithChildren) {
             borderBottom: "1px solid #f0f0f0",
           }}
         >
-          <Typography.Text strong>控制台</Typography.Text>
+          <Typography.Text strong>Console</Typography.Text>
           <Button
             onClick={() => void handleLogout()}
             style={{ marginLeft: "auto" }}
           >
-            登出
+            Logout
           </Button>
         </Header>
         <Content style={{ padding: 24 }}>

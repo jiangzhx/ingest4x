@@ -58,11 +58,11 @@ export function ProcessorsPage() {
   const handleCreateScript = async (values: ProcessorScriptFormValues) => {
     try {
       await createScriptMutation.mutateAsync(toCreateProcessorScriptPayload(values));
-      message.success(`Processor script ${values.script_key} 创建成功`);
+      message.success(`Processor script ${values.script_key} created`);
       setScriptValidationError(null);
       setIsCreateOpen(false);
     } catch (error) {
-      message.error(getErrorMessage(error, "创建 processor script 失败。"));
+      message.error(getErrorMessage(error, "Failed to create processor script."));
       throw error;
     }
   };
@@ -72,16 +72,16 @@ export function ProcessorsPage() {
     options: { notify?: boolean } = {},
   ) => {
     setScriptValidationError(null);
-    try {
+      try {
       await validateScriptMutation.mutateAsync(
         toValidateProcessorScriptPayload(values),
       );
       if (options.notify) {
-        message.success("Rhai 脚本语法校验通过");
+        message.success("Rhai script validation passed");
       }
     } catch (error) {
       setScriptValidationError(
-        getErrorMessage(error, "Rhai 脚本语法校验失败。"),
+        getErrorMessage(error, "Rhai script validation failed."),
       );
       throw error;
     }
@@ -98,12 +98,12 @@ export function ProcessorsPage() {
         payload: toUpdateProcessorScriptPayload(values),
       });
       message.success(
-        `Processor script ${editingScript.script_key} 已更新到 v${updated.version}`,
+        `Processor script ${editingScript.script_key} updated to v${updated.version}`,
       );
       setScriptValidationError(null);
       setEditingScript(null);
     } catch (error) {
-      message.error(getErrorMessage(error, "更新 processor script 失败。"));
+      message.error(getErrorMessage(error, "Failed to update processor script."));
       throw error;
     }
   };
@@ -117,10 +117,10 @@ export function ProcessorsPage() {
         payload: { status: nextStatus },
       });
       message.success(
-        `Processor script ${script.script_key} 已${nextStatus === "active" ? "启用" : "禁用"}`,
+        `Processor script ${script.script_key} ${nextStatus === "active" ? "enabled" : "disabled"}`,
       );
     } catch (error) {
-      message.error(getErrorMessage(error, "更新 processor 状态失败。"));
+      message.error(getErrorMessage(error, "Failed to update processor status."));
     } finally {
       setUpdatingScriptId(null);
     }
@@ -134,10 +134,10 @@ export function ProcessorsPage() {
       >
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            Processor 管理
+            Processor Management
           </Typography.Title>
           <Typography.Paragraph type="secondary" style={{ margin: "8px 0 0" }}>
-            管理 Rhai 脚本版本和项目绑定关系。
+            Manage Rhai script versions and project processor bindings.
           </Typography.Paragraph>
         </div>
         <Space>
@@ -145,7 +145,7 @@ export function ProcessorsPage() {
             onClick={refreshAll}
             loading={scriptsQuery.isFetching}
           >
-            刷新
+            Refresh
           </Button>
           <Button
             type="primary"
@@ -154,7 +154,7 @@ export function ProcessorsPage() {
               setIsCreateOpen(true);
             }}
           >
-            新建 Script
+            New Script
           </Button>
         </Space>
       </Space>
@@ -164,7 +164,7 @@ export function ProcessorsPage() {
           <Space direction="vertical" align="center" size={12}>
             <Spin size="large" />
             <Typography.Text type="secondary">
-              正在加载 processor 配置...
+              Loading processor config...
             </Typography.Text>
           </Space>
         </div>
@@ -173,11 +173,11 @@ export function ProcessorsPage() {
       {showInitialError ? (
         <Result
           status="error"
-          title="Processor 配置加载失败"
+          title="Failed to load processor config"
           subTitle={getErrorMessage(scriptsQuery.error)}
           extra={
             <Button type="primary" onClick={refreshAll}>
-              重试
+              Retry
             </Button>
           }
         />
@@ -189,7 +189,7 @@ export function ProcessorsPage() {
             <Alert
               showIcon
               type="warning"
-              message="部分数据刷新失败"
+              message="Some data refresh operations failed"
               description={getErrorMessage(scriptsQuery.error)}
             />
           ) : null}
@@ -212,7 +212,7 @@ export function ProcessorsPage() {
         <Alert
           showIcon
           type="error"
-          message="创建失败"
+          message="Create failed"
           description={getErrorMessage(createScriptMutation.error)}
         />
       ) : null}
@@ -221,7 +221,7 @@ export function ProcessorsPage() {
         <Alert
           showIcon
           type="error"
-          message="更新失败"
+          message="Update failed"
           description={getErrorMessage(updateScriptMutation.error)}
         />
       ) : null}

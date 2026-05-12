@@ -144,20 +144,20 @@ export function SinksPage() {
           payload: toCreateDeliveryTargetPayload(values),
           sinkTypes,
         });
-        message.success(`Delivery target ${values.target_id} 创建成功`);
+        message.success(`Delivery target ${values.target_id} created`);
       } else if (editingTarget) {
         await updateDeliveryTargetMutation.mutateAsync({
           id: editingTarget.id,
           payload: toUpdateDeliveryTargetPayload(values),
           sinkTypes,
         });
-        message.success(`Delivery target ${editingTarget.target_id} 保存成功`);
+        message.success(`Delivery target ${editingTarget.target_id} saved`);
       }
 
       setIsTargetModalOpen(false);
       setEditingTarget(null);
     } catch (error) {
-      message.error(getErrorMessage(error, "保存 delivery target 失败。"));
+      message.error(getErrorMessage(error, "Failed to save delivery target."));
       throw error;
     }
   };
@@ -166,19 +166,19 @@ export function SinksPage() {
     try {
       if (sinkModalMode === "create") {
         await createEventSinkMutation.mutateAsync(toCreateEventSinkPayload(values));
-        message.success(`Event sink ${values.sink_id} 创建成功`);
+        message.success(`Event sink ${values.sink_id} created`);
       } else if (editingSink) {
         await updateEventSinkMutation.mutateAsync({
           id: editingSink.id,
           payload: toUpdateEventSinkPayload(values),
         });
-        message.success(`Event sink ${editingSink.sink_id} 保存成功`);
+        message.success(`Event sink ${editingSink.sink_id} saved`);
       }
 
       setIsSinkModalOpen(false);
       setEditingSink(null);
     } catch (error) {
-      message.error(getErrorMessage(error, "保存 event sink 失败。"));
+      message.error(getErrorMessage(error, "Failed to save event sink."));
       throw error;
     }
   };
@@ -187,9 +187,9 @@ export function SinksPage() {
     setDeletingTargetId(target.id);
     try {
       await deleteDeliveryTargetMutation.mutateAsync(target.id);
-      message.success(`Delivery target ${target.target_id} 删除成功`);
+      message.success(`Delivery target ${target.target_id} deleted`);
     } catch (error) {
-      message.error(getErrorMessage(error, "删除 delivery target 失败。"));
+      message.error(getErrorMessage(error, "Failed to delete delivery target."));
     } finally {
       setDeletingTargetId(null);
     }
@@ -199,9 +199,9 @@ export function SinksPage() {
     setDeletingSinkId(sink.id);
     try {
       await deleteEventSinkMutation.mutateAsync(sink.id);
-      message.success(`Event sink ${sink.sink_id} 删除成功`);
+      message.success(`Event sink ${sink.sink_id} deleted`);
     } catch (error) {
-      message.error(getErrorMessage(error, "删除 event sink 失败。"));
+      message.error(getErrorMessage(error, "Failed to delete event sink."));
     } finally {
       setDeletingSinkId(null);
     }
@@ -215,10 +215,10 @@ export function SinksPage() {
       >
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            Sink 管理
+            Sink Management
           </Typography.Title>
           <Typography.Paragraph type="secondary" style={{ margin: "8px 0 0" }}>
-            管理投递连接资源和 Rhai emit 目标。
+            Manage delivery target and event sink resources and Rhai emit mappings.
           </Typography.Paragraph>
         </div>
         <Space>
@@ -230,17 +230,17 @@ export function SinksPage() {
               eventSinksQuery.isFetching
             }
           >
-            刷新
+            Refresh
           </Button>
           <Button type="primary" onClick={openCreateTargetModal}>
-            新建 Target
+            New Target
           </Button>
           <Button
             type="primary"
             disabled={targets.length === 0}
             onClick={openCreateSinkModal}
           >
-            新建 Sink
+            New Sink
           </Button>
         </Space>
       </Space>
@@ -249,7 +249,7 @@ export function SinksPage() {
         <div style={{ display: "grid", minHeight: 240, placeItems: "center" }}>
           <Space direction="vertical" align="center" size={12}>
             <Spin size="large" />
-            <Typography.Text type="secondary">正在加载 sink 配置...</Typography.Text>
+            <Typography.Text type="secondary">Loading sink configuration...</Typography.Text>
           </Space>
         </div>
       ) : null}
@@ -257,13 +257,13 @@ export function SinksPage() {
       {showInitialError ? (
         <Result
           status="error"
-          title="Sink 配置加载失败"
+          title="Failed to load sink configuration"
           subTitle={getErrorMessage(
             sinkTypesQuery.error ?? deliveryTargetsQuery.error ?? eventSinksQuery.error,
           )}
           extra={
             <Button type="primary" onClick={refreshAll}>
-              重试
+              Retry
             </Button>
           }
         />
@@ -274,13 +274,13 @@ export function SinksPage() {
           <Alert
             type="info"
             showIcon
-            message={`共 ${targets.length} 个 delivery target，${sinks.length} 个 event sink`}
+            message={`Total ${targets.length} delivery targets, ${sinks.length} event sinks`}
           />
           {targetFormError ? (
             <Alert
               type="error"
               showIcon
-              message="Delivery target 保存失败"
+              message="Failed to save delivery target"
               description={getErrorMessage(targetFormError)}
             />
           ) : null}
@@ -288,7 +288,7 @@ export function SinksPage() {
             <Alert
               type="error"
               showIcon
-              message="Event sink 保存失败"
+              message="Failed to save event sink"
               description={getErrorMessage(sinkFormError)}
             />
           ) : null}

@@ -87,23 +87,23 @@ test("admin shell and router expose the rules management page", () => {
   assert.match(routerSource, /path: "\/rules"/);
   assert.match(routerSource, /component: RulesPage/);
   assert.match(shellSource, /key: "\/rules"/);
-  assert.match(shellSource, /规则管理/);
+  assert.match(shellSource, /Rules/);
   assert.doesNotMatch(routerSource, /path: "\/project-rules"/);
   assert.doesNotMatch(routerSource, /component: ProjectRulesPage/);
   assert.doesNotMatch(shellSource, /key: "\/project-rules"/);
-  assert.doesNotMatch(shellSource, /项目规则配置/);
+  assert.doesNotMatch(shellSource, /Project Rule Assignment/);
 });
 
 test("rules page manages rule sets and a single Rhai validation script", () => {
   assert.match(rulesPageSource, /useRuleSetsQuery\(\)/);
   assert.match(rulesPageSource, /<Select/);
   assert.match(rulesPageSource, /ruleSetOptions/);
-  assert.match(rulesPageSource, /Rhai 校验脚本/);
+  assert.match(rulesPageSource, /Rhai Validation Script/);
   assert.match(rulesPageSource, /useSaveValidationRuleMutation/);
   assert.doesNotMatch(rulesPageSource, /<RuleSetsTable/);
   assert.doesNotMatch(rulesPageSource, /<RulesTable/);
-  assert.doesNotMatch(rulesPageSource, /新建规则\s*</);
-  assert.doesNotMatch(rulesPageSource, /规则继承树/);
+  assert.doesNotMatch(rulesPageSource, /New Rule Set\s*</);
+  assert.doesNotMatch(rulesPageSource, /Inheritance tree/);
   assert.doesNotMatch(rulesPageSource, /useProjectsQuery\(\)/);
   assert.doesNotMatch(rulesPageSource, /useProjectRuleSetAssignmentsQuery/);
   assert.doesNotMatch(rulesPageSource, /<ProjectRuleSetsPanel/);
@@ -114,45 +114,40 @@ test("project edit owns project rule set assignment", () => {
   assert.match(projectsPageSource, /useProjectRuleSetAssignmentsQuery/);
   assert.match(projectsPageSource, /<ProjectRuleSetsPanel/);
   assert.match(projectsPageSource, /ruleSetsSection=/);
-  assert.match(projectsPageSource, /规则集绑定/);
+  assert.match(projectRuleSetsPanelSource, /Rule Set Binding/);
 });
 
 test("project rule set assignment is a single selected rule set", () => {
   assert.match(projectRuleSetsPanelSource, /currentAssignment/);
   assert.match(projectRuleSetsPanelSource, /value=\{currentAssignment\?\.rule_set_id\}/);
-  assert.match(projectRuleSetsPanelSource, /placeholder="选择启用规则集"/);
+  assert.match(projectRuleSetsPanelSource, /placeholder="Select enabled rule set"/);
   assert.doesNotMatch(projectRuleSetsPanelSource, /<Table/);
   assert.doesNotMatch(projectRuleSetsPanelSource, /assignedRuleSetIds/);
 });
 
 test("rules UI no longer exposes legacy rule tree fields", () => {
-  assert.doesNotMatch(rulesPageSource, /父规则/);
-  assert.doesNotMatch(rulesPageSource, /事件名/);
-  assert.doesNotMatch(rulesPageSource, /默认规则/);
-  assert.doesNotMatch(ruleFormModalSource, /label="父规则"/);
-  assert.doesNotMatch(ruleFormModalSource, /label="规则名称"/);
-  assert.doesNotMatch(ruleFormModalSource, /label="事件名"/);
-  assert.doesNotMatch(rulesTableSource, /title:\s*"事件名"/);
+  assert.doesNotMatch(rulesPageSource, /[\u4e00-\u9fff]/);
+  assert.doesNotMatch(ruleFormModalSource, /[\u4e00-\u9fff]/);
+  assert.doesNotMatch(rulesTableSource, /[\u4e00-\u9fff]/);
   assert.doesNotMatch(rulesTableSource, /title:\s*"xwhat"/);
-  assert.doesNotMatch(ruleFormModalSource, /事件名 xwhat/);
+  assert.doesNotMatch(rulesTableSource, /label="Event Name"/);
 });
 
 test("rules UI does not configure wildcard from rule set editor", () => {
-  assert.doesNotMatch(ruleSetFormModalSource, /label="通配规则"/);
+  assert.doesNotMatch(ruleSetFormModalSource, /Wildcard Rule/);
   assert.doesNotMatch(ruleSetFormModalSource, /wildcard_rule_id/);
   assert.doesNotMatch(ruleSetFormModalSource, /rules\s*=\s*\[\]/);
   assert.doesNotMatch(ruleSetFormModalSource, /\.filter\(\(rule\) => !rule\.xwhat\)/);
-  assert.doesNotMatch(ruleFormModalSource, /label="充当通配规则"/);
+  assert.doesNotMatch(ruleFormModalSource, /Acts as Wildcard Rule/);
 });
 
 test("rules UI hides wildcard display state from operators", () => {
-  assert.doesNotMatch(rulesPageSource, /通配/);
+  assert.doesNotMatch(rulesPageSource, /Wildcard/);
   assert.doesNotMatch(rulesTableSource, /wildcardRuleId === rule\.id/);
 });
 
 test("rules UI does not expose manual sort order", () => {
-  assert.doesNotMatch(rulesTableSource, /title:\s*"排序"/);
-  assert.doesNotMatch(ruleFormModalSource, /label="排序"/);
+  assert.doesNotMatch(rulesTableSource, /title:\s*"Sort Order"/);
   assert.doesNotMatch(ruleFormModalSource, /name="sort_order"/);
 });
 
@@ -216,7 +211,7 @@ test("rules api normalizes rule set and rule responses at runtime", () => {
 test("rules api rejects invalid project rule set assignment payloads", () => {
   assert.throws(
     () => normalizeProjectRuleSetAssignmentsResponse({ items: [] }),
-    /规则接口响应无效：项目规则集绑定列表不是数组/,
+    /Invalid rule API response: project-rule-set assignment list is not an array/,
   );
   assert.throws(
     () =>
@@ -230,6 +225,6 @@ test("rules api rejects invalid project rule set assignment payloads", () => {
           updated_at: 2,
         },
       ]),
-    /规则接口响应无效：rule_set_id 缺失或不是有效整数/,
+    /Invalid rule API response: rule_set_id is missing or not a valid integer/,
   );
 });

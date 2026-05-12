@@ -59,9 +59,9 @@ export function ProjectFormModal({
       destroyOnHidden
       open={open}
       width={mode === "edit" ? 820 : 520}
-      title={mode === "create" ? "创建项目" : "编辑项目"}
-      okText={mode === "create" ? "创建" : "保存"}
-      cancelText="取消"
+      title={mode === "create" ? "Create Project" : "Edit Project"}
+      okText={mode === "create" ? "Create" : "Save"}
+      cancelText="Cancel"
       confirmLoading={confirmLoading}
       onCancel={onCancel}
       onOk={() => {
@@ -74,27 +74,27 @@ export function ProjectFormModal({
         initialValues={toFormValues(project)}
       >
         <Form.Item<ProjectFormValues>
-          label="项目名称"
+          label="Project Name"
           name="name"
           rules={[
-            { required: true, message: "请输入项目名称" },
-            { whitespace: true, message: "项目名称不能为空" },
+            { required: true, message: "Please enter project name" },
+            { whitespace: true, message: "Project name cannot be empty" },
           ]}
         >
-          <Input placeholder="请输入项目名称" maxLength={120} />
+          <Input placeholder="Enter project name" maxLength={120} />
         </Form.Item>
         {mode === "edit" && project ? (
           <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-            当前 Token:{" "}
+            Current Token:{" "}
             <Typography.Text code>{project.ingest_token}</Typography.Text>
           </Typography.Paragraph>
         ) : null}
         <Form.Item<ProjectFormValues>
-          label={mode === "create" ? "Ingest Token" : "新 Ingest Token"}
+          label={mode === "create" ? "Ingest Token" : "New Ingest Token"}
           name="ingest_token"
         >
           <Input
-            placeholder={mode === "create" ? "留空自动生成" : "留空不修改"}
+            placeholder={mode === "create" ? "Leave empty to auto-generate" : "Leave empty to keep current"}
             maxLength={256}
           />
         </Form.Item>
@@ -103,15 +103,15 @@ export function ProjectFormModal({
             name="regenerate_ingest_token"
             valuePropName="checked"
           >
-            <Checkbox>保存时自动生成新 Token</Checkbox>
+            <Checkbox>Regenerate token when saving</Checkbox>
           </Form.Item>
         ) : null}
         <Form.Item<ProjectFormValues>
-          label="启用状态"
+          label="Enabled"
           name="enabled"
           valuePropName="checked"
         >
-          <Switch checkedChildren="已启用" unCheckedChildren="已停用" />
+          <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
         </Form.Item>
       </Form>
       {mode === "edit" && (processorSection || ruleSetsSection) ? (

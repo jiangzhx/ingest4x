@@ -45,7 +45,7 @@ export function EventSinkFormModal({
     label: `${target.name} (${target.target_id}, ${getDeliveryTargetTypeLabel(
       target.target_type,
       sinkTypes,
-    )})${target.enabled ? "" : "（已停用）"}`,
+    )})${target.enabled ? "" : " (disabled)"}`,
     value: target.id,
   }));
 
@@ -60,7 +60,7 @@ export function EventSinkFormModal({
 
   const handleOk = async () => {
     const values = await form.validateFields();
-    const destination = parseJsonObject(values.destination_json, "投递目标配置");
+    const destination = parseJsonObject(values.destination_json, "Destination config");
     await onSubmit({
       ...values,
       sink_id: values.sink_id.trim(),
@@ -74,9 +74,9 @@ export function EventSinkFormModal({
       destroyOnHidden
       open={open}
       width={640}
-      title={mode === "create" ? "创建 Event Sink" : "编辑 Event Sink"}
-      okText={mode === "create" ? "创建" : "保存"}
-      cancelText="取消"
+      title={mode === "create" ? "Create Event Sink" : "Edit Event Sink"}
+      okText={mode === "create" ? "Create" : "Save"}
+      cancelText="Cancel"
       confirmLoading={confirmLoading}
       onCancel={onCancel}
       onOk={() => {
@@ -92,41 +92,41 @@ export function EventSinkFormModal({
           label="Sink ID"
           name="sink_id"
           rules={[
-            { required: true, message: "请输入 sink_id" },
-            { whitespace: true, message: "sink_id 不能为空" },
+            { required: true, message: "Please enter sink_id" },
+            { whitespace: true, message: "sink_id cannot be empty" },
           ]}
         >
-          <Input placeholder="例如：events" disabled={mode === "edit"} />
+          <Input placeholder="For example: events" disabled={mode === "edit"} />
         </Form.Item>
         <Form.Item<EventSinkFormValues>
-          label="展示名"
+          label="Display Name"
           name="name"
           rules={[
-            { required: true, message: "请输入展示名" },
-            { whitespace: true, message: "展示名不能为空" },
+            { required: true, message: "Please enter display name" },
+            { whitespace: true, message: "Display name cannot be empty" },
           ]}
         >
-          <Input placeholder="例如：主事件流" maxLength={120} />
+          <Input placeholder="For example: main event stream" maxLength={120} />
         </Form.Item>
         <Form.Item<EventSinkFormValues>
           label="Delivery Target"
           name="delivery_target_id"
-          rules={[{ required: true, message: "请选择 delivery target" }]}
+          rules={[{ required: true, message: "Please select a delivery target" }]}
         >
           <Select
             showSearch
-            placeholder="选择 delivery target"
+            placeholder="Select delivery target"
             options={targetOptions}
             optionFilterProp="label"
           />
         </Form.Item>
         <Form.Item<EventSinkFormValues>
-          label="投递目标配置 JSON"
+          label="Destination Config JSON"
           name="destination_json"
           rules={[
             {
               validator: (_, value: string | undefined) => {
-                parseJsonObject(value ?? "", "投递目标配置");
+                parseJsonObject(value ?? "", "Destination config");
                 return Promise.resolve();
               },
             },
@@ -139,7 +139,7 @@ export function EventSinkFormModal({
               try {
                 const destination = parseJsonObject(
                   form.getFieldValue("destination_json") ?? "",
-                  "投递目标配置",
+                  "Destination config",
                 );
                 form.setFieldValue(
                   "destination_json",
@@ -154,16 +154,16 @@ export function EventSinkFormModal({
         <Form.Item<EventSinkFormValues>
           label="Auto Offset Reset"
           name="auto_offset_reset"
-          rules={[{ required: true, message: "请选择 auto_offset_reset" }]}
+          rules={[{ required: true, message: "Please select auto_offset_reset" }]}
         >
           <Select options={autoOffsetResetOptions} />
         </Form.Item>
         <Form.Item<EventSinkFormValues>
-          label="启用状态"
+          label="Enabled"
           name="enabled"
           valuePropName="checked"
         >
-          <Switch checkedChildren="已启用" unCheckedChildren="已停用" />
+          <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
         </Form.Item>
       </Form>
     </Modal>

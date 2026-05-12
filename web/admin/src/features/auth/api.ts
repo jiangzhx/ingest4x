@@ -17,7 +17,7 @@ export async function loginWithPassword(password: string): Promise<void> {
     clearAdminPassword();
 
     if (error instanceof AdminUnauthorizedError) {
-      throw new Error("管理员密码错误");
+      throw new Error("Invalid admin password");
     }
 
     throw error;

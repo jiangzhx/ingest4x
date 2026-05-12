@@ -79,9 +79,9 @@ export function RuleFormModal({
       destroyOnHidden
       open={open}
       width={760}
-      title={mode === "create" ? "创建 Rhai 脚本" : "编辑 Rhai 脚本"}
-      okText={mode === "create" ? "创建" : "保存"}
-      cancelText="取消"
+      title={mode === "create" ? "Create Rhai Script" : "Edit Rhai Script"}
+      okText={mode === "create" ? "Create" : "Save"}
+      cancelText="Cancel"
       confirmLoading={confirmLoading}
       onCancel={onCancel}
       onOk={() => {
@@ -94,21 +94,21 @@ export function RuleFormModal({
         initialValues={toFormValues(rule)}
       >
         <Form.Item<RuleFormFields>
-          label="Rhai 脚本"
+          label="Rhai Script"
           name="content"
           rules={[
-            { required: true, message: "请输入 Rhai 脚本" },
-            { whitespace: true, message: "Rhai 脚本不能为空" },
+            { required: true, message: "Please enter Rhai script" },
+            { whitespace: true, message: "Rhai script cannot be empty" },
           ]}
         >
           <LazyRhaiEditor />
         </Form.Item>
         <Form.Item<RuleFormFields>
-          label="启用状态"
+          label="Enabled"
           name="enabled"
           valuePropName="checked"
         >
-          <Switch checkedChildren="已启用" unCheckedChildren="已停用" />
+          <Switch checkedChildren="Enabled" unCheckedChildren="Disabled" />
         </Form.Item>
       </Form>
     </Modal>

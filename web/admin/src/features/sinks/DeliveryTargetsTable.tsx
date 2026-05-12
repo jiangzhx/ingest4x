@@ -32,13 +32,13 @@ export function DeliveryTargetsTable({
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
     },
     {
-      title: "展示名",
+      title: "Display Name",
       dataIndex: "name",
       key: "name",
       render: (value: string) => <Typography.Text strong>{value}</Typography.Text>,
     },
     {
-      title: "类型",
+      title: "Type",
       dataIndex: "target_type",
       key: "target_type",
       width: 120,
@@ -49,15 +49,15 @@ export function DeliveryTargetsTable({
       ),
     },
     {
-      title: "状态",
+      title: "Status",
       dataIndex: "enabled",
       key: "enabled",
       width: 120,
       render: (enabled: boolean) =>
-        enabled ? <Tag color="success">已启用</Tag> : <Tag>已停用</Tag>,
+        enabled ? <Tag color="success">Enabled</Tag> : <Tag>Disabled</Tag>,
     },
     {
-      title: "更新时间",
+      title: "Updated At",
       dataIndex: "updated_at",
       key: "updated_at",
       width: 180,
@@ -68,7 +68,7 @@ export function DeliveryTargetsTable({
       ),
     },
     {
-      title: "操作",
+      title: "Actions",
       key: "actions",
       width: 180,
       fixed: "right",
@@ -83,13 +83,13 @@ export function DeliveryTargetsTable({
               disabled={actionsDisabled}
               onClick={() => onEdit(target)}
             >
-              编辑
+              Edit
             </Button>
             <Popconfirm
-              title="删除 Delivery Target"
-              description={`将删除 ${target.target_id}，如果仍有 sink 使用它，后端会拒绝删除。`}
-              okText="删除"
-              cancelText="取消"
+              title="Delete Delivery Target"
+              description={`Target ${target.target_id} will be deleted. Deletion is blocked if any sink still references it.`}
+              okText="Delete"
+              cancelText="Cancel"
               disabled={disableRowActions || isDeleting}
               okButtonProps={{ danger: true, loading: isDeleting }}
               onConfirm={() => onDelete(target)}
@@ -100,7 +100,7 @@ export function DeliveryTargetsTable({
                 disabled={disableRowActions}
                 loading={isDeleting}
               >
-                删除
+                Delete
               </Button>
             </Popconfirm>
           </Space>
@@ -118,7 +118,7 @@ export function DeliveryTargetsTable({
       locale={{
         emptyText: (
           <Empty
-            description="当前还没有 delivery target"
+            description="No delivery targets are configured yet"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ),

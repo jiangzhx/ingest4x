@@ -78,7 +78,7 @@ test("admin shell and router expose the sink management page", () => {
   assert.match(routerSource, /path: "\/sinks"/);
   assert.match(routerSource, /component: SinksPage/);
   assert.match(shellSource, /key: "\/sinks"/);
-  assert.match(shellSource, /Sink 管理/);
+  assert.match(shellSource, /Sink Management/);
 });
 
 test("sinks page manages delivery targets and event sinks together", () => {
@@ -99,14 +99,14 @@ test("sink forms only expose json configuration controls", () => {
   assert.match(sinkFormSource, /auto_offset_reset/);
   assert.match(sinkFormSource, /destination_json/);
   assert.match(sinkFormSource, /delivery_target_id/);
-  assert.doesNotMatch(targetFormSource, /字段配置/);
+  assert.doesNotMatch(targetFormSource, /[\u4e00-\u9fff]/);
   assert.doesNotMatch(targetFormSource, /bootstrap_servers/);
   assert.doesNotMatch(targetFormSource, /delivery_timeout_ms/);
   assert.doesNotMatch(targetFormSource, /queue_buffering_max_ms/);
   assert.doesNotMatch(targetFormSource, /batch_num_messages/);
   assert.doesNotMatch(targetFormSource, /queue_buffering_max_messages/);
   assert.doesNotMatch(targetFormSource, /linger_ms/);
-  assert.doesNotMatch(sinkFormSource, /字段配置/);
+  assert.doesNotMatch(sinkFormSource, /[\u4e00-\u9fff]/);
   assert.doesNotMatch(sinkFormSource, /Kafka Topic/);
   assert.doesNotMatch(sinkFormSource, /topic/);
   assert.doesNotMatch(sinkFormSource, /<Select[\s\S]*disabled=\{mode === "edit"\}/);
@@ -268,7 +268,7 @@ test("sinks api normalizes valid response payloads at runtime", () => {
 test("sinks api rejects invalid response payloads at runtime", () => {
   assert.throws(
     () => normalizeDeliveryTargetsResponse({ items: [] }),
-    /Sink 接口响应无效：delivery target 列表不是数组/,
+    /Invalid Sink API response: delivery target list is not an array/,
   );
   assert.throws(
     () =>
@@ -278,7 +278,7 @@ test("sinks api rejects invalid response payloads at runtime", () => {
           label: "",
         },
       ]),
-    /Sink 接口响应无效：label 不能为空/,
+    /Invalid Sink API response: label cannot be empty/,
   );
   assert.throws(
     () =>
@@ -300,7 +300,7 @@ test("sinks api rejects invalid response payloads at runtime", () => {
           },
         ],
       ),
-    /Sink 接口响应无效：target_type 不是已注册的类型/,
+    /Invalid Sink API response: target_type is not a registered type/,
   );
   assert.throws(
     () =>
@@ -315,6 +315,6 @@ test("sinks api rejects invalid response payloads at runtime", () => {
         created_at: 1,
         updated_at: 2,
       }),
-    /Sink 接口响应无效：auto_offset_reset 不是支持的值/,
+    /Invalid Sink API response: auto_offset_reset is not a supported value/,
   );
 });

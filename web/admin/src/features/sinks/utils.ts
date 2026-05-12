@@ -30,7 +30,7 @@ export function formatSinkTimestamp(timestamp: number): string {
 
 export function getErrorMessage(
   error: unknown,
-  fallback = "请求失败，请稍后重试。",
+  fallback = "Request failed, please try again later.",
 ): string {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -50,11 +50,11 @@ export function parseJsonObject(value: string, fieldName: string): Record<string
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    throw new Error(`${fieldName} 必须是合法 JSON`);
+      throw new Error(`${fieldName} must be valid JSON`);
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${fieldName} 必须是 JSON 对象`);
+    throw new Error(`${fieldName} must be a JSON object`);
   }
 
   return parsed as Record<string, unknown>;
@@ -82,7 +82,7 @@ export function toCreateDeliveryTargetPayload(
     target_id: values.target_id.trim(),
     name: values.name.trim(),
     target_type: values.target_type,
-    config_json: parseJsonObject(values.config_json, "连接配置"),
+    config_json: parseJsonObject(values.config_json, "Connection config"),
     enabled: values.enabled,
   };
 }
@@ -92,7 +92,7 @@ export function toUpdateDeliveryTargetPayload(
 ): UpdateDeliveryTargetPayload {
   return {
     name: values.name.trim(),
-    config_json: parseJsonObject(values.config_json, "连接配置"),
+    config_json: parseJsonObject(values.config_json, "Connection config"),
     enabled: values.enabled,
   };
 }
@@ -101,14 +101,14 @@ export function toCreateEventSinkPayload(
   values: EventSinkFormValues,
 ): CreateEventSinkPayload {
   if (values.delivery_target_id === null) {
-    throw new Error("请选择 delivery target");
+    throw new Error("Please select a delivery target");
   }
 
   return {
     sink_id: values.sink_id.trim(),
     name: values.name.trim(),
     delivery_target_id: values.delivery_target_id,
-    destination_json: parseJsonObject(values.destination_json, "投递目标配置"),
+    destination_json: parseJsonObject(values.destination_json, "Destination config"),
     auto_offset_reset: values.auto_offset_reset,
     enabled: values.enabled,
   };
@@ -118,13 +118,13 @@ export function toUpdateEventSinkPayload(
   values: EventSinkFormValues,
 ): UpdateEventSinkPayload {
   if (values.delivery_target_id === null) {
-    throw new Error("请选择 delivery target");
+    throw new Error("Please select a delivery target");
   }
 
   return {
     name: values.name.trim(),
     delivery_target_id: values.delivery_target_id,
-    destination_json: parseJsonObject(values.destination_json, "投递目标配置"),
+    destination_json: parseJsonObject(values.destination_json, "Destination config"),
     auto_offset_reset: values.auto_offset_reset,
     enabled: values.enabled,
   };

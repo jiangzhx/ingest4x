@@ -13,9 +13,9 @@ type RulesTableProps = {
 
 function renderRuleStatus(rule: Rule) {
   if (!rule.enabled) {
-    return <Tag>已停用</Tag>;
+    return <Tag>Disabled</Tag>;
   }
-  return <Tag color="success">已启用</Tag>;
+  return <Tag color="success">Enabled</Tag>;
 }
 
 export function RulesTable({
@@ -27,7 +27,7 @@ export function RulesTable({
 }: RulesTableProps) {
   const columns: ColumnsType<Rule> = [
     {
-      title: "脚本",
+      title: "Script",
       dataIndex: "name",
       key: "name",
       render: (value: string) => (
@@ -35,14 +35,14 @@ export function RulesTable({
       ),
     },
     {
-      title: "状态",
+      title: "Status",
       dataIndex: "enabled",
       key: "enabled",
       width: 120,
       render: (_, rule) => renderRuleStatus(rule),
     },
     {
-      title: "更新时间",
+      title: "Updated At",
       dataIndex: "updated_at",
       key: "updated_at",
       width: 180,
@@ -53,7 +53,7 @@ export function RulesTable({
       ),
     },
     {
-      title: "操作",
+      title: "Actions",
       key: "actions",
       width: 160,
       render: (_, rule) => {
@@ -66,13 +66,13 @@ export function RulesTable({
               disabled={actionsDisabled}
               onClick={() => onEdit(rule)}
             >
-              编辑
+              Edit
             </Button>
             <Popconfirm
-              title="删除脚本"
-              description="删除后需要重新保存脚本才能启用校验。"
-              okText="删除"
-              cancelText="取消"
+              title="Delete script"
+              description="After deletion, the rule script must be saved again to enable validation."
+              okText="Delete"
+              cancelText="Cancel"
               disabled={actionsDisabled}
               okButtonProps={{ danger: true, loading: isDeleting }}
               onConfirm={() => onDelete(rule)}
@@ -83,7 +83,7 @@ export function RulesTable({
                 disabled={actionsDisabled}
                 loading={isDeleting}
               >
-                删除
+                Delete
               </Button>
             </Popconfirm>
           </Space>
@@ -100,7 +100,10 @@ export function RulesTable({
       pagination={false}
       locale={{
         emptyText: (
-          <Empty description="当前规则集还没有脚本" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            <Empty
+              description="Current rule set has no scripts"
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+            />
         ),
       }}
       scroll={{ x: 700 }}

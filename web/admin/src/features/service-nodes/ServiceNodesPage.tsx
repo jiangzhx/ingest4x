@@ -10,18 +10,18 @@ export function ServiceNodesPage() {
   const showRefreshError = serviceNodesQuery.isError && hasLoadedNodes;
 
   if (serviceNodesQuery.isLoading) {
-    return <Spin tip="正在加载服务节点..." />;
+    return <Spin tip="Loading service nodes..." />;
   }
 
   if (showInitialError) {
     return (
       <Result
         status="error"
-        title="服务节点加载失败"
-        subTitle="请确认管理端 API 可访问，并检查管理员密码是否有效。"
+        title="Failed to load service nodes"
+        subTitle="Please verify admin API access and that the admin password is valid."
         extra={
           <Button type="primary" onClick={() => void serviceNodesQuery.refetch()}>
-            重试
+            Retry
           </Button>
         }
       />
@@ -36,17 +36,17 @@ export function ServiceNodesPage() {
       >
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            节点管理
+            Service Nodes
           </Typography.Title>
           <Typography.Paragraph type="secondary" style={{ margin: "8px 0 0" }}>
-            查看当前已注册的 ingest4x 服务节点和最近心跳。
+            View registered ingest4x service nodes and recent heartbeat status.
           </Typography.Paragraph>
         </div>
         <Button
           loading={serviceNodesQuery.isFetching}
           onClick={() => void serviceNodesQuery.refetch()}
         >
-          刷新
+          Refresh
         </Button>
       </Space>
 
@@ -54,7 +54,7 @@ export function ServiceNodesPage() {
         <Alert
           type="warning"
           showIcon
-          message="刷新服务节点失败，当前仍显示上一次成功加载的数据。"
+          message="Refresh failed, still showing the last successful data."
         />
       ) : null}
 

@@ -48,17 +48,17 @@ type ProjectProcessorResponse = {
 };
 
 function invalidProcessorData(message: string): Error {
-  return new Error(`Processor 接口响应无效：${message}`);
+  return new Error(`Invalid Processor API response: ${message}`);
 }
 
 function normalizeRequiredString(value: unknown, fieldName: string): string {
   if (typeof value !== "string") {
-    throw invalidProcessorData(`${fieldName} 缺失或不是字符串`);
+    throw invalidProcessorData(`${fieldName} is missing or not a string`);
   }
 
   const normalized = value.trim();
   if (!normalized) {
-    throw invalidProcessorData(`${fieldName} 不能为空`);
+    throw invalidProcessorData(`${fieldName} cannot be empty`);
   }
 
   return normalized;
@@ -66,7 +66,7 @@ function normalizeRequiredString(value: unknown, fieldName: string): string {
 
 function normalizeInteger(value: unknown, fieldName: string): number {
   if (!Number.isInteger(value) || typeof value !== "number") {
-    throw invalidProcessorData(`${fieldName} 缺失或不是整数`);
+    throw invalidProcessorData(`${fieldName} is missing or not an integer`);
   }
 
   return value;
@@ -75,7 +75,7 @@ function normalizeInteger(value: unknown, fieldName: string): number {
 function normalizePositiveInteger(value: unknown, fieldName: string): number {
   const integer = normalizeInteger(value, fieldName);
   if (integer <= 0) {
-    throw invalidProcessorData(`${fieldName} 必须大于 0`);
+    throw invalidProcessorData(`${fieldName} must be greater than 0`);
   }
 
   return integer;
@@ -83,7 +83,7 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number {
 
 function normalizeTimestamp(value: unknown, fieldName: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw invalidProcessorData(`${fieldName} 缺失或不是有效时间戳`);
+    throw invalidProcessorData(`${fieldName} is missing or not a valid timestamp`);
   }
 
   return Math.trunc(value);
@@ -99,7 +99,7 @@ function normalizeNullableTimestamp(value: unknown, fieldName: string): number |
 
 function normalizeStatus(value: unknown): ProcessorScriptStatus {
   if (value !== "draft" && value !== "active" && value !== "archived") {
-    throw invalidProcessorData("status 不是支持的值");
+    throw invalidProcessorData("status is not a supported value");
   }
 
   return value;
@@ -109,7 +109,7 @@ export function normalizeProcessorScriptResponse(
   value: ProcessorScriptResponse,
 ): ProcessorScript {
   if (!value || typeof value !== "object") {
-    throw invalidProcessorData("processor script 数据不是对象");
+    throw invalidProcessorData("processor script data is not an object");
   }
 
   return {
@@ -130,7 +130,7 @@ function normalizeProcessorScriptModuleResponse(
   value: ProcessorScriptModuleResponse,
 ): ProcessorScriptModule {
   if (!value || typeof value !== "object") {
-    throw invalidProcessorData("processor module 数据不是对象");
+    throw invalidProcessorData("processor module data is not an object");
   }
 
   return {
@@ -151,7 +151,7 @@ function normalizeProcessorScriptDetailResponse(
 ): ProcessorScriptDetail {
   const script = normalizeProcessorScriptResponse(value);
   if (!Array.isArray(value.modules)) {
-    throw invalidProcessorData("modules 不是数组");
+    throw invalidProcessorData("modules is not an array");
   }
 
   return {
@@ -166,10 +166,10 @@ function normalizeProjectProcessorResponse(
   value: ProjectProcessorResponse,
 ): ProjectProcessor {
   if (!value || typeof value !== "object") {
-    throw invalidProcessorData("project processor 数据不是对象");
+    throw invalidProcessorData("project processor data is not an object");
   }
   if (typeof value.enabled !== "boolean") {
-    throw invalidProcessorData("enabled 缺失或不是布尔值");
+    throw invalidProcessorData("enabled is missing or not a boolean");
   }
 
   return {
@@ -191,7 +191,7 @@ export async function listProcessorScripts(): Promise<ProcessorScript[]> {
   );
 
   if (!Array.isArray(response)) {
-    throw invalidProcessorData("processor script 列表不是数组");
+    throw invalidProcessorData("processor script list is not an array");
   }
 
   return response.map((script) => normalizeProcessorScriptResponse(script));
@@ -278,7 +278,7 @@ export async function listProjectProcessors(): Promise<ProjectProcessor[]> {
   );
 
   if (!Array.isArray(response)) {
-    throw invalidProcessorData("project processor 列表不是数组");
+    throw invalidProcessorData("project processor list is not an array");
   }
 
   return response.map((binding) => normalizeProjectProcessorResponse(binding));

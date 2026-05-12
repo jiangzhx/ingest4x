@@ -45,7 +45,7 @@ export function ProcessorScriptDetailModal({
         <Space direction="vertical" size={12} style={{ display: "flex" }}>
           <Space size={24} wrap>
             <Typography.Text>
-              状态：<Typography.Text code>{detail.status}</Typography.Text>
+              Status: <Typography.Text code>{detail.status}</Typography.Text>
             </Typography.Text>
             <Typography.Text>
               Entry：<Typography.Text code>{detail.entry_module}</Typography.Text>
@@ -54,7 +54,7 @@ export function ProcessorScriptDetailModal({
               Checksum：<Typography.Text code>{detail.checksum}</Typography.Text>
             </Typography.Text>
             <Typography.Text type="secondary">
-              激活时间：{formatProcessorTimestamp(detail.activated_at)}
+              Activated At: {formatProcessorTimestamp(detail.activated_at)}
             </Typography.Text>
           </Space>
           <Tabs items={tabItems} type="editable-card" hideAdd tabBarGutter={8} />

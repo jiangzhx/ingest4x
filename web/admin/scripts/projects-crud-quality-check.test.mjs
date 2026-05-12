@@ -171,12 +171,12 @@ test("project creation keeps full ingest token visible and copyable", async () =
   assert.match(projectsTableSource, /const tokenText = project\.ingest_token;/);
   assert.match(projectsTableSource, /\{tokenText\}\s*<\/Typography\.Text>/);
   assert.match(projectsTableSource, /CopyOutlined/);
-  assert.match(projectsTableSource, /aria-label="复制 Token"/);
+  assert.match(projectsTableSource, /aria-label="Copy token"/);
   assert.doesNotMatch(projectsTableSource, /disabled=\{!tokenText\}/);
   assert.match(projectsTableSource, /handleCopyToken\(tokenText\)/);
   assert.doesNotMatch(projectsTableSource, /copyable=/);
   assert.match(projectFormSource, /regenerate_ingest_token/);
-  assert.match(projectFormSource, /保存时自动生成新 Token/);
+  assert.match(projectFormSource, /Regenerate token when saving/);
 
   const originalFetch = globalThis.fetch;
 
@@ -225,15 +225,15 @@ test("project token copy falls back when browser clipboard is unavailable", () =
   assert.match(projectsTableSource, /navigator\.clipboard/);
   assert.match(projectsTableSource, /clipboard\.writeText\(text\)/);
   assert.match(projectsTableSource, /document\.execCommand\("copy"\)/);
-  assert.match(projectsTableSource, /message\.success\("Token 已复制"\)/);
-  assert.match(projectsTableSource, /message\.error\("Token 复制失败，请手动复制"\)/);
+  assert.match(projectsTableSource, /message\.success\("Token copied"\)/);
+  assert.match(projectsTableSource, /message\.error\("Failed to copy token, please copy manually"\)/);
 });
 
-test("projects api rejects invalid response payloads at runtime", () => {
-  assert.throws(
-    () => normalizeProjectsResponse({ items: [] }),
-    /项目接口响应无效：项目列表不是数组/,
-  );
+  test("projects api rejects invalid response payloads at runtime", () => {
+    assert.throws(
+      () => normalizeProjectsResponse({ items: [] }),
+      /Invalid project API response: project list is not an array/,
+    );
   assert.throws(
     () =>
       normalizeProjectResponse({
@@ -245,7 +245,7 @@ test("projects api rejects invalid response payloads at runtime", () => {
         created_at: 1,
         updated_at: 2,
       }),
-    /项目接口响应无效：enabled 缺失或不是布尔值/,
+    /Invalid project API response: enabled is missing or not a boolean/,
   );
   assert.throws(
     () =>
@@ -258,7 +258,7 @@ test("projects api rejects invalid response payloads at runtime", () => {
         created_at: 1,
         updated_at: 2,
       }),
-    /项目接口响应无效：ingest_token_prefix 不能为空/,
+    /Invalid project API response: ingest_token_prefix cannot be empty/,
   );
   assert.throws(
     () =>
@@ -271,7 +271,7 @@ test("projects api rejects invalid response payloads at runtime", () => {
         created_at: -1,
         updated_at: 2,
       }),
-    /项目接口响应无效：created_at 缺失或不是有效时间戳/,
+    /Invalid project API response: created_at is missing or not a valid timestamp/,
   );
 });
 
@@ -292,8 +292,8 @@ test("shared http requestJson throws stable runtime errors for non-json and inva
       (error) =>
         error instanceof HttpError &&
         error.status === 200 &&
-        error.message === "响应不是 JSON",
-    );
+        error.message === "Response is not JSON",
+      );
 
     globalThis.fetch = async () =>
       new Response("{", {
@@ -308,8 +308,8 @@ test("shared http requestJson throws stable runtime errors for non-json and inva
       (error) =>
         error instanceof HttpError &&
         error.status === 200 &&
-        error.message === "响应 JSON 解析失败",
-    );
+        error.message === "Failed to parse JSON response",
+      );
   } finally {
     globalThis.fetch = originalFetch;
   }

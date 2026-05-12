@@ -24,17 +24,17 @@ const serviceNodeStatuses = new Set<ServiceNodeStatus>([
 ]);
 
 function invalidServiceNodeData(message: string): Error {
-  return new Error(`节点接口响应无效：${message}`);
+  return new Error(`Invalid service node API response: ${message}`);
 }
 
 function normalizeRequiredString(value: unknown, fieldName: string): string {
   if (typeof value !== "string") {
-    throw invalidServiceNodeData(`${fieldName} 缺失或不是字符串`);
+    throw invalidServiceNodeData(`${fieldName} is missing or not a string`);
   }
 
   const normalized = value.trim();
   if (!normalized) {
-    throw invalidServiceNodeData(`${fieldName} 不能为空`);
+    throw invalidServiceNodeData(`${fieldName} cannot be empty`);
   }
 
   return normalized;
@@ -48,7 +48,7 @@ function normalizeOptionalString(
     return null;
   }
   if (typeof value !== "string") {
-    throw invalidServiceNodeData(`${fieldName} 不是字符串`);
+    throw invalidServiceNodeData(`${fieldName} is not a string`);
   }
 
   const normalized = value.trim();
@@ -57,7 +57,7 @@ function normalizeOptionalString(
 
 function normalizeTimestamp(value: unknown, fieldName: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw invalidServiceNodeData(`${fieldName} 缺失或不是有效时间戳`);
+    throw invalidServiceNodeData(`${fieldName} is missing or not a valid timestamp`);
   }
 
   return Math.trunc(value);
@@ -66,7 +66,7 @@ function normalizeTimestamp(value: unknown, fieldName: string): number {
 function normalizeStatus(value: unknown): ServiceNodeStatus {
   const normalized = normalizeRequiredString(value, "status");
   if (!serviceNodeStatuses.has(normalized as ServiceNodeStatus)) {
-    throw invalidServiceNodeData("status 不是支持的值");
+    throw invalidServiceNodeData("status is not a supported value");
   }
 
   return normalized as ServiceNodeStatus;
@@ -77,7 +77,7 @@ function normalizeMetadata(value: unknown): Record<string, unknown> | null {
     return null;
   }
   if (Array.isArray(value) || typeof value !== "object") {
-    throw invalidServiceNodeData("metadata_json 不是对象");
+    throw invalidServiceNodeData("metadata_json is not an object");
   }
 
   return value as Record<string, unknown>;
@@ -87,7 +87,7 @@ export function normalizeServiceNodeResponse(
   value: ServiceNodeResponse,
 ): ServiceNode {
   if (!value || typeof value !== "object") {
-    throw invalidServiceNodeData("节点数据不是对象");
+    throw invalidServiceNodeData("service node data is not an object");
   }
 
   return {
@@ -113,7 +113,7 @@ export function normalizeServiceNodeResponse(
 
 export function normalizeServiceNodesResponse(response: unknown): ServiceNode[] {
   if (!Array.isArray(response)) {
-    throw invalidServiceNodeData("节点列表不是数组");
+    throw invalidServiceNodeData("service node list is not an array");
   }
 
   return response.map((node) => normalizeServiceNodeResponse(node));

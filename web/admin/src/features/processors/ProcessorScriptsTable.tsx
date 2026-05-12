@@ -37,7 +37,7 @@ export function ProcessorScriptsTable({
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
     },
     {
-      title: "展示名",
+      title: "Display Name",
       dataIndex: "name",
       key: "name",
       width: 220,
@@ -56,14 +56,14 @@ export function ProcessorScriptsTable({
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
     },
     {
-      title: "版本",
+      title: "Version",
       dataIndex: "version",
       key: "version",
       width: 90,
       render: (value: number) => <Tag>v{value}</Tag>,
     },
     {
-      title: "状态",
+      title: "Status",
       dataIndex: "status",
       key: "status",
       width: 110,
@@ -77,7 +77,7 @@ export function ProcessorScriptsTable({
       render: (value: string) => <Typography.Text code>{value}</Typography.Text>,
     },
     {
-      title: "更新时间",
+      title: "Updated At",
       dataIndex: "updated_at",
       key: "updated_at",
       width: 180,
@@ -88,7 +88,7 @@ export function ProcessorScriptsTable({
       ),
     },
     {
-      title: "操作",
+      title: "Actions",
       key: "actions",
       width: 250,
       fixed: "right",
@@ -99,10 +99,10 @@ export function ProcessorScriptsTable({
         return (
           <Space>
             <Button size="small" onClick={() => onView(script)}>
-              查看
+              View
             </Button>
             <Button size="small" onClick={() => onEdit(script)}>
-              编辑
+              Edit
             </Button>
             <Button
               size="small"
@@ -113,7 +113,7 @@ export function ProcessorScriptsTable({
                 void onStatusChange(script);
               }}
             >
-              {isActive ? "禁用" : "启用"}
+              {isActive ? "Disable" : "Enable"}
             </Button>
           </Space>
         );
@@ -131,7 +131,7 @@ export function ProcessorScriptsTable({
       locale={{
         emptyText: (
           <Empty
-            description="当前还没有 processor script"
+            description="No processor scripts are configured"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         ),

@@ -7,15 +7,15 @@ export function formatServiceNodeTimestamp(value: number): string {
 export function getServiceNodeStatusLabel(status: ServiceNodeStatus): string {
   switch (status) {
     case "starting":
-      return "启动中";
+      return "Starting";
     case "running":
-      return "运行中";
+      return "Running";
     case "stopping":
-      return "停止中";
+      return "Stopping";
     case "stopped":
-      return "已停止";
+      return "Stopped";
     case "stale":
-      return "已过期";
+      return "Stale";
   }
 }
 

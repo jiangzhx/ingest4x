@@ -51,13 +51,13 @@ export function ProjectProcessorPanel({
   return (
     <Space direction="vertical" size={12} style={{ display: "flex" }}>
       <Typography.Title level={4} style={{ margin: 0 }}>
-        Processor 绑定
+        Processor Binding
       </Typography.Title>
       {projectId !== null ? (
         <Select
           showSearch
           value={value}
-          placeholder="选择 Processor Script"
+          placeholder="Select processor script"
           optionFilterProp="label"
           options={options}
           loading={loading || updating}
@@ -73,15 +73,19 @@ export function ProjectProcessorPanel({
           }}
         />
       ) : (
-        <Alert type="info" showIcon message="保存项目后即可绑定 Processor" />
+        <Alert
+          type="info"
+          showIcon
+          message="Save the project first to assign a processor."
+        />
       )}
       {projectId !== null ? (
         <Typography.Text type="secondary">
-          当前项目：{projectName ? `${projectName} (#${projectId})` : `#${projectId}`}
+          Current project: {projectName ? `${projectName} (#${projectId})` : `#${projectId}`}
         </Typography.Text>
       ) : null}
       <Space size={8}>
-        <Typography.Text>当前 Processor：{currentName}</Typography.Text>
+        <Typography.Text>Current Processor: {currentName}</Typography.Text>
         {isDefault ? <Tag>default</Tag> : <Tag color="blue">custom</Tag>}
       </Space>
     </Space>

@@ -32,8 +32,8 @@ test("router auth gate uses reusable auth state helper", () => {
 });
 
 test("login page copy explains session scoped login", () => {
-  assert.match(loginPageSource, /当前浏览器会话/);
-  assert.doesNotMatch(loginPageSource, /刷新后需要重新登录/);
+  assert.match(loginPageSource, /current browser\s+session/);
+  assert.match(loginPageSource, /login state is kept after page refresh/);
 });
 
 test("login page returns to sanitized redirect path after successful login", () => {

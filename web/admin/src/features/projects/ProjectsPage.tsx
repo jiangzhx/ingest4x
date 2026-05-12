@@ -108,14 +108,14 @@ export function ProjectsPage() {
       if (modalMode === "create") {
         await createProjectMutation.mutateAsync(toCreateProjectPayload(values));
 
-        message.success(`项目 ${values.name} 创建成功`);
+        message.success(`Project ${values.name} created`);
       } else if (editingProject) {
         await updateProjectMutation.mutateAsync({
           projectId: editingProject.id,
           payload: toUpdateProjectPayload(values),
         });
 
-        message.success(`项目 ${editingProject.name} 保存成功`);
+        message.success(`Project ${editingProject.name} saved`);
       }
 
       setIsFormOpen(false);
@@ -125,8 +125,8 @@ export function ProjectsPage() {
         getErrorMessage(
           error,
           modalMode === "create"
-            ? "创建项目失败，请稍后重试。"
-            : "保存项目失败，请稍后重试。",
+            ? "Failed to create project, please try again later."
+            : "Failed to save project, please try again later.",
         ),
       );
       throw error;
@@ -142,10 +142,10 @@ export function ProjectsPage() {
 
     try {
       await deleteProjectMutation.mutateAsync(project.id);
-      message.success(`项目 ${project.name} 删除成功`);
+      message.success(`Project ${project.name} deleted`);
     } catch (error) {
       message.error(
-        getErrorMessage(error, `删除项目 ${project.name} 失败，请稍后重试。`),
+        getErrorMessage(error, `Failed to delete project ${project.name}, please try again later.`),
       );
     } finally {
       setDeletingProjectId(null);
@@ -159,9 +159,9 @@ export function ProjectsPage() {
         rule_set_id: ruleSetId,
         enabled: true,
       });
-      message.success("规则集绑定成功");
+      message.success("Rule set assigned");
     } catch (error) {
-      message.error(getRuleErrorMessage(error, "绑定规则集失败，请稍后重试。"));
+      message.error(getRuleErrorMessage(error, "Failed to assign rule set, please try again later."));
     } finally {
       setUpdatingRuleSetId(null);
     }
@@ -171,9 +171,9 @@ export function ProjectsPage() {
     setUpdatingRuleSetId(ruleSetId);
     try {
       await deleteAssignmentMutation.mutateAsync(ruleSetId);
-      message.success("规则集解绑成功");
+      message.success("Rule set unassigned");
     } catch (error) {
-      message.error(getRuleErrorMessage(error, "解绑规则集失败，请稍后重试。"));
+      message.error(getRuleErrorMessage(error, "Failed to unassign rule set, please try again later."));
     } finally {
       setUpdatingRuleSetId(null);
     }
@@ -193,9 +193,9 @@ export function ProjectsPage() {
           enabled: true,
         },
       });
-      message.success("Processor 绑定成功");
+      message.success("Processor assigned");
     } catch (error) {
-      message.error(getProcessorErrorMessage(error, "绑定 Processor 失败。"));
+      message.error(getProcessorErrorMessage(error, "Failed to assign processor."));
     } finally {
       setUpdatingProcessorProjectId(null);
     }
@@ -217,10 +217,10 @@ export function ProjectsPage() {
       >
         <div>
           <Typography.Title level={3} style={{ margin: 0 }}>
-            项目管理
+            Project Management
           </Typography.Title>
           <Typography.Paragraph type="secondary" style={{ margin: "8px 0 0" }}>
-            管理项目的创建、编辑、启停状态和删除操作。
+            Manage project creation, editing, enabled status, and deletion.
           </Typography.Paragraph>
         </div>
         <Space>
@@ -239,14 +239,14 @@ export function ProjectsPage() {
               processorBindingsQuery.isFetching
             }
           >
-            刷新
+            Refresh
           </Button>
           <Button
             type="primary"
             disabled={isDeletePending}
             onClick={handleCreateClick}
           >
-            新建项目
+            New Project
           </Button>
         </Space>
       </Space>
@@ -255,7 +255,7 @@ export function ProjectsPage() {
         <div style={{ display: "grid", minHeight: 240, placeItems: "center" }}>
           <Space direction="vertical" align="center" size={12}>
             <Spin size="large" />
-            <Typography.Text type="secondary">正在加载项目列表...</Typography.Text>
+            <Typography.Text type="secondary">Loading projects...</Typography.Text>
           </Space>
         </div>
       ) : null}
@@ -263,11 +263,11 @@ export function ProjectsPage() {
       {showInitialError ? (
         <Result
           status="error"
-          title="项目列表加载失败"
+          title="Failed to load projects"
           subTitle={getErrorMessage(projectsQuery.error)}
           extra={
             <Button type="primary" onClick={() => void projectsQuery.refetch()}>
-              重试
+              Retry
             </Button>
           }
         />
@@ -278,21 +278,21 @@ export function ProjectsPage() {
           <Alert
             type="info"
             showIcon
-            message={`共 ${projects.length} 个项目`}
+            message={`Total ${projects.length} projects`}
           />
           {isDeletePending ? (
             <Alert
               type="info"
               showIcon
-              message={`正在删除项目 #${deletingProjectId}`}
-              description="删除完成前，已临时禁用其他编辑和删除操作。"
+              message={`Deleting project #${deletingProjectId}`}
+              description="Other edit and delete actions are temporarily disabled while deleting."
             />
           ) : null}
           {isFormOpen && formError ? (
             <Alert
               type="error"
               showIcon
-              message={modalMode === "create" ? "创建项目失败" : "保存项目失败"}
+              message={modalMode === "create" ? "Failed to create project" : "Failed to save project"}
               description={getErrorMessage(formError)}
             />
           ) : null}
@@ -300,7 +300,7 @@ export function ProjectsPage() {
             <Alert
               type="warning"
               showIcon
-              message="刷新失败，当前展示的是上次成功加载的数据"
+              message="Refresh failed, showing last successful data"
               description={getErrorMessage(projectsQuery.error)}
             />
           ) : null}
@@ -308,7 +308,7 @@ export function ProjectsPage() {
             <Alert
               type="warning"
               showIcon
-              message="Processor 绑定信息刷新失败"
+              message="Failed to refresh processor assignment info"
               description={getProcessorErrorMessage(
                 processorScriptsQuery.error ?? processorBindingsQuery.error,
               )}

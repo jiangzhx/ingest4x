@@ -86,7 +86,7 @@ test("admin shell and router expose the processor management page", () => {
   assert.match(routerSource, /path: "\/processors"/);
   assert.match(routerSource, /component: ProcessorsPage/);
   assert.match(shellSource, /key: "\/processors"/);
-  assert.match(shellSource, /Processor 管理/);
+  assert.match(shellSource, /Processor Management/);
 });
 
 test("processors page manages script versions only", () => {
@@ -120,12 +120,12 @@ test("processor script form supports multi-module Rhai scripts", () => {
   assert.match(scriptFormSource, /fontWeight: isActive \? 600 : 400/);
   assert.doesNotMatch(scriptFormSource, /hoveredModuleTab/);
   assert.doesNotMatch(scriptFormSource, /minWidth: 132/);
-  assert.doesNotMatch(scriptFormSource, />\s*编辑\s*<\/Button>/);
+  assert.doesNotMatch(scriptFormSource, />\s*Edit\s*<\/Button>/);
   assert.doesNotMatch(scriptFormSource, />Rhai Source</);
   assert.doesNotMatch(scriptFormSource, /label="Module Name"[\s\S]{0,80}name=\{\[field\.name, "module_name"\]\}/);
   assert.match(scriptFormSource, /tabBarExtraContent=\{[\s\S]*<Space/);
-  assert.match(scriptFormSource, /tabBarExtraContent=\{[\s\S]*添加 Module/);
-  assert.doesNotMatch(scriptFormSource, />\s*删除 Module\s*</);
+  assert.match(scriptFormSource, /tabBarExtraContent=\{[\s\S]*Add Module/);
+  assert.doesNotMatch(scriptFormSource, />\s*Delete Module\s*</);
   assert.match(scriptFormSource, /nextModuleName/);
   assert.match(scriptFormSource, /moduleNameCandidates\.has\(`module\$\{index\}`\)/);
   assert.match(scriptFormSource, /module_name: nextModuleName\(watchedModules\)/);
@@ -257,10 +257,16 @@ test("processor script form validates Rhai syntax before create and update", () 
   assert.match(scriptFormSource, /sourceErrorForField/);
   assert.doesNotMatch(scriptFormSource, /<Alert/);
   assert.match(scriptFormSource, /footer=/);
-  assert.match(scriptFormSource, /取消[\s\S]*检查[\s\S]*\{mode === "edit" \? "保存" : "创建"\}/);
-  assert.doesNotMatch(scriptFormSource, /label="Module Name"[\s\S]*检查[\s\S]*label="Rhai Source"/);
+  assert.match(
+    scriptFormSource,
+    /Cancel[\s\S]*\{mode === "edit" \? "Save" : "Create"\}/,
+  );
+  assert.doesNotMatch(
+    scriptFormSource,
+    /label="Module Name"[\s\S]*label="Rhai Source"/,
+  );
   assert.doesNotMatch(scriptFormSource, /Popconfirm/);
-  assert.doesNotMatch(scriptFormSource, /title="确认删除这个 Module？"/);
+  assert.doesNotMatch(scriptFormSource, /title="Confirm to delete this module\?"/);
   assert.match(scriptFormSource, /const handleRemoveModule = \(targetKey: EditableTabTargetKey\) =>/);
   assert.match(scriptFormSource, /remove\(targetField\.name\)/);
   assert.match(scriptFormSource, /await onValidate/);
@@ -333,6 +339,6 @@ test("processor api normalizes script responses at runtime", () => {
         updated_at: 11,
         activated_at: null,
       }),
-    /Processor 接口响应无效：status 不是支持的值/,
+    /Invalid Processor API response: status is not a supported value/,
   );
 });

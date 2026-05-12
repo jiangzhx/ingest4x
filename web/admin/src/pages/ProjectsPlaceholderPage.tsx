@@ -7,7 +7,8 @@ export function ProjectsPlaceholderPage() {
         Projects
       </Typography.Title>
       <Typography.Paragraph style={{ marginBottom: 0 }}>
-        项目管理页将在后续任务中实现，这里先保留最小占位。
+        Project management page is planned for a follow-up task; keep a minimal
+        placeholder for now.
       </Typography.Paragraph>
     </Space>
   );

@@ -70,7 +70,7 @@ test("admin shell and router expose the service nodes page", () => {
   assert.match(routerSource, /path: "\/service-nodes"/);
   assert.match(routerSource, /component: ServiceNodesPage/);
   assert.match(shellSource, /key: "\/service-nodes"/);
-  assert.match(shellSource, /节点管理/);
+  assert.match(shellSource, /Service Nodes/);
   assert.match(homeSource, /to="\/service-nodes"/);
 });
 
@@ -78,13 +78,13 @@ test("service nodes page uses query data with manual refresh", () => {
   assert.match(pageSource, /useServiceNodesQuery\(\)/);
   assert.match(pageSource, /<ServiceNodesTable/);
   assert.match(pageSource, /serviceNodesQuery\.refetch\(\)/);
-  assert.match(pageSource, /节点管理/);
+  assert.match(pageSource, /Service Nodes/);
 });
 
 test("service nodes table shows node identity, addresses, status and heartbeat", () => {
   const nodeIdColumnSource = tableSource.slice(
     tableSource.indexOf('title: "Node ID"'),
-    tableSource.indexOf('title: "状态"'),
+    tableSource.indexOf('title: "Status"'),
   );
 
   assert.match(tableSource, /node_id/);
@@ -133,7 +133,7 @@ test("service nodes api normalizes valid response payloads at runtime", () => {
 test("service nodes api rejects invalid response payloads at runtime", () => {
   assert.throws(
     () => normalizeServiceNodesResponse({ items: [] }),
-    /节点接口响应无效：节点列表不是数组/,
+    /Invalid service node API response: service node list is not an array/,
   );
   assert.throws(
     () =>
@@ -150,6 +150,6 @@ test("service nodes api rejects invalid response payloads at runtime", () => {
         updated_at: 21,
         metadata_json: null,
       }),
-    /节点接口响应无效：status 不是支持的值/,
+    /Invalid service node API response: status is not a supported value/,
   );
 });
