@@ -1,44 +1,44 @@
-# 管理后台和 API
+# Admin Console and API
 
-管理后台运行在 management 端口，默认入口：
+Admin console is served on the management interface:
 
 ```text
 http://127.0.0.1:18090/admin
 ```
 
-管理 API 登录密码来自：
+Admin API password is resolved by:
 
-1. 环境变量 `INGEST4X_ADMIN_PASSWORD`
-2. 配置项 `management.admin_password`
+1. Environment variable `INGEST4X_ADMIN_PASSWORD`
+2. Config `management.admin_password`
 
-环境变量优先级更高。前端登录成功后，会把密码保存在当前浏览器会话中，并在后续 `/api/admin/*` 请求里附带：
+Environment variable takes precedence. After successful login, frontend stores the password in session and sends it on `/api/admin/*` requests as:
 
 ```text
 x-admin-password: <password>
 ```
 
-## API 文档
+## API docs
 
-OpenAPI JSON：
+OpenAPI JSON:
 
 ```text
 http://127.0.0.1:18090/api-docs/openapi.json
 ```
 
-Swagger UI：
+Swagger UI:
 
 ```text
 http://127.0.0.1:18090/swagger-ui/
 ```
 
-OpenAPI 和 Swagger UI 不需要管理员密码；`/api/admin/*` 业务接口需要 `x-admin-password`。
+OpenAPI and Swagger UI are publicly accessible; protected business APIs under `/api/admin/*` require `x-admin-password`.
 
-## 管理资源
+## Admin resources
 
-| 资源 | API |
+| Resource | API |
 | --- | --- |
-| 登录 | `POST /api/admin/auth/login` |
-| 项目 | `/api/admin/projects` |
+| Login | `POST /api/admin/auth/login` |
+| Projects | `/api/admin/projects` |
 | Rule sets | `/api/admin/rule-sets` |
 | Project rule binding | `/api/admin/projects/{project_id}/rule-sets` |
 | Processor scripts | `/api/admin/processor-scripts` |
@@ -48,25 +48,23 @@ OpenAPI 和 Swagger UI 不需要管理员密码；`/api/admin/*` 业务接口需
 | Event sinks | `/api/admin/event-sinks` |
 | Service nodes | `/api/admin/service-nodes` |
 
-内置 sink type：
+Sink details are defined in [Sink parameters](sink-parameters.md), including full field lists for both `delivery target` and `event sink`.
 
-[sink 参数说明](sink-parameters.md) 里有每种类型的完整 `delivery target` 和 `event sink` 字段清单。
-
-| Sink type | 用途 | 配置 |
+| Sink type | Purpose | Configuration |
 | --- | --- | --- |
-| `blackhole` | 丢弃事件，用于生产诊断、客户集群压测和下游故障模拟 | `delivery target`: `{}`，`event sink`：`mode` / `delay_ms` |
-| `kafka` | 投递到 Kafka topic | `delivery target`: `bootstrap_servers` 等连接参数，`event sink`: `topic` |
-| `stdout` | 输出到标准输出 | `delivery target` 和 `event sink` 都不需要额外参数 |
+| `blackhole` | Drop events, used for diagnostics, load testing, and downstream fault simulation | `delivery target`: `{}`, `event sink`: `mode` / `delay_ms` |
+| `kafka` | Deliver to a Kafka topic | `delivery target`: `bootstrap_servers` and related connection options, `event sink`: `topic` |
+| `stdout` | Print to stdout | No additional config for both `delivery target` and `event sink` |
 
-默认 seed 会创建 `loadtest_app`、`igx_loadtest_token`、`loadtest_blackhole`、`loadtest_events` 和 `loadtest_blackhole_processor`，用于 e2e 压测。`igx_loadtest_token` 是真实 ingest token；生产或客户集群如果不希望保留默认压测入口，应禁用 `loadtest_app` 或替换 token。
+Default seed creates `loadtest_app`, `igx_loadtest_token`, `loadtest_blackhole`, `loadtest_events`, and `loadtest_blackhole_processor` for e2e testing. `igx_loadtest_token` is a real writable ingest token. Disable `loadtest_app` or replace the token if a public/customer environment cannot keep load-test ingress open.
 
-## Metrics 和健康检查
+## Metrics and health
 
-管理面提供：
+Admin exposes:
 
 ```text
 http://127.0.0.1:18090/healthz
 http://127.0.0.1:18090/metrics
 ```
 
-`/healthz` 会检查 WAL 是否 ready。`/metrics` 输出 Prometheus metrics，包括 WAL 状态、replay lag 和 ingest event 统计。
+`/healthz` reports WAL readiness. `/metrics` exposes Prometheus metrics for WAL state, replay lag, and ingest event counts.

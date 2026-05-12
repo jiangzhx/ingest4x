@@ -1,57 +1,57 @@
-# 项目结构
+# Project structure
 
-这页说明仓库内主要目录和配置文件的职责。README 只保留快速启动和核心运行模型；需要定位模块时看这里。
+This file maps important repository directories and configuration boundaries.
 
-## 核心目录
+## Core
 
-| 路径 | 说明 |
+| Path | Purpose |
 | --- | --- |
-| `src/ingest` | `/ingest` 接入、payload 解析、项目鉴权和 WAL append |
-| `src/wal` | WAL 写入、读取、segment、checkpoint 和 replay |
-| `src/rules` | rules 类型、loader、Rhai validation DSL |
-| `src/rhai_ctx` | 暴露给 Rhai processor/rules 的宿主 API |
-| `src/repositories` | SeaORM-backed 项目、规则、processor、sink、service node 仓储 |
-| `src/entities` | SeaORM 实体定义 |
-| `src/services` | 跨仓储的运行时服务状态 |
-| `src/admin` | 管理 API、OpenAPI 和管理面路由 |
-| `src/sinks` | sink provider、delivery target 和运行时投递 |
-| `src/db` | 数据库连接、migration、seed 和 schema 初始化 |
-| `src/utils` | 通用辅助函数 |
-| `src/routes.rs` | 接入面和管理面路由装配 |
-| `src/server.rs` | 服务启动、端口绑定、状态初始化和后台任务 |
+| `src/ingest` | `/ingest` ingress, payload parsing, token auth, and WAL append |
+| `src/wal` | WAL write/read, segmenting, checkpoint, and replay |
+| `src/rules` | Rule types, loader, Rhai validation DSL |
+| `src/rhai_ctx` | Host API exposed to Rhai processors/rules |
+| `src/repositories` | SeaORM-backed repositories for projects, rules, processors, sinks, and service nodes |
+| `src/entities` | SeaORM entity definitions |
+| `src/services` | Runtime service state shared across repositories |
+| `src/admin` | Admin APIs, OpenAPI, and admin routes |
+| `src/sinks` | Sink providers, delivery targets, and runtime deliveries |
+| `src/db` | DB setup, migrations, seed, and schema initialization |
+| `src/utils` | Shared utilities |
+| `src/routes.rs` | Routing for ingress and admin surfaces |
+| `src/server.rs` | Server boot, bind addresses, state initialization, background tasks |
 
-## 前端
+## Frontend
 
-| 路径 | 说明 |
+| Path | Purpose |
 | --- | --- |
-| `web/admin` | React 管理后台源码 |
-| `web/admin/dist` | 构建后的管理后台静态产物，生产服务会直接托管 |
+| `web/admin` | React admin source code |
+| `web/admin/dist` | Built admin static assets served by the binary |
 
-## 测试和规则样例
+## Tests and rule samples
 
-| 路径 | 说明 |
+| Path | Purpose |
 | --- | --- |
-| `tests/jlt/core` | 默认规则的 JLT 用例 |
-| `tests/ingest` | `/ingest` 接入、规则兼容和 seed 相关测试 |
-| `tests/wal_tests` | WAL append、replay、checkpoint 和故障处理测试 |
-| `e2e/load` | 基于 k6 + `blackhole` sink 的 HTTP e2e 压测套件 |
+| `tests/jlt/core` | Default JLT rule cases |
+| `tests/ingest` | `/ingest`, compatibility, and seed-related tests |
+| `tests/wal_tests` | WAL append, replay, checkpoint, and failure-handling tests |
+| `e2e/load` | k6 + `blackhole` sink HTTP e2e load test suite |
 
-## 配置
+## Configuration
 
-| 路径 | 说明 |
+| Path | Purpose |
 | --- | --- |
-| `ingest4x.toml` | 本地默认配置，默认使用 SQLite 和 `./wal` |
-| `ingest4x.example.toml` | MySQL + Kafka 示例配置 |
+| `ingest4x.toml` | Default local config using SQLite and `./wal` |
+| `ingest4x.example.toml` | MySQL + Kafka example config |
 
-## 文档
+## Docs
 
-| 路径 | 说明 |
+| Path | Purpose |
 | --- | --- |
-| `docs/index.md` | GitHub Pages 文档首页 |
-| `docs/wal.md` | WAL、checkpoint 和 replay |
-| `docs/event-processing/index.md` | 事件处理总览 |
-| `docs/event-processing/event-validation.md` | 事件校验 |
-| `docs/event-processing/event-transformation.md` | 事件加工和投递 |
-| `docs/admin-api.md` | 管理后台和 API |
-| `docs/release-versioning.md` | 发布和版本 |
-| `docs/project-structure.md` | 项目结构 |
+| `docs/index.md` | GitHub Pages documentation home |
+| `docs/wal.md` | WAL, checkpoint, and replay |
+| `docs/event-processing/index.md` | Event processing overview |
+| `docs/event-processing/event-validation.md` | Validation rule DSL |
+| `docs/event-processing/event-transformation.md` | Transformation and delivery |
+| `docs/admin-api.md` | Admin console and API |
+| `docs/release-versioning.md` | Release and release process |
+| `docs/project-structure.md` | Project directory layout |

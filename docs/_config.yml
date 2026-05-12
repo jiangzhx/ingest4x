@@ -1,5 +1,5 @@
 title: ingest4x
-description: 可配置、可观测、可恢复的事件接入工具
+description: Configurable, observable, and resilient event ingestion service
 theme: jekyll-theme-cayman
 markdown: kramdown
 

@@ -1,8 +1,8 @@
-# 发布和版本
+# Release and Versioning
 
-版本号在 `Cargo.toml`。
+Version is stored in `Cargo.toml`.
 
-## 升级版本
+## Bump version
 
 ```bash
 ./scripts/bump_version.sh patch
@@ -11,9 +11,9 @@
 ./scripts/bump_version.sh 0.1.0
 ```
 
-脚本会要求工作区干净，然后更新 `Cargo.toml` 中的 `ingest4x` 版本；如果存在 `Cargo.lock`，也会同步更新。
+The script requires a clean workspace, updates the `ingest4x` version in `Cargo.toml`, and updates `Cargo.lock` when present.
 
-升级前会自动执行：
+Validation before bump:
 
 ```bash
 cargo fmt --all -- --check
@@ -21,32 +21,24 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
-检查通过后，脚本会创建版本提交并 push 当前分支。
+After checks pass, the script creates a version commit and pushes the current branch.
 
-可选参数以脚本自身帮助为准：
+See `./scripts/bump_version.sh --help` for optional flags.
 
-```bash
-./scripts/bump_version.sh --help
-```
-
-## 创建 Release
+## Create release
 
 ```bash
 ./scripts/release.sh
 ```
 
-发布脚本会：
+Release script steps:
 
-1. 检查工作区干净
-2. 读取 `Cargo.toml` 当前版本并生成 `vX.Y.Z` tag
-3. 检查本地和远端是否已有同名 tag
-4. push 当前分支和 tag
-5. 使用 GitHub CLI 创建 GitHub Release
+1. Ensure workspace is clean.
+2. Read version from `Cargo.toml` and generate `vX.Y.Z` tag.
+3. Check that no same tag exists locally or remotely.
+4. Push branch and tag.
+5. Create GitHub Release via GitHub CLI.
 
-真正的二进制产物由 GitHub Actions 构建并上传到 release。本地脚本只负责 tag 和 release 创建。
+Binary artifacts are built by GitHub Actions and attached to the release; this script handles tagging and release creation.
 
-可选参数以脚本自身帮助为准：
-
-```bash
-./scripts/release.sh --help
-```
+See `./scripts/release.sh --help` for optional flags.

@@ -1,21 +1,21 @@
-# Sink 参数说明
+# Sink parameters
 
-本页汇总各类 `sink type` 的 `delivery target`（连接配置）与 `event sink`（投递配置）参数。
+This page summarizes `sink type` configuration for both `delivery target` (connection settings) and `event sink` (delivery settings).
 
-所有配置项都按 JSON 对象提交，不支持 JSON 注释；`api/admin` 与前端都会做 JSON 解析与字段校验。
+All values are JSON objects, JSON comments are not supported. Both API and frontend validate and parse JSON strictly.
 
-## 通用约定
+## Common rules
 
-- `delivery target` 配置写到管理后台的 `Delivery Target` 页面。
-- `event sink` 配置写到管理后台的 `Event Sink` 页面。
-- 配置必须是合法 JSON 对象。
-- 未声明字段一般会被拒绝（后端使用严格解析）。
+- `delivery target` is configured in the admin `Delivery Target` page.
+- `event sink` is configured in the admin `Event Sink` page.
+- Configuration must be valid JSON objects.
+- Unknown fields are typically rejected by backend strict parser/validator.
 
 ## blackhole
 
-用途：丢弃事件，用于压测、故障注入、容量验证。
+Purpose: discard events for load tests, fault injection, and capacity validation.
 
-### Delivery target (`target_type = "blackhole"`)
+### Delivery target (`target_type = "blackhole")
 
 ```json
 {}
@@ -30,24 +30,24 @@
 }
 ```
 
-`blackhole` 的 `destination_json` 支持字段：
+`blackhole` `destination_json` supports:
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `mode` | string | 否 | `ok` | 取值 `ok` / `slow` / `fail` |
-| `delay_ms` | number | 否 | `0` | 投递前延迟（毫秒） |
+| `mode` | string | No | `ok` | One of `ok`, `slow`, or `fail` |
+| `delay_ms` | number | No | `0` | Delay in milliseconds before successful response |
 
-示例：
+Examples:
 
-- 成功投递：`{"mode":"ok"}`
-- 模拟慢下游：`{"mode":"slow","delay_ms":20}`
-- 模拟失败下游：`{"mode":"fail"}`
+- Successful delivery: `{"mode":"ok"}`
+- Slow downstream: `{"mode":"slow","delay_ms":20}`
+- Failed downstream: `{"mode":"fail"}`
 
 ## kafka
 
-用途：将事件发送到 Kafka topic。
+Purpose: deliver events to a Kafka topic.
 
-### Delivery target (`target_type = "kafka"`)
+### Delivery target (`target_type = "kafka")
 
 ```json
 {
@@ -60,16 +60,16 @@
 }
 ```
 
-`kafka` 的 `config_json` 支持字段：
+Supported `config_json` fields:
 
-| 字段 | 类型 | 必填 | 默认值 | 说明 |
+| Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `bootstrap_servers` | string | 是 | 无 | Kafka broker 列表 |
-| `delivery_timeout_ms` | string | 否 | `"3000"` | Kafka 生产者写入超时 |
-| `queue_buffering_max_ms` | string | 否 | `"0"` | `queue.buffering.max.ms` |
-| `batch_num_messages` | string | 否 | `"100"` | `batch.num.messages` |
-| `queue_buffering_max_messages` | string | 否 | `"300"` | `queue.buffering.max.messages` |
-| `linger_ms` | string | 否 | `"100"` | `linger.ms` |
+| `bootstrap_servers` | string | Yes | none | Kafka broker list |
+| `delivery_timeout_ms` | string | No | `"3000"` | Producer write timeout |
+| `queue_buffering_max_ms` | string | No | `"0"` | `queue.buffering.max.ms` |
+| `batch_num_messages` | string | No | `"100"` | `batch.num.messages` |
+| `queue_buffering_max_messages` | string | No | `"300"` | `queue.buffering.max.messages` |
+| `linger_ms` | string | No | `"100"` | `linger.ms` |
 
 ### Event sink `destination_json`
 
@@ -79,15 +79,15 @@
 }
 ```
 
-`kafka` 的 `destination_json` 支持字段：
+Supported `destination_json` fields:
 
-| 字段 | 类型 | 必填 | 说明 |
+| Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `topic` | string | 是 | 目标 topic |
+| `topic` | string | Yes | Kafka topic to send events to |
 
 ## stdout
 
-用途：将事件打印到服务标准输出，适合开发、调试。
+Purpose: write events to service stdout for development and debugging.
 
 ### Delivery target / Event sink
 
@@ -95,5 +95,4 @@
 {}
 ```
 
-`stdout` 的 `delivery target` 和 `destination_json` 都不需要额外参数。
-
+`stdout` requires no extra parameters for both `delivery target` and `destination_json`.

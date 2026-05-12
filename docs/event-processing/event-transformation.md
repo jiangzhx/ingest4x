@@ -1,8 +1,8 @@
-# 事件加工和投递
+# Transform and delivery
 
-事件加工脚本负责处理 replay 出来的 WAL record：调用项目校验规则、按需要改写或补充事件内容，并决定投递到哪些 event sinks。底层使用 Rhai。
+Transformation scripts process WAL records during replay: they run project validation rules, optionally mutate/augment events, and decide which event sinks receive events. Implementation is Rhai.
 
-入口固定为：
+Entry point is fixed:
 
 ```rhai
 fn process(event, request) {
@@ -15,85 +15,86 @@ fn process(event, request) {
 }
 ```
 
-Processor 接收两个参数：
+Processor receives two parameters:
 
-| 参数 | 说明 |
+| Parameter | Description |
 | --- | --- |
-| `event` | 从 WAL record body 解析出来的 JSON 事件，可在脚本里读取和修改 |
-| `request` | 请求上下文，来自 WAL record 保存的 HTTP 元数据 |
+| `event` | Event JSON parsed from WAL record body, mutable in script |
+| `request` | Request context from WAL metadata and ingress HTTP request |
 
-Processor 的输出不是函数返回值，而是通过 `emit(target, event)` 记录出来的 deliveries。
+Processor output is recorded through `emit(target, event)`; `process(...)` return value is not used.
 
-## 加工脚本 API
+## Transform script API
 
-| API | 说明 |
+| API | Description |
 | --- | --- |
-| `validate(event)` | 执行当前项目绑定的 rules，返回 `{ ok, code, message, path }` 这类 map |
-| `emit(target, event)` | 把事件加入指定 sink 的 delivery 列表 |
-| `epoch_ms()` | 当前服务时间戳，毫秒 |
-| `host_ip()` | 当前服务节点 IP |
-| `ingest4x_version()` | 当前 ingest4x 版本 |
+| `validate(event)` | Run current project rules; returns a map like `{ ok, code, message, path }` |
+| `emit(target, event)` | Add delivery record to the chosen sink |
+| `epoch_ms()` | Current service timestamp in milliseconds |
+| `host_ip()` | Current service node IP |
+| `ingest4x_version()` | Current ingest4x version |
 
-## Sink 常量
+## Sink constants
 
-Processor 里应该使用 sink 常量，而不是字符串 target：
+Processors should use sink constants, not string targets:
 
 ```rhai
 emit(SINK_EVENTS, event);
 emit(SINK_EVENTS_ERROR, event);
 ```
 
-常量由已启用 event sink 的 `sink_id` 生成：
+Constants are generated from enabled event sink `sink_id`:
 
-| sink_id | Rhai 常量 |
+| `sink_id` | Rhai constant |
 | --- | --- |
 | `events` | `SINK_EVENTS` |
 | `events_error` | `SINK_EVENTS_ERROR` |
 | `kafka-mutated` | `SINK_KAFKA_MUTATED` |
 
-管理 API 保存 processor 脚本时会 lint `emit(...)` 的第一个参数。字符串 target 或未知常量会被拒绝。
+Admin API validates scripts with linting for `emit(...)`: the first argument must be a known sink constant; string targets or unknown constants are rejected.
 
-## Request 上下文
+## Request context
 
-`request` 暴露以下方法：
+`request` exposes:
 
-| API | 说明 |
+| API | Description |
 | --- | --- |
-| `request.ip()` | 请求远端地址；没有时返回 unit |
+| `request.ip()` | Remote request address; returns unit when unavailable |
 | `request.method()` | HTTP method |
-| `request.path()` | 请求 path |
-| `request.header(name)` | 读取 header，名称会按小写匹配 |
+| `request.path()` | Request path |
+| `request.header(name)` | Read header by name (case-insensitive by lower-casing) |
 | `request.request_id()` | WAL record ID |
-| `request.received_at_ms()` | 接入层收到事件时的毫秒时间戳 |
+| `request.received_at_ms()` | Ingress receive timestamp (ms) |
 
-`authorization` 和 `x-ingest-token` 不会进入 WAL record headers，所以 processor 也读不到这两个认证头。
+`authorization` and `x-ingest-token` are filtered from WAL headers, so processor cannot read them.
 
-## 模块和绑定
+## Modules and bindings
 
-Processor 脚本存在数据库里，支持：
+Processor scripts are persisted in DB and support:
 
-- 默认 processor。
-- 按项目绑定 processor。
-- processor module，供入口脚本 import 使用。
+- Default processor.
+- Project-specific processor binding.
+- Processor modules imported by entry scripts.
 
-运行时会按 `database.refresh_interval_secs` 周期刷新 processor snapshot；管理 API 的写操作也会尝试立即刷新。replay 处理 WAL record 时使用刷新后的当前配置，不使用 record 写入 WAL 时的旧配置。
+Runtime refreshes processor snapshot every `database.refresh_interval_secs`; admin write operations also attempt immediate refresh. Replay always uses current DB config, not the config captured when each record was appended to WAL.
 
-## 失败语义
+## Failure semantics
 
-| 失败点 | 行为 |
+| Failure point | Behavior |
 | --- | --- |
-| Rules 编译失败 | 管理写入或 replay 编译项目 rules 时失败 |
-| Rules 执行失败 | processor 的 `validate(event)` 返回失败结果，默认 processor 会 emit 到 `SINK_EVENTS_ERROR` |
-| Processor 编译失败 | 管理写入或 runtime 刷新失败 |
-| Processor 执行异常 | WAL replay 将该 record 视为 processor 失败并进入 quarantine |
-| `emit` 目标不存在 | WAL replay 将该 record 视为 delivery plan 错误并进入 quarantine |
-| Sink 投递失败 | 不进入 quarantine；对应 sink checkpoint 不推进，后续重试 |
+| Rules compile failure | Admin write or runtime replay compile of project rules fails |
+| Rule execution failure | `validate(event)` returns failed result; default processor emits to `SINK_EVENTS_ERROR` |
+| Processor compile failure | Admin write or runtime refresh fails |
+| Processor runtime error | Replay treats the record as processor failure and moves it to quarantine |
+| `emit` target missing | Replay treats as delivery plan error and moves to quarantine |
+| Sink delivery failure | Not quarantined; target sink checkpoint does not advance and will retry later |
 
-`blackhole` sink 是一个生产可用的诊断 sink。`mode = "ok"` 会丢弃事件并推进 checkpoint；`mode = "slow"` 会按 `delay_ms` 延迟后成功；`mode = "fail"` 会返回投递失败，用来验证失败 sink 不推进 checkpoint 和 WAL 积压行为。
+`blackhole` is production-grade diagnostic sink:
+`mode = "ok"` drops events and advances checkpoint; `mode = "slow"` succeeds after `delay_ms` delay; `mode = "fail"` returns delivery failure to verify that failed sinks do not advance checkpoints and cause WAL backlog.
 
-## 默认脚本
+## Default script
 
-默认 seed 会创建一套 rules 和 processor。默认 processor 的策略很简单：
+Default seed creates a baseline rule and processor with simple logic:
 
 ```rhai
 fn process(event, request) {
@@ -106,4 +107,4 @@ fn process(event, request) {
 }
 ```
 
-因此，rules 决定事件是否合法；processor 决定事件如何加工，以及加工后投递到哪个 sink。
+In short, rules decide whether an event is valid; processor decides how to transform and where to deliver it.

@@ -1,34 +1,34 @@
-# 事件处理
+# Event processing
 
-ingest4x 的事件处理分成两个业务阶段：事件校验和事件加工投递。它们底层都使用 Rhai 脚本实现，但文档按业务功能组织：
+`ingest4x` uses two event-processing stages, both implemented in Rhai:
 
-| 用途 | 入口函数 | 执行阶段 | 主要职责 |
+| Purpose | Entry function | Stage | Main responsibility |
 | --- | --- | --- | --- |
-| [事件校验](event-validation.md) | `fn validate(event)` | WAL replay 时，由事件加工脚本调用 `validate(event)` 触发 | 校验事件字段是否符合项目规则 |
-| [事件加工和投递](event-transformation.md) | `fn process(event, request)` | WAL replay 时处理每条 WAL record | 调用校验规则、改写或补充事件、决定投递到哪些 event sinks |
+| [Validation](event-validation.md) | `fn validate(event)` | WAL replay, called by processor via `validate(event)` | Validate whether event fields satisfy project rules |
+| [Transform and delivery](event-transformation.md) | `fn process(event, request)` | WAL replay, per WAL record | Run validation rules, mutate/extend event, decide target event sinks |
 
-两者都不在 `/ingest` append 请求线程里执行业务逻辑。`/ingest` 只做 token 鉴权、payload 检查和 WAL append；事件处理脚本都在后台 replay 阶段运行。
+Neither stage runs on the ingress `/ingest` request thread. `/ingest` only performs token auth, payload checks, and WAL append; actual processing runs in background replay.
 
-## 整体关系
+## Overall flow
 
 ```text
 +--------------------------------------------------------------------------------+
 | Replay worker                                                                  |
 |                                                                                |
 | +------------+    +--------------------+    +--------------------------+        |
-| | WAL record | -> | 事件校验规则       | -> | 事件加工脚本             |        |
+| | WAL record | -> | Validation rules    | -> | Transformation processor  |        |
 | +------------+    +--------------------+    +--------------------------+        |
 |                                                |                               |
 |                                                v                               |
 |                                      +----------------------+                  |
-|                                      | 待投递事件           |                  |
+|                                      | Delivery-ready event  |                  |
 |                                      +----------------------+                  |
 +--------------------------------------------------------------------------------+
 ```
 
-replay 每处理一条 WAL record，会先按 `project_id` 取当前项目绑定的事件校验规则，再取当前项目绑定的事件加工脚本。如果项目没有专属加工脚本，就使用默认加工脚本。
+For each WAL record, replay first loads the current validation rule bound to the project, then the current processor for that project. If no custom processor exists, default processor is used.
 
-## 文档入口
+## Docs
 
-- [事件校验](event-validation.md)：字段路径、presence/type、按类型约束、结果判定和 rule set 存储模型。
-- [事件加工和投递](event-transformation.md)：`process(event, request)`、`validate(event)`、`emit(...)`、sink 常量、request 上下文、模块和绑定。
+- [Validation](event-validation.md): field paths, presence/type constraints, result semantics, and rule-set storage model.
+- [Transform and delivery](event-transformation.md): `process(event, request)`, `validate(event)`, `emit(...)`, sink constants, request context, module/import usage, and bindings.

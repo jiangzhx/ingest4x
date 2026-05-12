@@ -1,10 +1,10 @@
 # WAL
 
-WAL 是 ingest4x 的接入持久化层。`/ingest` 收到事件后，不会在请求线程里执行规则、processor 或下游 sink 投递，而是先把原始事件写入本地 WAL；后台 replay 再从 WAL 读取事件，执行业务处理并投递到 event sinks。
+WAL is ingest4x’s persistent ingress layer. After `/ingest` receives an event, it does not run rules, processor, or downstream sink delivery in the request thread. It first writes the raw event to local WAL, then background replay reads records and performs business processing and sink delivery.
 
-这让接入 ACK 和下游投递解耦：下游 Kafka、stdout 或 processor 暂时失败时，只要事件已经进入 WAL，接入面仍然可以先返回成功，后续由 replay 继续重试或隔离坏记录。
+This decouples ingress ACK from downstream delivery. If Kafka/stdout/processor are temporarily failing, `/ingest` can still return success as long as the event is durably written to WAL; replay later retries or quarantines bad records.
 
-## 端到端链路
+## End-to-end path
 
 ```text
 client
@@ -25,16 +25,16 @@ background replay
   -> cleanup covered WAL segments
 ```
 
-关键点：
+Key points:
 
-- `/ingest` 只处理单事件 JSON object，不支持批量数组。
-- WAL record 保存原始 payload 和必要请求元数据。
-- 业务字段归一化、规则校验、错误标记和分流都发生在 replay 阶段，不发生在 append 路径。
-- 每个 event sink 有独立 checkpoint，一个 sink 卡住不会直接把其他 sink 的 checkpoint 回滚。
+- `/ingest` only accepts a single JSON object, not batch arrays.
+- WAL record stores raw payload plus request metadata.
+- Field normalization, validation, error marking, and routing happen in replay, not append path.
+- Each event sink has an independent checkpoint; one sink stall does not roll back another sink checkpoint.
 
-## ACK 语义
+## ACK semantics
 
-默认配置 `wal.no_sync = false`。此时 `/ingest` 返回 `200` 表示 WAL append 已经完成，并且写入路径会等待 segment `sync_data()` 成功后才通知请求。
+Default is `wal.no_sync = false`. In this mode, `/ingest` returns `200` only after WAL append is complete and the write path waits for segment `sync_data()` success.
 
 ```toml
 [wal]
@@ -43,40 +43,40 @@ flush_max_interval = "10ms"
 flush_max_records = 1000
 ```
 
-`flush_max_interval` 和 `flush_max_records` 控制 group commit：多个请求可以在很短时间窗口内一起落盘，以减少 sync 次数。对单个请求来说，只要 `no_sync = false`，请求会等待自己所在的 flush 完成后才返回成功。
+`flush_max_interval` and `flush_max_records` control group commit. Multiple requests may flush together in a short window, reducing sync frequency. With `no_sync = false`, each request waits for its own flush before success.
 
-如果设置 `wal.no_sync = true`，append 会在写入内存 buffer 后立即返回，后台 flush 线程稍后落盘。这会降低延迟，但进程崩溃时最近一批还没有 flush 的事件可能丢失。这个模式不应该被理解为强持久 ACK。
+If `wal.no_sync = true`, append returns after writing to memory buffer and flush happens later in background. This lowers latency, but if process crashes before flush, the most recent unflushed batch may be lost. This mode is not a strong durability ACK.
 
-## WAL Record
+## WAL record
 
-当前 WAL record 的核心字段：
+Core fields:
 
-| 字段 | 说明 |
+| Field | Meaning |
 | --- | --- |
-| `record_id` | 接收时生成的记录 ID，格式类似 `wal-<received_at_ms>-<sequence>` |
-| `lsn` | WAL append 时分配的递增序号 |
-| `node_id` | 当前服务节点 ID，持久化在 WAL 目录 |
-| `project_id` | ingest token 认证出来的项目 ID |
-| `received_at_ms` | 接入层收到事件时的时间戳 |
-| `method` / `path` / `query` | 原始 HTTP 请求信息 |
-| `remote_addr` | 远端地址，取决于 Actix 连接信息 |
-| `headers` | 过滤敏感认证头后的请求 headers |
-| `body` | 原始事件 JSON bytes |
+| `record_id` | Record ID generated at receive time, like `wal-<received_at_ms>-<sequence>` |
+| `lsn` | Increasing LSN assigned during append |
+| `node_id` | Service node ID persisted in WAL directory |
+| `project_id` | Project ID resolved by ingest token |
+| `received_at_ms` | Ingress receive timestamp |
+| `method` / `path` / `query` | Raw HTTP request info |
+| `remote_addr` | Remote socket address |
+| `headers` | Request headers excluding filtered sensitive auth fields |
+| `body` | Raw event JSON bytes |
 
-接入 token 不会写入 WAL headers。`authorization` 和 `x-ingest-token` 会在生成 WAL record headers 时被过滤。
+Ingest token is not written to WAL headers. `authorization` and `x-ingest-token` are filtered out when generating headers.
 
-`received_at_ms` 会传给 processor 的 `request` 上下文。它代表接入接收时间，不是 replay 时间，也不是客户端事件发生时间。
+`received_at_ms` is passed into processor `request` context. It is ingest receive time, not replay time or client event timestamp.
 
-## 文件和目录
+## Files and directories
 
-默认 WAL 目录来自配置：
+Default WAL directory from config:
 
 ```toml
 [wal]
 dir = "./wal"
 ```
 
-目录内主要文件：
+Main files under directory:
 
 ```text
 wal/
@@ -89,114 +89,108 @@ wal/
     events_error.json
 ```
 
-说明：
+Notes:
 
-- `node_id`：服务节点 ID。首次启动会创建；如果配置显式指定的 node ID 和已持久化的值不一致，启动会失败。
-- `wal.lock`：目录锁，防止两个进程同时使用同一个 WAL 目录。
-- `*.wal`：分段 WAL 文件。每个 segment 有固定 header，后面是连续 record frame。
-- `checkpoints/*.json`：每个 event sink 独立的 replay checkpoint。
+- `node_id`: service node ID. Created on first start; startup fails if configured explicit node ID differs from persisted value.
+- `wal.lock`: directory lock preventing concurrent processes on same WAL.
+- `*.wal`: segmented WAL files. Each segment has fixed header then consecutive record frames.
+- `checkpoints/*.json`: per-event-sink replay checkpoint.
 
-WAL record 在 segment 内是二进制 frame，不是 JSONL。frame 包含 magic、version、payload length、CRC 等元数据；payload 使用当前 Rust 结构序列化。排查时不要把 `.wal` 文件当文本日志直接解析。
+WAL records inside `.wal` are binary frames (not JSONL). Frames include magic/version/payload length/CRC metadata. Payload is Rust-serialized. Do not parse `.wal` as plain text logs when troubleshooting.
 
-## 写入和分段
+## Write and segmenting
 
-WAL 从 segment `1` 开始写入。每个 record append 时会分配：
+WAL starts at segment `1`. Each append allocates:
 
-- `lsn`：全局递增的逻辑序号。
-- `segment`：当前 segment ID。
-- `offset`：record frame 在 segment 内的起始偏移。
+- `lsn`: global monotonically increasing logical sequence number.
+- `segment`: current segment ID.
+- `offset`: starting offset of frame in segment.
 
-当当前 segment 写入下一个 frame 会超过 `wal_segment_max_bytes` 时，writer 会创建新 segment。默认值：
+When the next frame would exceed `wal_segment_max_bytes`, writer creates a new segment. Default:
 
 ```toml
 [wal]
 wal_segment_max_bytes = 134217728
 ```
 
-写入前还会检查可用磁盘空间。如果 `min_free_bytes` 配置非零，且写入后剩余空间会低于阈值，append 会失败，`/ingest` 返回 `503`。
+Before append, available disk space is checked. If `min_free_bytes` is non-zero and post-write free space is below threshold, append fails and `/ingest` returns `503`.
 
 ## Replay
 
-服务启动后会启动 WAL replay loop。每轮 replay 最多读取一批 WAL entry，当前批大小是 `1024`。
+A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default batch size is `1024`).
 
-每条 record 的处理流程：
+Per-record flow:
 
-1. 解析 `body` 为 JSON。
-2. 检查 `project_id` 仍然存在于内存项目 registry。
-3. 编译并加载当前项目绑定的 rules。
-4. 调用 Rhai processor：`process(event, request)`。
-5. 校验 processor emit 的 sink target 是否存在。
-6. 按 sink 投递事件。
-7. 投递成功后推进对应 sink 的 checkpoint。
+1. Parse `body` as JSON.
+2. Verify `project_id` still exists in in-memory registry.
+3. Compile and load current project rules.
+4. Invoke Rhai processor: `process(event, request)`.
+5. Validate processor `emit` sink target exists.
+6. Deliver by sink.
+7. Advance corresponding sink checkpoint after successful delivery.
 
-replay 使用的是当前数据库里的规则、processor 和 sink 配置，而不是事件写入 WAL 时的旧配置。因此修改 processor 或 rules 后，尚未 replay 的历史 WAL record 会按新配置处理。
+Replay uses current DB rules/processor/sink configuration, not the configuration at time of append. So records appended before config changes are processed under new config.
 
 ## Checkpoint
 
-每个 event sink 有独立 checkpoint：
+Each event sink has independent checkpoint:
 
 ```text
 <wal.dir>/checkpoints/<sink>.json
 ```
 
-checkpoint 记录：
+Checkpoint record:
 
-| 字段 | 说明 |
+| Field | Meaning |
 | --- | --- |
-| `node_id` | checkpoint 所属 WAL 节点 |
-| `sink_id` | event sink ID |
-| `checkpoint_lsn` | 已覆盖到的 LSN |
-| `checkpoint_segment_id` | 已覆盖到的 segment |
-| `checkpoint_segment_offset` | 下次继续读取的 offset |
-| `checksum` | checkpoint 内容校验 |
+| `node_id` | WAL node owning this checkpoint |
+| `sink_id` | Event sink ID |
+| `checkpoint_lsn` | Covered LSN |
+| `checkpoint_segment_id` | Segment ID covered |
+| `checkpoint_segment_offset` | Next read offset |
+| `checksum` | Checkpoint integrity checksum |
 
-checkpoint 写入使用临时文件、`sync_data()`、rename 和目录 sync，避免半写入文件被当成有效 checkpoint。
+Checkpoint write path uses temp file, `sync_data()`, rename, and directory sync to avoid partial checkpoint being treated as valid.
 
-当新 sink 没有 checkpoint 时，由该 sink 的 `auto_offset_reset` 决定起点：
+For a new sink with no checkpoint, `auto_offset_reset` defines start point:
 
-| 值 | 行为 |
+| Value | Behavior |
 | --- | --- |
-| `earliest` | 从 WAL 当前最早可读位置开始 replay |
-| `latest` | 直接把 checkpoint 初始化到 WAL 当前尾部，只消费之后的新事件 |
+| `earliest` | Replay from earliest readable WAL offset |
+| `latest` | Initialize checkpoint to current WAL tail and consume only new events |
 
-默认 seed 创建的 `events`、`events_error` 和 `loadtest_events` sink 使用 `latest`。
+Default seed uses `latest` for `events`, `events_error`, and `loadtest_events` sinks.
 
-如果已有 checkpoint 早于 WAL 当前 floor，说明对应旧 segment 已经清理掉；此时也会按该 sink 的 `auto_offset_reset` 重置。
+If existing checkpoint is behind current WAL floor, old segments were likely cleaned up and reset follows this sink’s `auto_offset_reset`.
 
-## 清理策略
+## Retention and cleanup
 
-WAL segment 只有在所有当前启用 sink 的最小 checkpoint 都覆盖它之后，才会被清理。换句话说：
+A WAL segment is cleaned only after all enabled sinks’ minimum checkpoint has passed it. In practice:
 
-- 快 sink 的 checkpoint 可以继续前进。
-- 慢 sink 或失败 sink 会保留它尚未覆盖的 segment。
-- 清理以所有 sink 的最小 checkpoint 为水位线。
+- Fast sink checkpoints keep advancing.
+- Slow/failing sink checkpoints hold back older segments.
+- Global cleanup watermark is minimum checkpoint across all active sinks.
 
-这意味着一个长期失败的 sink 会阻止 WAL 空间释放，需要通过修复 sink、停用 sink，或明确重置 checkpoint 来解除积压。
+A long-failing sink can block WAL space reuse; fix/disable the sink or explicitly reset checkpoint to recover.
 
-## 失败处理
+## Failure handling
 
-replay 会区分可隔离的坏 record 和需要重试的运行时失败。
+Replay distinguishes quarantine-able records from transient runtime retries.
 
-会被隔离的常见情况包括：
+Common quarantine cases:
 
-- WAL body 不是合法 JSON。
-- record 的 `project_id` 当前不存在。
-- processor 运行失败，且错误被归类为可隔离 record。
-- processor emit 了空 target 或未知 sink target。
+- WAL body is not valid JSON.
+- `project_id` no longer exists.
+- Processor runtime failure classified as quarantinable record.
+- Processor emitted to empty target or unknown sink.
 
-隔离时不会写入新的业务 sink，而是把一条结构化记录写入日志 target：
+Quarantine does not write to business sinks. Instead it writes a structured event to `ingest4x::wal::quarantine` target containing record ID, LSN, request metadata, error code/message, and base64 original body. The WAL entry is marked handled and checkpoints may continue advancing.
 
-```text
-ingest4x::wal::quarantine
-```
+Sink delivery failures are not quarantine. If a sink fails, its checkpoint does not advance; replay retries with backoff. Other sinks that already handled the same record can still advance their checkpoints.
 
-quarantine 日志会包含 record ID、LSN、请求信息、错误码、错误消息和 base64 后的原始 body。对应 WAL entry 会被标记为已处理，checkpoint 可以继续前进。
+## Observability
 
-sink 投递失败不是 quarantine。某个 sink 投递失败时，该 sink 的 checkpoint 不会推进，replay loop 会退避后重试。其他 sink 如果已经成功处理同一条 record，可以推进自己的 checkpoint。
-
-## 可观测性
-
-管理面 `/healthz` 会返回 WAL 状态：
+Admin `/healthz` returns WAL status:
 
 ```json
 {
@@ -206,32 +200,32 @@ sink 投递失败不是 quarantine。某个 sink 投递失败时，该 sink 的 
 }
 ```
 
-如果 WAL 磁盘空间不足或状态不可用，`wal_ready` 会变成 `false`，健康检查可能返回 `503`。
+If disk is low or WAL unhealthy, `wal_ready` may be `false`, and health check can return `503`.
 
-管理面 `/metrics` 会暴露 WAL 相关 Prometheus 指标，包括：
+Admin `/metrics` exports WAL-related Prometheus metrics, including:
 
-| 指标 | 说明 |
+| Metric | Meaning |
 | --- | --- |
-| `wal_node_info` | 当前 WAL node 信息 |
-| `wal_enabled` | WAL 是否启用 |
-| `wal_ready` | WAL 是否可写 |
-| `wal_reliable_ack` | 当前是否为可靠 ACK 模式 |
-| `wal_no_sync` | 是否启用 no-sync 模式 |
-| `wal_available_bytes` | WAL 目录可用空间 |
-| `wal_min_free_bytes` | 配置的最小剩余空间 |
-| `wal_active_segment_id` | 当前写入 segment |
-| `wal_active_segment_bytes` | 当前 segment 已写字节数 |
-| `wal_max_lsn` | writer 已分配的最大 LSN |
-| `wal_checkpoint_lsn` | 当前 sink checkpoint 水位 |
-| `wal_replay_lag_lsn` | WAL max LSN 和 checkpoint LSN 的差值 |
-| `wal_append_errors_total` | append 错误计数 |
-| `wal_replay_errors_total` | replay 错误计数 |
+| `wal_node_info` | Current WAL node information |
+| `wal_enabled` | Whether WAL is enabled |
+| `wal_ready` | Whether WAL is writable |
+| `wal_reliable_ack` | Whether reliable ACK mode is enabled |
+| `wal_no_sync` | Whether no-sync mode is enabled |
+| `wal_available_bytes` | WAL directory free bytes |
+| `wal_min_free_bytes` | Configured minimum free bytes |
+| `wal_active_segment_id` | Current active segment |
+| `wal_active_segment_bytes` | Bytes written in active segment |
+| `wal_max_lsn` | Largest writer-allocated LSN |
+| `wal_checkpoint_lsn` | Current minimum sink checkpoint level |
+| `wal_replay_lag_lsn` | Difference between max LSN and checkpoint LSN |
+| `wal_append_errors_total` | WAL append error count |
+| `wal_replay_errors_total` | Replay error count |
 
-排查积压时优先看 `wal_replay_lag_lsn`、sink 错误日志和 checkpoint 文件更新时间。
+When backlog exists, check `wal_replay_lag_lsn`, sink error logs, and checkpoint file update times first.
 
-## 配置项
+## Config options
 
-常用配置：
+Common tuning:
 
 ```toml
 [wal]
@@ -240,44 +234,47 @@ flush_max_interval = "10ms"
 flush_max_records = 1000
 no_sync = false
 wal_segment_max_bytes = 134217728
+min_free_bytes = 0
+```
 
+```
 [wal.checkpoint]
 flush_interval = "1s"
 flush_records = 1000
 flush_bytes = 67108864
 ```
 
-含义：
+Meaning:
 
-| 配置 | 说明 |
+| Config | Meaning |
 | --- | --- |
-| `wal.dir` | WAL 数据目录 |
-| `wal.flush_max_interval` | buffer 最长等待多久必须 flush |
-| `wal.flush_max_records` | buffer 累计多少条必须 flush |
-| `wal.no_sync` | 是否跳过同步落盘等待 |
-| `wal.wal_segment_max_bytes` | 单个 segment 最大字节数 |
-| `wal.min_free_bytes` | WAL 目录最小剩余空间要求，非零时启用 |
-| `wal.checkpoint.flush_interval` | checkpoint 最长 flush 间隔 |
-| `wal.checkpoint.flush_records` | checkpoint 累计多少条后 flush |
-| `wal.checkpoint.flush_bytes` | checkpoint 累计多少 WAL bytes 后 flush |
+| `wal.dir` | WAL data directory |
+| `wal.flush_max_interval` | Max interval before buffer flush |
+| `wal.flush_max_records` | Max records before forced flush |
+| `wal.no_sync` | Whether to skip waiting for sync on write |
+| `wal.wal_segment_max_bytes` | Max segment size |
+| `wal.min_free_bytes` | Minimum free space threshold, if non-zero |
+| `wal.checkpoint.flush_interval` | Max interval between checkpoint flushes |
+| `wal.checkpoint.flush_records` | Max records before checkpoint flush |
+| `wal.checkpoint.flush_bytes` | Max bytes before checkpoint flush |
 
-## 边界
+## Boundary notes
 
-WAL 只保证 ingest4x 接收后的本地持久化和 replay，不等同于完整业务幂等系统。
+WAL guarantees durability after ingress and replay participation only; it is not a complete business idempotency system.
 
-- WAL 不会替客户端生成业务事件 ID。
-- WAL 不会自动去重重复上报。
-- replay 可能因为进程崩溃在 sink 投递和 checkpoint 写入之间重试同一条 record；下游如果需要 exactly-once，需要自己用事件 ID 或业务键做幂等。
-- WAL payload 当前跟 Rust 结构序列化格式绑定，旧版本 WAL 跨 schema 兼容不是长期承诺。开发环境升级结构后如果遇到 decode 问题，可以清理本地 `wal/` 和测试数据库后重启。
-- 多节点部署时，每个节点应使用自己的 WAL 目录和 node ID；不要让多个进程共享同一个 WAL 目录。
+- WAL does not generate business event IDs.
+- WAL does not de-duplicate duplicate submissions.
+- Replay can retry the same record if process crashes between sink delivery and checkpoint write; downstream exactly-once systems should use event IDs or business keys.
+- WAL payload format is currently coupled to Rust serialization; schema compatibility across old WAL versions is not guaranteed long term.
+- In multi-node deployment each node should use unique WAL directory and node ID. Never share one WAL directory across processes.
 
-## 排障入口
+## Troubleshooting
 
-| 现象 | 优先检查 |
+| Symptom | First checks |
 | --- | --- |
-| `/ingest` 返回 `503` | WAL 目录权限、磁盘空间、`wal.lock`、`wal_append_errors_total` |
-| `/healthz` 里 `wal_ready=false` | `wal.min_free_bytes` 和 WAL 目录可用空间 |
-| replay 积压 | `wal_replay_lag_lsn`、sink 连接、sink checkpoint 更新时间 |
-| 某个 sink 不消费历史事件 | 该 sink 的 `auto_offset_reset` 和 checkpoint 是否已初始化到 tail |
-| checkpoint 文件报错 | `node_id` 是否变化、checkpoint checksum 是否损坏 |
-| 日志出现 quarantine | 查 `ingest4x::wal::quarantine` target 的结构化记录和原始 body |
+| `/ingest` returns `503` | WAL directory permissions, disk space, `wal.lock`, `wal_append_errors_total` |
+| `/healthz` shows `wal_ready=false` | `wal.min_free_bytes` and WAL free space |
+| Replay backlog | `wal_replay_lag_lsn`, sink connectivity, checkpoint file update time |
+| Sink does not consume history | Verify sink `auto_offset_reset` and checkpoint moved to tail |
+| Checkpoint file error | Verify `node_id` and checksum integrity |
+| `quarantine` log appears | Inspect `ingest4x::wal::quarantine` records and raw body |

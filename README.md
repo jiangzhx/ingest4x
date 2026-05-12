@@ -1,40 +1,40 @@
 # ingest4x
-
-> **状态说明**
+[![CN doc](https://img.shields.io/badge/文档-中文版-blue.svg)](README.zh-CN.md)
+> **Status note**
 >
-> 当前项目仍处于 `0.0.1` 早期版本，不建议直接用于生产环境。后续版本可能调整 WAL 文件格式和兼容策略，升级前需要关注 release notes 和迁移说明。
+> This project is currently at `0.0.1` and is not yet recommended for direct production use. Future releases may change WAL file format and compatibility behavior. Check release notes and migration guidance before upgrading.
 
-每次做数据类型的产品，几乎每个项目都会重新搭一遍类似的事件接入链路：Nginx 或 OpenResty 先收一层，Flume、Logstash、Filebeat 之类再把日志写到 Kafka 或文件，后面接 Flink、Spark 或自研任务处理，管理、监控、重试和规则配置又散在别的地方。`ingest4x` 想把这些常见但零散的环节收成一个独立工具。
+Each application usually builds its own event-ingest chain: Nginx/OpenResty first, then something like Flume/Logstash/Filebeat into Kafka or files, then Flink/Spark/custom jobs, while management, monitoring, retry, and rule configuration are spread across systems. `ingest4x` is designed to make these pieces an integrated service.
 
-它解决四类问题：
+It mainly addresses four concerns:
 
-- 接得住：接入层只负责鉴权、限流式校验和可靠落盘，避免下游抖动直接影响上报成功率。
-- 管得住：不同项目可以配置自己的事件校验规则、加工逻辑和投递目标。
-- 送得到：事件先进入本地 WAL，再由后台任务重放处理；下游失败时可以重试，已处理位置按 sink 独立记录。
-- 看得见：提供管理界面维护项目、规则、加工脚本和投递配置，并暴露完整 metrics 监控接入、WAL、replay 和投递状态。
+- Ingest resilience: auth, validation, and durable persistence are handled at ingress, so downstream instability does not directly reduce ingress success.
+- Manageability: each project can define its own validation rules, transformation logic, and delivery targets.
+- Delivery reliability: events are persisted to local WAL first, then replayed by background workers; failures are retried and each event sink tracks its own progress.
+- Observability: admin UI manages projects, rules, processors, and sinks, with metrics covering ingest, WAL, replay, and delivery.
 
-因此，`/ingest` 的成功响应表示事件已经被接收并进入后续处理链路；事件是否合法、是否需要补充字段、最终送到哪里，都由项目配置决定。
+Thus a successful `/ingest` response means the event is accepted into ingest pipeline. Whether a single event is valid, needs extra fields, and where it is delivered is determined by project configuration.
 
-## 项目概览
+## Overview
 
-`ingest4x` 的事件处理结果最终会通过 event sink 投递到下游系统。当前内置支持的 sink 数据源：
+`ingest4x` results are delivered to downstream systems through event sinks. Built-in sink types:
 
-| Sink 类型 | 适用场景 | 主要配置 | 状态 |
+| Sink type | Use case | Main config | Status |
 | --- | --- | --- | --- |
-| [`blackhole`](docs/sink-parameters.md#blackhole) | 丢弃事件，适合生产或客户集群压测、容量评估和下游故障模拟。 | delivery target 无配置；event sink 可配置 `mode` 和 `delay_ms`。 | 已支持 |
-| [`kafka`](docs/sink-parameters.md#kafka) | 投递到 Kafka topic，适合接入实时计算、数据平台或后续消费链路。 | delivery target 配置 `bootstrap_servers`；event sink 配置 `topic`。 | 已支持 |
-| [`stdout`](docs/sink-parameters.md#stdout) | 输出到标准输出，适合本地开发、规则调试和默认 seed 验证。 | 无额外配置。 | 已支持 |
+| [`blackhole`](docs/sink-parameters.md#blackhole) | Discard events, suitable for production/customer load testing, capacity validation, and downstream fault simulation. | No `delivery target`; `event sink` supports `mode` and `delay_ms`. | Supported |
+| [`kafka`](docs/sink-parameters.md#kafka) | Deliver to Kafka topics, suitable for streaming jobs and data platform pipelines. | `delivery target`: `bootstrap_servers`; `event sink`: `topic`. | Supported |
+| [`stdout`](docs/sink-parameters.md#stdout) | Print to stdout for local dev, rule debugging, or seed verification. | No extra config. | Supported |
 
-- HTTP 接入：`POST /ingest` 和 `GET /ingest?data=<base64-json>`。
-- 项目鉴权：通过 `x-ingest-token` 或 `Authorization: Bearer <token>` 鉴权，token 来自已启用的项目。
-- WAL：本地分段写入、checkpoint、按 sink replay、失败重试，详见 [WAL](docs/wal.md)。
-- Rules：数据库内置 Rhai validation rule，支持按项目绑定 rule set。
-- Processor：Rhai `process(event, request)`，通过 `validate(event)` 和 `emit(target, event)` 处理事件。
-- Sinks：运行时配置来自数据库，当前内置投递目标见上表。
-- Admin：管理后台、OpenAPI、Swagger UI、Prometheus metrics、service node 注册和心跳。
-- 存储：SQLite / MySQL，启动时自动执行 migration 和默认 seed。
+- Ingress: `POST /ingest`, `GET /ingest?data=<base64-json>`.
+- Project auth: `x-ingest-token` or `Authorization: Bearer <token>`, token belongs to an enabled project.
+- WAL: local segmented write, checkpoint, per-sink replay, and failure retry. See [WAL](docs/wal.md).
+- Rules: Rhai validation rules from DB, bound per project via rule sets.
+- Processor: Rhai `process(event, request)` plus `validate(event)` and `emit(target, event)`.
+- Sinks: runtime config from DB, default supported sinks listed above.
+- Admin: admin console, OpenAPI, Swagger UI, Prometheus metrics, service node registration and heartbeat.
+- Storage: SQLite / MySQL with migration and default seed on startup.
 
-### 运行模型
+### Runtime model
 
 ```text
 +--------+
@@ -85,17 +85,17 @@
 +--------------------------------------------------------------------------------+
 ```
 
-## 快速开始
+## Quick start
 
-### 1. 跑核心测试
+### 1. Run core tests
 
 ```bash
 cargo test --test ingest ingest_jlt_cases_match_rules
 ```
 
-这条测试会用内存 SQLite 初始化默认 seed，再用 `tests/jlt/core/*.jlt` 校验默认规则，适合确认规则、JLT 和 seed 仍然一致。
+This initializes default seed in in-memory SQLite and validates default rules with `tests/jlt/core/*.jlt`.
 
-更完整的本地验证：
+For full local verification:
 
 ```bash
 cargo fmt --all -- --check
@@ -103,19 +103,19 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 ```
 
-HTTP e2e 压测独立放在 `e2e/load/`，默认使用 `blackhole` sink 避开 Kafka 和下游瓶颈：
+HTTP e2e tests are in `e2e/load/`, using `blackhole` sink by default to avoid Kafka/internal downstream bottlenecks:
 
 ```bash
 e2e/load/run.sh
 ```
 
-启动 seed 会内置压测资源：`loadtest_app` project、`igx_loadtest_token` ingest token、`loadtest_blackhole` delivery target、`loadtest_events` event sink 和 `loadtest_blackhole_processor`。如果部署到公网或客户集群，需要把这个默认 token 当作可写入 WAL 的正式 token 管理；不用压测时可以在管理后台禁用 `loadtest_app`。
+Seed setup includes `loadtest_app` project, `igx_loadtest_token` ingest token, `loadtest_blackhole` delivery target, `loadtest_events` event sink, and `loadtest_blackhole_processor`. If running in public or customer environments, manage this token as a normal writable token. Disable `loadtest_app` from admin when not testing.
 
-最近一次本地 `blackhole` 压测摘要：
+Latest local `blackhole` run summary:
 
-- 环境：Apple M5，arm64，10 logical CPUs，24 GiB RAM，macOS 26.3.1 (25D771280a)
-- 启动方式：`cargo run --bin ingest4x -- server -c e2e/load/ingest4x.load.toml`
-- 每档压测时长：1m
+- Environment: Apple M5, arm64, 10 logical CPUs, 24 GiB RAM, macOS 26.3.1 (25D771280a)
+- Start command: `cargo run --bin ingest4x -- server -c e2e/load/ingest4x.load.toml`
+- Duration per target: 1m
 
 | Target rate | Actual rate | WAL received | Failed requests | p95 latency | Replay backlog after drain window | Result |
 | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -123,51 +123,51 @@ e2e/load/run.sh
 | 1000 req/s | 999.835627 req/s | 60000 | 0.0000% | 22.209 ms | 22288 | HTTP pass; replay backlog |
 | 3000 req/s | 2999.213727 req/s | 180001 | 0.0000% | 24.182 ms | 153377 | HTTP pass; replay backlog |
 
-完整压测记录见 [本地 blackhole 压测报告](docs/load-test-local-blackhole.md)。
+Complete local report: [local blackhole load test](docs/load-test-local-blackhole.md).
 
-### 2. 启动服务
+### 2. Start service
 
-仓库根目录的 `ingest4x.toml` 默认使用 SQLite 文件 `db/ingest4x.db` 和 WAL 目录 `./wal`：
+Default root config `ingest4x.toml` uses SQLite at `db/ingest4x.db` and WAL at `./wal`:
 
 ```bash
 cargo run --bin ingest4x
 ```
 
-也可以显式指定配置：
+You can also specify a config file explicitly:
 
 ```bash
 cargo run --bin ingest4x -- server -c ingest4x.toml
 ```
 
-默认端口：
+Default ports:
 
-| 端口 | 用途 |
+| Port | Purpose |
 | --- | --- |
-| `8090` | 接入面，提供 `/`、`/ingest` |
-| `18090` | 管理面，提供 `/healthz`、`/admin`、`/api/admin/*`、`/metrics`、OpenAPI 和 Swagger UI |
+| `8090` | Ingress: `/`, `/ingest` |
+| `18090` | Admin: `/healthz`, `/admin`, `/api/admin/*`, `/metrics`, OpenAPI and Swagger UI |
 
-启动后 seed 会确保存在本地测试项目：
+After startup, the seed ensures a local test project exists:
 
 ```text
 project: test_app
 ingest token: igx_local_test_token
 ```
 
-管理后台入口：
+Admin URL:
 
 ```text
 http://localhost:18090/admin/
 ```
 
-默认管理员密码来自 `ingest4x.toml`：
+Default admin password is from `ingest4x.toml`:
 
 ```text
 ingest4x
 ```
 
-如果设置了环境变量 `INGEST4X_ADMIN_PASSWORD`，会优先使用环境变量里的密码。
+If `INGEST4X_ADMIN_PASSWORD` is set, it takes precedence.
 
-### 3. 发送 POST 事件
+### 3. Send POST event
 
 ```bash
 curl -X POST http://127.0.0.1:8090/ingest \
@@ -185,17 +185,17 @@ curl -X POST http://127.0.0.1:8090/ingest \
   }'
 ```
 
-成功时响应体是：
+Successful response:
 
 ```text
 200
 ```
 
-注意：项目鉴权只看 ingest token，不用 payload 里的 `appid` 做认证。`appid` 仍然是业务事件字段，默认 rules 会校验它是否存在。
+Only ingest token is used for auth; payload `appid` is business data and is validated by default rules but not used for project auth.
 
-### 4. 发送 GET 事件
+### 4. Send GET event
 
-`GET /ingest` 使用 querystring 里的 `data` 参数，内容是事件 JSON 的 base64：
+`GET /ingest` reads base64 JSON from query string parameter `data`:
 
 ```bash
 DATA=$(
@@ -208,32 +208,32 @@ curl "http://127.0.0.1:8090/ingest?data=$DATA" \
   -H 'x-ingest-token: igx_local_test_token'
 ```
 
-## 请求语义
+## Request semantics
 
-`/ingest` 当前只处理单事件 JSON object，不支持批量数组。
+`/ingest` currently only accepts a single JSON object per request; array payloads are not supported.
 
-接入层会做这些检查：
+Checks performed by ingress:
 
-1. 读取请求 payload。`POST` 使用 body，`GET` 使用 `data` query 参数并做 base64 解码。
-2. 读取 ingest token。优先使用 `x-ingest-token`，也支持 `Authorization: Bearer <token>`。
-3. 在内存项目 registry 中认证 token，只允许已启用项目。
-4. 检查 payload 大小，默认 `256 KiB`。
-5. 解析 JSON，并从 `xwhat` 读取事件名；缺失时内部事件名按 `default` 处理。
-6. 写入 WAL。写入成功后返回 `200`。
+1. Read request payload. `POST` uses body; `GET` uses query parameter `data` with base64 decode.
+2. Read ingest token. Prefer `x-ingest-token`, also supports `Authorization: Bearer <token>`.
+3. Authenticate token against in-memory project registry; only enabled projects are allowed.
+4. Validate payload size; default `256 KiB`.
+5. Parse JSON and read event name from `xwhat`; if absent, internal event name is `default`.
+6. Write WAL and return `200` on success.
 
-常见失败响应：
+Common failure responses:
 
-| 场景 | HTTP |
+| Scenario | HTTP |
 | --- | --- |
-| 缺少或非法 token | `401` |
-| GET 缺少 `data` | `400` |
-| base64 或 JSON 非法 | `400` |
-| payload 超过 `ingest.max_event_bytes` | `413` |
-| WAL 容量不足或不可写 | `503` |
+| Missing or invalid token | `401` |
+| `GET` missing `data` | `400` |
+| Invalid base64 or JSON | `400` |
+| Payload exceeds `ingest.max_event_bytes` | `413` |
+| WAL not writable / insufficient disk | `503` |
 
-接入 token 不会写入 WAL record 的 headers。
+Ingest token is not written into WAL headers.
 
-默认 processor：
+Default processor implementation:
 
 ```rhai
 fn process(event, request) {
@@ -246,14 +246,14 @@ fn process(event, request) {
 }
 ```
 
-默认会创建两个 stdout event sinks：
+Default seed creates two stdout event sinks:
 
 - `events`
 - `events_error`
 
-启动时也会创建一个 `Local Kafka` delivery target，指向 `127.0.0.1:9092`。如果要把事件投递到 Kafka，需要在管理后台或管理 API 中创建/启用对应的 event sink。
+A default `Local Kafka` delivery target is also created pointing to `127.0.0.1:9092`. To deliver to Kafka, create/enable the corresponding event sink in admin/API.
 
-为了方便生产或客户集群压测，默认 seed 还会创建：
+For local/customer cluster load testing, the default seed also creates:
 
 - project: `loadtest_app`
 - ingest token: `igx_loadtest_token`
@@ -261,11 +261,11 @@ fn process(event, request) {
 - event sink: `loadtest_events`
 - processor script: `loadtest_blackhole_processor`
 
-这条链路使用 `blackhole` sink，完整参与 WAL replay、processor、sink checkpoint 和 metrics 链路，但不会把事件写入外部系统。`igx_loadtest_token` 是可写入 WAL 的真实 token；如果当前环境不允许压测入口常开，应在管理后台禁用 `loadtest_app` 或替换 token。
+This path uses the `blackhole` sink and participates in full WAL replay, processor, sink checkpoint, and metrics chain without writing to external systems. The token `igx_loadtest_token` is a real writable ingest token; in environments where public testing ingress is not allowed, disable `loadtest_app` or rotate/replace the token.
 
-## 配置
+## Configuration
 
-最小配置结构：
+Minimal config example:
 
 ```toml
 [logging]
@@ -297,39 +297,39 @@ flush_records = 1000
 flush_bytes = 67108864
 ```
 
-关键配置：
+Key settings:
 
-| 配置 | 说明 |
+| Config | Description |
 | --- | --- |
-| `ingest.bind_address` | 接入面监听地址 |
-| `ingest.max_event_bytes` | 单事件最大字节数 |
-| `management.bind_address` | 管理面监听地址 |
-| `management.admin_password` | 管理 API 密码；环境变量 `INGEST4X_ADMIN_PASSWORD` 优先级更高 |
-| `database.url` | SQLite 或 MySQL 连接串 |
-| `database.refresh_interval_secs` | 项目、sink、processor 刷新间隔 |
-| `wal.dir` | WAL 数据目录 |
-| `wal.no_sync` | `false` 表示按可靠写入语义等待持久化；`true` 是性能优先的弱可靠模式 |
+| `ingest.bind_address` | ingress listen address |
+| `ingest.max_event_bytes` | max payload size per event |
+| `management.bind_address` | admin listen address |
+| `management.admin_password` | admin API password; `INGEST4X_ADMIN_PASSWORD` has higher priority |
+| `database.url` | SQLite or MySQL connection string |
+| `database.refresh_interval_secs` | refresh interval for projects/sinks/processors |
+| `wal.dir` | WAL data directory |
+| `wal.no_sync` | `false` means reliable append with fsync-style durability; `true` is a performance-first weaker durability mode |
 
-`ingest4x.example.toml` 提供 MySQL + 本地 Kafka 的完整示例。
+`ingest4x.example.toml` contains a full MySQL + local Kafka sample.
 
-## 管理后台和 API
+## Admin console and API
 
-管理后台入口、认证方式、OpenAPI/Swagger UI 和管理资源列表见 [管理后台和 API](docs/admin-api.md)。
+See [Admin console and API](docs/admin-api.md) for endpoint URLs, auth behavior, and resource list.
 
-## 事件校验和加工
+## Validation and transform
 
-事件处理在 replay 阶段分成两步：
+Replay processing is two-stage:
 
-- 事件校验：`fn validate(event)`，负责校验事件字段。
-- 事件加工：`fn process(event, request)`，负责调用校验规则、改写或补充事件并 `emit` 到 event sinks。
+- Validation: `fn validate(event)` validates event fields.
+- Transformation/delivery: `fn process(event, request)` applies rule set validation, mutates/extends events, and emits to event sinks.
 
-详细说明见 [事件处理](docs/event-processing/index.md)。
+See [Event processing](docs/event-processing/index.md).
 
-## WAL 和投递
+## WAL and delivery
 
-WAL 的 ACK 语义、record 内容、segment、checkpoint、replay、清理和故障处理见 [WAL](docs/wal.md)。
+For ACK semantics, record format, segment/checkpoint/replay/cleanup/failure handling, see [WAL](docs/wal.md).
 
-## 前端开发
+## Frontend
 
 ```bash
 cd web/admin
@@ -337,24 +337,24 @@ npm install
 npm run dev
 ```
 
-前端检查：
+Frontend checks:
 
 ```bash
 npm run test
 npm run check
 ```
 
-生产服务会直接托管 `web/admin/dist`。如果需要更新内置管理后台，需要先构建前端产物。
+The production service serves built assets from `web/admin/dist`. Build the frontend before updating embedded admin output.
 
-## 发布和版本
+## Release and versioning
 
-版本升级和 GitHub Release 发布流程见 [发布和版本](docs/release-versioning.md)。
+See [release and versioning](docs/release-versioning.md).
 
-## 更多文档
+## More docs
 
 - [WAL](docs/wal.md)
-- [事件处理](docs/event-processing/index.md)
-- [管理后台和 API](docs/admin-api.md)
-- [本地 blackhole 压测报告](docs/load-test-local-blackhole.md)
-- [发布和版本](docs/release-versioning.md)
-- [项目结构](docs/project-structure.md)
+- [Event processing](docs/event-processing/index.md)
+- [Admin console and API](docs/admin-api.md)
+- [Local blackhole load report](docs/load-test-local-blackhole.md)
+- [Release and versioning](docs/release-versioning.md)
+- [Project structure](docs/project-structure.md)
