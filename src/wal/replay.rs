@@ -4,6 +4,7 @@ use crate::services::ProjectRegistryState;
 use crate::settings::{AutoOffsetReset, CheckpointSettings};
 use crate::sinks::EventSinkState;
 use crate::wal::{
+    checkpoint_file_stem,
     error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
     read_entries_after_limit, read_wal_bounds, remove_segments_covered_by_checkpoint, WalBounds,
     WalEntry, WalPosition, WalRecord,
@@ -651,21 +652,4 @@ fn write_checkpoint(dir: &Path, sink_name: &str, position: WalPosition) -> io::R
 fn read_node_id(dir: &Path) -> io::Result<String> {
     let node_id = fs::read_to_string(dir.join(NODE_ID_FILE))?;
     Ok(node_id.trim().to_string())
-}
-
-fn checkpoint_file_stem(sink_name: &str) -> String {
-    let mut stem = String::new();
-    for byte in sink_name.as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
-            stem.push(char::from(*byte));
-        } else {
-            stem.push('_');
-            stem.push_str(format!("{byte:02x}").as_str());
-        }
-    }
-    if stem.is_empty() {
-        "sink".to_string()
-    } else {
-        stem
-    }
 }

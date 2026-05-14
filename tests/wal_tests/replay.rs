@@ -741,6 +741,94 @@ async fn wal_replay_advances_unemitted_registered_sink_checkpoint() {
 }
 
 #[actix_rt::test]
+async fn wal_checkpoint_file_encoding_matches_writer_recovery_for_special_sink_ids() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    let _project = project_repository
+        .create_project(CreateProjectInput {
+            name: "APPID".to_string(),
+            enabled: true,
+            ingest_token: "igx_APPID".to_string(),
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let sink_id = "sink.special name/1";
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
+        sink_id,
+        AutoOffsetReset::Earliest,
+    )])
+    .expect("event sinks should initialize");
+    let processor = ProcessorState::new(
+        r#"
+            fn process(event, request) {
+            }
+        "#
+        .to_string(),
+        10_000,
+    )
+    .expect("processor should initialize");
+    let settings = ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    };
+    let writer = WalWriter::new(&settings).expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-special-sink",
+                "os": "ios"
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("replay should advance special sink checkpoint"),
+        1
+    );
+
+    let checkpoint_path = wal_dir.join("checkpoints/sink.special_20name_2f1.json");
+    assert!(checkpoint_path.exists());
+    let checkpoint: Value =
+        serde_json::from_slice(&fs::read(checkpoint_path).expect("read special sink checkpoint"))
+            .expect("special sink checkpoint json");
+    assert_eq!(checkpoint["sink_id"], json!(sink_id));
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(1));
+
+    let writer =
+        WalWriter::new_for_active_sinks(&settings, &[sink_id.to_string()]).expect("restart writer");
+    let snapshot = writer
+        .snapshot_for_sinks(&[sink_id.to_string()])
+        .expect("snapshot for special sink");
+    assert_eq!(snapshot.checkpoint_lsn, 1);
+}
+
+#[actix_rt::test]
 async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");

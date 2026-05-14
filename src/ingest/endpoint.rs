@@ -441,7 +441,7 @@ fn request_headers(req: &HttpRequest) -> BTreeMap<String, String> {
         .filter(|(name, _)| {
             !matches!(
                 name.as_str().to_ascii_lowercase().as_str(),
-                "authorization" | "x-ingest-token"
+                "x-ingest-token"
             )
         })
         .filter_map(|(name, value)| {

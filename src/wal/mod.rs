@@ -1335,17 +1335,21 @@ fn sink_checkpoint_path(dir: &Path, sink_name: &str) -> PathBuf {
         .join(format!("{}.json", checkpoint_file_stem(sink_name)))
 }
 
-fn checkpoint_file_stem(sink_name: &str) -> String {
-    sink_name
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
+pub(crate) fn checkpoint_file_stem(sink_name: &str) -> String {
+    let mut stem = String::new();
+    for byte in sink_name.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+            stem.push(char::from(*byte));
+        } else {
+            stem.push('_');
+            stem.push_str(format!("{byte:02x}").as_str());
+        }
+    }
+    if stem.is_empty() {
+        "sink".to_string()
+    } else {
+        stem
+    }
 }
 
 fn read_checkpoint_file(

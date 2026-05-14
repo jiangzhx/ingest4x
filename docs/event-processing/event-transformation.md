@@ -66,7 +66,7 @@ Admin API validates scripts with linting for `emit(...)`: the first argument mus
 | `request.request_id()` | WAL record ID |
 | `request.received_at_ms()` | Ingress receive timestamp (ms) |
 
-`authorization` and `x-ingest-token` are filtered from WAL headers, so processor cannot read them.
+Customer-supplied headers such as `authorization` are available in the processor request context. ingest4x only removes its own `x-ingest-token` header before writing WAL.
 
 ## Modules and bindings
 

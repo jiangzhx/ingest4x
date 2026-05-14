@@ -60,10 +60,10 @@ flush_max_records = 1000
 | `received_at_ms` | ingress 接收时间戳 |
 | `method` / `path` / `query` | 原始 HTTP 请求信息 |
 | `remote_addr` | 远端 socket 地址 |
-| `headers` | 过滤敏感鉴权头后的 request header |
+| `headers` | 移除 ingest4x 自身鉴权 token 后的 request header |
 | `body` | 写入 WAL 的事件 JSON 字节 |
 
-ingest token 不写入 WAL headers 或事件 payload。`x-ingest-token` 在 header 生成时会被过滤。
+客户传入的 request headers 会作为 WAL request context 的一部分保留。ingest4x 只会在写 WAL headers 前移除自身使用的 `x-ingest-token`。
 
 `received_at_ms` 会进入 processor 的 `request` 上下文；它是接收时间戳，不是重放时间或客户端事件时间戳。
 

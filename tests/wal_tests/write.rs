@@ -57,6 +57,16 @@ dir = "{}"
     let payload = json!({
         "appid": "APPID",
         "xwhat": "custom_event",
+        "x-ingest-token": "igx_APPID",
+        "xcontext": {
+            "installid": "iid-1",
+            "os": "ios",
+            "idfa": "idfa-1"
+        }
+    });
+    let expected_payload = json!({
+        "appid": "APPID",
+        "xwhat": "custom_event",
         "xcontext": {
             "installid": "iid-1",
             "os": "ios",
@@ -68,6 +78,9 @@ dir = "{}"
         .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .insert_header(("x-test-header", "kept"))
+        .insert_header(("authorization", "Bearer customer-token"))
+        .insert_header(("cookie", "customer-session=1"))
+        .insert_header(("x-api-key", "customer-api-key"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
         .to_request();
@@ -91,8 +104,21 @@ dir = "{}"
         Some("kept")
     );
     assert_eq!(
+        http.headers.get("authorization").map(String::as_str),
+        Some("Bearer customer-token")
+    );
+    assert_eq!(
+        http.headers.get("cookie").map(String::as_str),
+        Some("customer-session=1")
+    );
+    assert_eq!(
+        http.headers.get("x-api-key").map(String::as_str),
+        Some("customer-api-key")
+    );
+    assert!(!http.headers.contains_key("x-ingest-token"));
+    assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&record.payload).expect("raw json payload"),
-        payload
+        expected_payload
     );
     assert!(record.record_id.starts_with("wal-"));
     assert!(record.received_at_ms() > 0);

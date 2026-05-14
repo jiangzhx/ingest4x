@@ -60,10 +60,10 @@ Core fields:
 | `received_at_ms` | Ingress receive timestamp |
 | `method` / `path` / `query` | Raw HTTP request info |
 | `remote_addr` | Remote socket address |
-| `headers` | Request headers excluding filtered sensitive auth fields |
+| `headers` | Request headers after removing ingest4x's own auth token |
 | `body` | Raw event JSON bytes |
 
-Ingest token is not written to WAL headers. `authorization` and `x-ingest-token` are filtered out when generating headers.
+Customer-supplied request headers are kept as part of the WAL request context. ingest4x only removes its own `x-ingest-token` header before writing WAL headers.
 
 `received_at_ms` is passed into processor `request` context. It is ingest receive time, not replay time or client event timestamp.
 
