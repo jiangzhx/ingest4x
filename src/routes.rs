@@ -30,7 +30,7 @@ fn register_public_app_data(cfg: &mut ServiceConfig, state: &AppState) {
 fn register_public_routes(cfg: &mut ServiceConfig, state: AppState) {
     cfg.service(web::scope("/").route("", web::get().to(index)))
         .service(
-            web::resource("/ingest")
+            web::resource("/ingest/{project_key}")
                 .app_data(state.rule_repository.clone())
                 .app_data(state.event_sinks.clone())
                 .app_data(state.project_registry.clone())

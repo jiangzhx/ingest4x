@@ -13,7 +13,7 @@
 - 送达可靠性：事件先持久写入本地 WAL，再由后台重放 worker 投递，失败会重试，每个事件 sink 维护自己的进度。
 - 可观测性：管理界面可配置项目、规则、处理脚本和 sink，指标覆盖 ingest、WAL、重放和投递。
 
-因此 `POST /ingest` 返回成功仅表示事件已被接入系统接收。是否字段合法、是否需要补充字段、以及最终送达哪里，取决于项目配置。
+因此 `/ingest/{project_key}` 返回成功仅表示事件已被接入系统接收。是否字段合法、是否需要补充字段、以及最终送达哪里，取决于项目配置。
 
 ## 总体说明
 
@@ -25,8 +25,8 @@
 | [`kafka`](docs/zh-CN/sink-parameters.md#kafka) | 投递到 Kafka topic，适用于流处理与数据平台链路。 | `delivery target` 需要 `bootstrap_servers`；`event sink` 需要 `topic`。 | 已支持 |
 | [`stdout`](docs/zh-CN/sink-parameters.md#stdout) | 输出到标准输出，适合本地开发、规则调试或种子验证。 | 无额外配置。 | 已支持 |
 
-- 接口接入：`POST /ingest`、`GET /ingest?data=<base64-json>`
-- 项目鉴权：`x-ingest-token` 或 `Authorization: Bearer <token>`，token 与启用项目绑定。
+- 接口接入：`POST /ingest/{project_key}`、`GET /ingest/{project_key}?appid=...&xwhat=...`
+- 项目访问：`auth_mode = token | public`，可选配置项目 IP allowlist。
 - WAL：本地分段写入、checkpoint、按-sink 重放与失败重试。详见 [WAL 文档](docs/zh-CN/wal.md)。
 - 规则：数据库中的 Rhai 校验规则，通过规则集绑定到每个项目。
 - Processor：Rhai `process(event, request)`，以及 `validate(event)` 与 `emit(target, event)`。
@@ -45,9 +45,14 @@
 +--------------------------------------------------------------------------------+
 | Ingest API                                                                     |
 |                                                                                |
-| +---------+    +------------------------+    +------------+    +---------+     |
-| | /ingest | -> | Project token registry | -> | WAL append | -> | ACK 200 |     |
-| +---------+    +------------------------+    +------------+    +---------+     |
+| +-----------------------+    +-------------------------+    +------------+     |
+| | /ingest/{project_key} | -> | Project registry + auth | -> | WAL append |     |
+| +-----------------------+    +-------------------------+    +------------+     |
+|                                                                   |            |
+|                                                                   v            |
+|                                                               +---------+      |
+|                                                               | ACK 200 |      |
+|                                                               +---------+      |
 +--------------------------------------------------------------------------------+
                                                    |
                                                    v
@@ -143,7 +148,7 @@ cargo run --bin ingest4x -- server -c ingest4x.toml
 
 | 端口 | 用途 |
 | --- | --- |
-| `8090` | Ingress：`/`、`/ingest` |
+| `8090` | Ingress：`/ingest/{project_key}` |
 | `18090` | 管理：`/healthz`、`/admin`、`/api/admin/*`、`/metrics`、OpenAPI 与 Swagger UI |
 
 启动后，seed 会确保本地测试项目存在：
@@ -169,12 +174,24 @@ ingest4x
 
 ### 3. 发送 POST 事件
 
+支持的数据上报方式：
+
+| 方法 | Endpoint | 数据形态 | Token 位置 | 典型场景 |
+| --- | --- | --- | --- | --- |
+| `POST` | `/ingest/{project_key}` | JSON object body | `x-ingest-token` header 或 JSON 根字段 | 自有客户端和服务端 |
+| `POST` | `/ingest/{project_key}` | `application/x-www-form-urlencoded` 表单字段 | `x-ingest-token` header 或 form 字段 | 不能设置自定义 header 的第三方 callback |
+| `GET` | `/ingest/{project_key}?appid=...&xwhat=...` | querystring 字段 | 仅 `x-ingest-token` header | 简单测试客户端，以及能设置 header 的发送方 |
+
+项目访问由每个项目的 `auth_mode = token | public` 控制，并可附加 IP allowlist。完整解析、鉴权与错误语义见 [接入协议](docs/zh-CN/ingest-protocol.md)。
+
+JSON POST 示例：
+
 ```bash
-curl -X POST http://127.0.0.1:8090/ingest \
+curl -X POST http://127.0.0.1:8090/ingest/test_app \
   -H 'Content-Type: application/json' \
   -H 'x-ingest-token: igx_local_test_token' \
   -d '{
-    "appid": "APPID",
+    "appid": "test_app",
     "xwhat": "custom_event",
     "xcontext": {
       "installid": "iid-1",
@@ -185,53 +202,41 @@ curl -X POST http://127.0.0.1:8090/ingest \
   }'
 ```
 
+Form POST 示例：
+
+```bash
+curl -X POST http://127.0.0.1:8090/ingest/test_app \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'x-ingest-token=igx_local_test_token' \
+  --data-urlencode 'appid=test_app' \
+  --data-urlencode 'xwhat=custom_event' \
+  --data-urlencode 'installid=iid-1' \
+  --data-urlencode 'os=ios' \
+  --data-urlencode 'idfa=idfa-1'
+```
+
 成功响应：
 
 ```text
 200
 ```
 
-鉴权只使用 ingest token；payload 里的 `appid` 是业务字段，由默认规则校验，但不参与项目鉴权。
+项目从路径里的 `{project_key}` 解析。payload 或 form 里的 `appid` 是业务字段，不参与项目路由。
 
 ### 4. 发送 GET 事件
 
-`GET /ingest` 会从查询参数 `data` 读取 base64 后的 JSON：
+GET 示例：
 
 ```bash
-DATA=$(
-  printf '%s' '{"appid":"APPID","xwhat":"custom_event","xcontext":{"installid":"iid-1","os":"ios","idfa":"idfa-1"}}' \
-    | base64 \
-    | tr -d '\n'
-)
-
-curl "http://127.0.0.1:8090/ingest?data=$DATA" \
+curl "http://127.0.0.1:8090/ingest/test_app?appid=test_app&xwhat=custom_event&installid=iid-1&os=ios&idfa=idfa-1" \
   -H 'x-ingest-token: igx_local_test_token'
 ```
 
+GET query 字段会转换成一个扁平 JSON object。字段名按原样保留；ingress 不展开 dotted path，也不会自动生成 `xcontext`。GET 不支持从 querystring 或 path 传 token。
+
 ## 请求语义
 
-`/ingest` 当前只支持单个 JSON 对象；数组 payload 不支持。
-
-入口流程：
-
-1. 读取请求体。`POST` 走 body，`GET` 走 `data` 查询参数并做 base64 解码。
-2. 读取 ingest token。优先从 `x-ingest-token`，也支持 `Authorization: Bearer <token>`。
-3. token 与内存中的项目列表比对，只有已启用项目可用。
-4. 校验 payload 大小，默认 `256 KiB`。
-5. 解析 JSON 并从 `xwhat` 取事件名，缺失则内部事件名为 `default`。
-6. 成功写入 WAL 并返回 `200`。
-
-常见失败响应：
-
-| 场景 | HTTP |
-| --- | --- |
-| token 缺失或无效 | `401` |
-| `GET` 缺少 `data` | `400` |
-| base64/JSON 格式无效 | `400` |
-| payload 超过 `ingest.max_event_bytes` | `413` |
-| WAL 无法写入/磁盘不足 | `503` |
-
-ingest token 不会写入 WAL 头部。
+`/ingest/{project_key}` 每次请求只接受一个事件；数组 payload 不支持。详细的请求解析、鉴权行为、字段映射和失败响应见 [接入协议](docs/zh-CN/ingest-protocol.md)。
 
 默认 processor 实现：
 

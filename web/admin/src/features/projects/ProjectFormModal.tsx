@@ -1,6 +1,14 @@
 import { useEffect } from "react";
 import type { ReactNode } from "react";
-import { Checkbox, Divider, Form, Input, Modal, Switch, Typography } from "antd";
+import {
+  Divider,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Switch,
+  Typography,
+} from "antd";
 import type { Project, ProjectFormValues } from "./types";
 
 type ProjectFormModalProps = {
@@ -17,9 +25,11 @@ type ProjectFormModalProps = {
 function toFormValues(project?: Project | null): ProjectFormValues {
   return {
     name: project?.name ?? "",
+    project_key: project?.project_key ?? "",
     enabled: project?.enabled ?? true,
-    ingest_token: "",
-    regenerate_ingest_token: false,
+    auth_mode: project?.auth_mode ?? "token",
+    allowed_ips_text: project?.allowed_ips.join("\n") ?? "",
+    ingest_token: project?.ingest_token ?? "",
   };
 }
 
@@ -34,6 +44,8 @@ export function ProjectFormModal({
   onSubmit,
 }: ProjectFormModalProps) {
   const [form] = Form.useForm<ProjectFormValues>();
+  const projectKey = Form.useWatch("project_key", form);
+  const authMode = Form.useWatch("auth_mode", form);
 
   useEffect(() => {
     if (!open) {
@@ -48,9 +60,11 @@ export function ProjectFormModal({
     const values = await form.validateFields();
     await onSubmit({
       name: values.name.trim(),
+      project_key: values.project_key.trim(),
       enabled: values.enabled,
+      auth_mode: values.auth_mode,
+      allowed_ips_text: values.allowed_ips_text,
       ingest_token: values.ingest_token?.trim(),
-      regenerate_ingest_token: values.regenerate_ingest_token,
     });
   };
 
@@ -83,27 +97,58 @@ export function ProjectFormModal({
         >
           <Input placeholder="Enter project name" maxLength={120} />
         </Form.Item>
-        {mode === "edit" && project ? (
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-            Current Token:{" "}
-            <Typography.Text code>{project.ingest_token}</Typography.Text>
-          </Typography.Paragraph>
-        ) : null}
         <Form.Item<ProjectFormValues>
-          label={mode === "create" ? "Ingest Token" : "New Ingest Token"}
-          name="ingest_token"
+          label="Project Key"
+          name="project_key"
+          extra={
+            <Typography.Text type="secondary">
+              Ingest path:{" "}
+              <Typography.Text code>
+                /ingest/{projectKey || "{project_key}"}
+              </Typography.Text>
+            </Typography.Text>
+          }
+          rules={[
+            { required: true, message: "Please enter project key" },
+            { whitespace: true, message: "Project key cannot be empty" },
+            {
+              pattern: /^[A-Za-z0-9_-]+$/,
+              message: "Only letters, numbers, underscore, and hyphen are allowed",
+            },
+          ]}
         >
-          <Input
-            placeholder={mode === "create" ? "Leave empty to auto-generate" : "Leave empty to keep current"}
-            maxLength={256}
+          <Input placeholder="adjust-app" maxLength={120} />
+        </Form.Item>
+        <Form.Item<ProjectFormValues>
+          label="Auth Mode"
+          name="auth_mode"
+          rules={[{ required: true, message: "Please select auth mode" }]}
+        >
+          <Select
+            options={[
+              { label: "Token", value: "token" },
+              { label: "Public", value: "public" },
+            ]}
           />
         </Form.Item>
-        {mode === "edit" ? (
+        <Form.Item<ProjectFormValues>
+          label="Allowed IPs"
+          name="allowed_ips_text"
+        >
+          <Input.TextArea
+            autoSize={{ minRows: 2, maxRows: 5 }}
+            placeholder="Optional. One IP per line, or separate with commas"
+          />
+        </Form.Item>
+        {authMode === "token" ? (
           <Form.Item<ProjectFormValues>
-            name="regenerate_ingest_token"
-            valuePropName="checked"
+            label="Ingest Token"
+            name="ingest_token"
           >
-            <Checkbox>Regenerate token when saving</Checkbox>
+            <Input
+              placeholder="Leave empty to auto-generate"
+              maxLength={256}
+            />
           </Form.Item>
         ) : null}
         <Form.Item<ProjectFormValues>

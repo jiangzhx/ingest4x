@@ -1,7 +1,12 @@
+export type ProjectAuthMode = "token" | "public";
+
 export interface Project {
   id: number;
+  project_key: string;
   name: string;
   enabled: boolean;
+  auth_mode: ProjectAuthMode;
+  allowed_ips: string[];
   ingest_token: string;
   ingest_token_prefix: string;
   created_at: number;
@@ -10,20 +15,27 @@ export interface Project {
 
 export interface ProjectFormValues {
   name: string;
+  project_key: string;
   enabled: boolean;
+  auth_mode: ProjectAuthMode;
+  allowed_ips_text?: string;
   ingest_token?: string;
-  regenerate_ingest_token?: boolean;
 }
 
 export interface CreateProjectPayload {
   name: string;
+  project_key: string;
   enabled: boolean;
+  auth_mode: ProjectAuthMode;
+  allowed_ips: string[];
   ingest_token?: string;
 }
 
 export interface UpdateProjectPayload {
   name?: string;
+  project_key?: string;
   enabled?: boolean;
+  auth_mode?: ProjectAuthMode;
+  allowed_ips?: string[];
   ingest_token?: string;
-  regenerate_ingest_token?: boolean;
 }

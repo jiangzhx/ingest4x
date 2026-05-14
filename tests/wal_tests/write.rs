@@ -65,7 +65,7 @@ dir = "{}"
     });
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .insert_header(("x-test-header", "kept"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
@@ -85,7 +85,7 @@ dir = "{}"
     let record = &records[0];
     let http = record.http();
     assert_eq!(http.method, "POST");
-    assert_eq!(http.path, "/ingest");
+    assert_eq!(http.path, "/ingest/APPID");
     assert_eq!(
         http.headers.get("x-test-header").map(String::as_str),
         Some("kept")
@@ -137,7 +137,7 @@ flush_max_records = 1
 
     ingest4x::wal::fail_after_test_writes(0);
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(
             serde_json::to_vec(&json!({
@@ -200,20 +200,24 @@ dir = "{}"
         server::configure_app(cfg, app_state.clone());
     }))
     .await;
+    let query = serde_urlencoded::to_string([
+        ("appid", "APPID"),
+        ("xwhat", "custom_event"),
+        ("installid", "iid-2"),
+        ("os", "android"),
+        ("oaid", "oaid-1"),
+    ])
+    .expect("encode query");
     let payload = json!({
         "appid": "APPID",
         "xwhat": "custom_event",
-        "xcontext": {
-            "installid": "iid-2",
-            "os": "android",
-            "oaid": "oaid-1"
-        }
+        "installid": "iid-2",
+        "os": "android",
+        "oaid": "oaid-1"
     });
-    let encoded = STANDARD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
-    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
 
     let req = test::TestRequest::get()
-        .uri(format!("/ingest?{query}").as_str())
+        .uri(format!("/ingest/APPID?{query}").as_str())
         .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -224,7 +228,7 @@ dir = "{}"
     let record = &records[0];
     let http = record.http();
     assert_eq!(http.method, "GET");
-    assert_eq!(http.path, "/ingest");
+    assert_eq!(http.path, "/ingest/APPID");
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&record.payload).expect("raw json payload"),
         payload
@@ -268,7 +272,7 @@ dir = "{}"
     .await;
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload("{not-json")
         .insert_header(("content-type", "application/json"))
@@ -329,7 +333,7 @@ dir = "{}"
     });
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
@@ -378,21 +382,18 @@ dir = "{}"
         server::configure_app(cfg, app_state.clone());
     }))
     .await;
-    let payload = json!({
-        "appid": "APPID",
-        "xwhat": "custom_event",
-        "xcontext": {
-            "installid": "iid-get-too-large",
-            "os": "ios",
-            "idfa": "idfa-get-too-large",
-            "extra": "x".repeat(160)
-        }
-    });
-    let encoded = STANDARD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
-    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+    let query = serde_urlencoded::to_string([
+        ("appid", "APPID"),
+        ("xwhat", "custom_event"),
+        ("installid", "iid-get-too-large"),
+        ("os", "ios"),
+        ("idfa", "idfa-get-too-large"),
+        ("extra", "x".repeat(160).as_str()),
+    ])
+    .expect("encode query");
 
     let req = test::TestRequest::get()
-        .uri(format!("/ingest?{query}").as_str())
+        .uri(format!("/ingest/APPID?{query}").as_str())
         .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -448,7 +449,7 @@ dir = "{}"
     });
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_missing_token"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
@@ -511,7 +512,7 @@ flush_max_records = 2
             }
         });
         let req = test::TestRequest::post()
-            .uri("/ingest")
+            .uri("/ingest/APPID")
             .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
             .insert_header(("content-type", "application/json"))
@@ -575,7 +576,7 @@ dir = "{}"
     });
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(serde_json::to_vec(&payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))

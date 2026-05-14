@@ -45,7 +45,7 @@ dir = "{}"
     .await;
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .set_json(json!({
             "appid": "APPID",
@@ -135,7 +135,7 @@ dir = "{}"
     .await;
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_missing_token"))
         .set_json(json!({
             "appid": "UNKNOWN",

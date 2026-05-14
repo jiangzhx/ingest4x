@@ -13,7 +13,7 @@ It mainly addresses four concerns:
 - Delivery reliability: events are persisted to local WAL first, then replayed by background workers; failures are retried and each event sink tracks its own progress.
 - Observability: admin UI manages projects, rules, processors, and sinks, with metrics covering ingest, WAL, replay, and delivery.
 
-Thus a successful `/ingest` response means the event is accepted into ingest pipeline. Whether a single event is valid, needs extra fields, and where it is delivered is determined by project configuration.
+Thus a successful `/ingest/{project_key}` response means the event is accepted into ingest pipeline. Whether a single event is valid, needs extra fields, and where it is delivered is determined by project configuration.
 
 ## Overview
 
@@ -25,8 +25,8 @@ Thus a successful `/ingest` response means the event is accepted into ingest pip
 | [`kafka`](docs/sink-parameters.md#kafka) | Deliver to Kafka topics, suitable for streaming jobs and data platform pipelines. | `delivery target`: `bootstrap_servers`; `event sink`: `topic`. | Supported |
 | [`stdout`](docs/sink-parameters.md#stdout) | Print to stdout for local dev, rule debugging, or seed verification. | No extra config. | Supported |
 
-- Ingress: `POST /ingest`, `GET /ingest?data=<base64-json>`.
-- Project auth: `x-ingest-token` or `Authorization: Bearer <token>`, token belongs to an enabled project.
+- Ingress: `POST /ingest/{project_key}`, `GET /ingest/{project_key}?appid=...&xwhat=...`.
+- Project access: `auth_mode = token | public`, with optional project IP allowlist.
 - WAL: local segmented write, checkpoint, per-sink replay, and failure retry. See [WAL](docs/wal.md).
 - Rules: Rhai validation rules from DB, bound per project via rule sets.
 - Processor: Rhai `process(event, request)` plus `validate(event)` and `emit(target, event)`.
@@ -45,9 +45,14 @@ Thus a successful `/ingest` response means the event is accepted into ingest pip
 +--------------------------------------------------------------------------------+
 | Ingest API                                                                     |
 |                                                                                |
-| +---------+    +------------------------+    +------------+    +---------+     |
-| | /ingest | -> | Project token registry | -> | WAL append | -> | ACK 200 |     |
-| +---------+    +------------------------+    +------------+    +---------+     |
+| +-----------------------+    +-------------------------+    +------------+     |
+| | /ingest/{project_key} | -> | Project registry + auth | -> | WAL append |     |
+| +-----------------------+    +-------------------------+    +------------+     |
+|                                                                   |            |
+|                                                                   v            |
+|                                                               +---------+      |
+|                                                               | ACK 200 |      |
+|                                                               +---------+      |
 +--------------------------------------------------------------------------------+
                                                    |
                                                    v
@@ -143,7 +148,7 @@ Default ports:
 
 | Port | Purpose |
 | --- | --- |
-| `8090` | Ingress: `/`, `/ingest` |
+| `8090` | Ingress: `/ingest/{project_key}` |
 | `18090` | Admin: `/healthz`, `/admin`, `/api/admin/*`, `/metrics`, OpenAPI and Swagger UI |
 
 After startup, the seed ensures a local test project exists:
@@ -169,12 +174,24 @@ If `INGEST4X_ADMIN_PASSWORD` is set, it takes precedence.
 
 ### 3. Send POST event
 
+Supported ingest request methods:
+
+| Method | Endpoint | Data shape | Token location | Typical use |
+| --- | --- | --- | --- | --- |
+| `POST` | `/ingest/{project_key}` | JSON object body | `x-ingest-token` header or JSON root field | First-party clients and services |
+| `POST` | `/ingest/{project_key}` | `application/x-www-form-urlencoded` form fields | `x-ingest-token` header or form field | Third-party callbacks that cannot set custom headers |
+| `GET` | `/ingest/{project_key}?appid=...&xwhat=...` | Query string fields | `x-ingest-token` header only | Simple test clients and senders that can set headers |
+
+Project access is controlled per project by `auth_mode = token | public`, plus an optional IP allowlist. See [ingest protocol](docs/ingest-protocol.md) for full parsing, auth, and error semantics.
+
+JSON POST example:
+
 ```bash
-curl -X POST http://127.0.0.1:8090/ingest \
+curl -X POST http://127.0.0.1:8090/ingest/test_app \
   -H 'Content-Type: application/json' \
   -H 'x-ingest-token: igx_local_test_token' \
   -d '{
-    "appid": "APPID",
+    "appid": "test_app",
     "xwhat": "custom_event",
     "xcontext": {
       "installid": "iid-1",
@@ -185,53 +202,41 @@ curl -X POST http://127.0.0.1:8090/ingest \
   }'
 ```
 
+Form POST example:
+
+```bash
+curl -X POST http://127.0.0.1:8090/ingest/test_app \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'x-ingest-token=igx_local_test_token' \
+  --data-urlencode 'appid=test_app' \
+  --data-urlencode 'xwhat=custom_event' \
+  --data-urlencode 'installid=iid-1' \
+  --data-urlencode 'os=ios' \
+  --data-urlencode 'idfa=idfa-1'
+```
+
 Successful response:
 
 ```text
 200
 ```
 
-Only ingest token is used for auth; payload `appid` is business data and is validated by default rules but not used for project auth.
+Project is resolved from `{project_key}` in the path. Payload or form `appid` is business data and is not used for project routing.
 
 ### 4. Send GET event
 
-`GET /ingest` reads base64 JSON from query string parameter `data`:
+GET example:
 
 ```bash
-DATA=$(
-  printf '%s' '{"appid":"APPID","xwhat":"custom_event","xcontext":{"installid":"iid-1","os":"ios","idfa":"idfa-1"}}' \
-    | base64 \
-    | tr -d '\n'
-)
-
-curl "http://127.0.0.1:8090/ingest?data=$DATA" \
+curl "http://127.0.0.1:8090/ingest/test_app?appid=test_app&xwhat=custom_event&installid=iid-1&os=ios&idfa=idfa-1" \
   -H 'x-ingest-token: igx_local_test_token'
 ```
 
+GET query fields are converted into one flat JSON object. Field names are kept as-is; ingress does not expand dotted paths or create `xcontext` automatically. GET does not support token in query string or path.
+
 ## Request semantics
 
-`/ingest` currently only accepts a single JSON object per request; array payloads are not supported.
-
-Checks performed by ingress:
-
-1. Read request payload. `POST` uses body; `GET` uses query parameter `data` with base64 decode.
-2. Read ingest token. Prefer `x-ingest-token`, also supports `Authorization: Bearer <token>`.
-3. Authenticate token against in-memory project registry; only enabled projects are allowed.
-4. Validate payload size; default `256 KiB`.
-5. Parse JSON and read event name from `xwhat`; if absent, internal event name is `default`.
-6. Write WAL and return `200` on success.
-
-Common failure responses:
-
-| Scenario | HTTP |
-| --- | --- |
-| Missing or invalid token | `401` |
-| `GET` missing `data` | `400` |
-| Invalid base64 or JSON | `400` |
-| Payload exceeds `ingest.max_event_bytes` | `413` |
-| WAL not writable / insufficient disk | `503` |
-
-Ingest token is not written into WAL headers.
+`/ingest/{project_key}` accepts one event per request; array payloads are not supported. For detailed request decoding, auth behavior, field mapping, and failure responses, see [ingest protocol](docs/ingest-protocol.md).
 
 Default processor implementation:
 

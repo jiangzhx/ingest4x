@@ -1,5 +1,15 @@
 import { CopyOutlined } from "@ant-design/icons";
-import { Button, Empty, message, Popconfirm, Space, Table, Tag, Typography } from "antd";
+import {
+  Button,
+  Empty,
+  message,
+  Popconfirm,
+  Space,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { processorLabel } from "../processors/ProjectProcessorPanel";
 import type { ProcessorScript, ProjectProcessor } from "../processors/types";
@@ -68,6 +78,35 @@ async function handleCopyToken(tokenText: string) {
   message.error("Failed to copy token, please copy manually");
 }
 
+async function handleCopyEndpoint(endpointText: string) {
+  const copied = await copyTextToClipboard(endpointText);
+  if (copied) {
+    message.success("Endpoint copied");
+    return;
+  }
+
+  message.error("Failed to copy endpoint, please copy manually");
+}
+
+function customProcessorTag(label: string) {
+  return (
+    <Tooltip title={label}>
+      <Tag color="blue" style={{ maxWidth: "100%", marginInlineEnd: 0 }}>
+        <span
+          style={{
+            display: "block",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {label}
+        </span>
+      </Tag>
+    </Tooltip>
+  );
+}
+
 function projectProcessorLabel(
   project: Project,
   scripts: ProcessorScript[],
@@ -90,7 +129,7 @@ function projectProcessorLabel(
     return <Tag>default</Tag>;
   }
 
-  return <Tag color="blue">{processorLabel(scriptId, scripts)}</Tag>;
+  return customProcessorTag(processorLabel(scriptId, scripts));
 }
 
 export function ProjectsTable({
@@ -107,13 +146,61 @@ export function ProjectsTable({
       title: "ID",
       dataIndex: "id",
       key: "id",
-      width: 90,
+      width: 80,
       render: (value: number) => <Typography.Text code>{value}</Typography.Text>,
+    },
+    {
+      title: "Endpoint",
+      key: "endpoint",
+      width: 230,
+      render: (_, project) => {
+        const endpointText = `/ingest/${project.project_key}`;
+
+        return (
+          <Space size={6}>
+            <Typography.Text
+              code
+              style={{ whiteSpace: "normal", wordBreak: "break-all" }}
+            >
+              {endpointText}
+            </Typography.Text>
+            <Button
+              aria-label="Copy endpoint"
+              icon={<CopyOutlined />}
+              size="small"
+              type="text"
+              onClick={() => {
+                void handleCopyEndpoint(endpointText);
+              }}
+            />
+          </Space>
+        );
+      },
+    },
+    {
+      title: "Auth",
+      dataIndex: "auth_mode",
+      key: "auth_mode",
+      width: 170,
+      render: (_, project) => (
+        <Space size={4} wrap>
+          {project.auth_mode === "public" ? (
+            <Tag color="orange">Public</Tag>
+          ) : (
+            <Tag color="green">Token</Tag>
+          )}
+          {project.allowed_ips.length > 0 ? (
+            <Tooltip title={project.allowed_ips.join(", ")}>
+              <Tag color="geekblue">IP</Tag>
+            </Tooltip>
+          ) : null}
+        </Space>
+      ),
     },
     {
       title: "Token",
       key: "ingest_token",
-      width: 360,
+      width: 350,
       render: (_, project) => {
         const tokenText = project.ingest_token;
 
@@ -142,20 +229,27 @@ export function ProjectsTable({
       title: "Project Name",
       dataIndex: "name",
       key: "name",
-      render: (value: string) => <Typography.Text strong>{value}</Typography.Text>,
+      width: 180,
+      ellipsis: true,
+      render: (value: string) => (
+        <Typography.Text strong ellipsis={{ tooltip: value }}>
+          {value}
+        </Typography.Text>
+      ),
     },
     {
       title: "Enabled",
       dataIndex: "enabled",
       key: "enabled",
-      width: 140,
+      width: 110,
       render: (enabled: boolean) =>
         enabled ? <Tag color="success">Enabled</Tag> : <Tag>Disabled</Tag>,
     },
     {
       title: "Processor",
       key: "processor",
-      width: 180,
+      width: 160,
+      ellipsis: true,
       render: (_, project) =>
         projectProcessorLabel(project, processorScripts, processorBindings),
     },
@@ -163,7 +257,7 @@ export function ProjectsTable({
       title: "Created At",
       dataIndex: "created_at",
       key: "created_at",
-      width: 200,
+      width: 180,
       render: (value: number) => (
         <Typography.Text type="secondary">
           {formatProjectTimestamp(value)}
@@ -174,7 +268,7 @@ export function ProjectsTable({
       title: "Updated At",
       dataIndex: "updated_at",
       key: "updated_at",
-      width: 200,
+      width: 180,
       render: (value: number) => (
         <Typography.Text type="secondary">
           {formatProjectTimestamp(value)}
@@ -184,7 +278,7 @@ export function ProjectsTable({
     {
       title: "Actions",
       key: "actions",
-      width: 180,
+      width: 150,
       fixed: "right",
       render: (_, project) => {
         const isDeleting = deletingProjectId === project.id;
@@ -234,6 +328,7 @@ export function ProjectsTable({
       columns={columns}
       dataSource={projects}
       pagination={false}
+      tableLayout="fixed"
       locale={{
         emptyText: (
           <Empty
@@ -242,7 +337,7 @@ export function ProjectsTable({
           />
         ),
       }}
-      scroll={{ x: 1300 }}
+      scroll={{ x: 1740 }}
     />
   );
 }

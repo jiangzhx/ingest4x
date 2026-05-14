@@ -1,7 +1,8 @@
 use crate::ingest::processor::ProcessorRegistryState as ProcessorRuntimeState;
 use crate::repositories::{
     generate_ingest_token, CreateProjectInput, CreateProjectRuleSetInput, ProcessorRepository,
-    Project, ProjectRepository, ProjectRepositoryError, RuleRepository, UpdateProjectInput,
+    Project, ProjectAuthMode, ProjectRepository, ProjectRepositoryError, RuleRepository,
+    UpdateProjectIngestSettingsInput, UpdateProjectInput,
 };
 use crate::services::ProjectRegistryState;
 use actix_web::web::{self, Data, Json, Path, ServiceConfig};
@@ -15,6 +16,9 @@ struct CreateProjectRequest {
     name: String,
     enabled: bool,
     ingest_token: Option<String>,
+    project_key: Option<String>,
+    auth_mode: Option<String>,
+    allowed_ips: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -22,14 +26,19 @@ struct UpdateProjectRequest {
     name: Option<String>,
     enabled: Option<bool>,
     ingest_token: Option<String>,
-    regenerate_ingest_token: Option<bool>,
+    project_key: Option<String>,
+    auth_mode: Option<String>,
+    allowed_ips: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, ToSchema)]
 struct ProjectResponse {
     id: i32,
+    project_key: String,
     name: String,
     enabled: bool,
+    auth_mode: String,
+    allowed_ips: Vec<String>,
     ingest_token: String,
     ingest_token_prefix: String,
     created_at: i64,
@@ -133,11 +142,16 @@ async fn create_project(
         .clone()
         .filter(|token| !token.trim().is_empty())
         .unwrap_or_else(generate_ingest_token);
+    let ingest_settings = match UpdateProjectIngestSettingsInput::from_create_request(&request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+
     match repository
-        .create_project(CreateProjectInput::from_request(
-            request,
-            ingest_token.clone(),
-        ))
+        .create_project_with_ingest_settings(
+            CreateProjectInput::from_request(request, ingest_token.clone()),
+            ingest_settings,
+        )
         .await
     {
         Ok(project) => {
@@ -203,9 +217,17 @@ async fn update_project(
     registry: Data<ProjectRegistryState>,
     request: Json<UpdateProjectRequest>,
 ) -> HttpResponse {
-    let input = UpdateProjectInput::from_request(request.into_inner());
+    let request = request.into_inner();
+    let ingest_settings = match UpdateProjectIngestSettingsInput::from_update_request(&request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let input = UpdateProjectInput::from_request(request);
 
-    match repository.update_project(*project_id, input).await {
+    match repository
+        .update_project_with_ingest_settings(*project_id, input, ingest_settings)
+        .await
+    {
         Ok(project) => {
             let project_id = project.id;
             finalize_success_response(
@@ -267,6 +289,12 @@ fn map_repository_error(error: ProjectRepositoryError) -> HttpResponse {
         ProjectRepositoryError::DuplicateIngestToken { .. } => {
             HttpResponse::Conflict().body(error.to_string())
         }
+        ProjectRepositoryError::DuplicateProjectKey { .. } => {
+            HttpResponse::Conflict().body(error.to_string())
+        }
+        ProjectRepositoryError::InvalidProjectKey => {
+            HttpResponse::BadRequest().body(error.to_string())
+        }
         _ => HttpResponse::InternalServerError().body(error.to_string()),
     }
 }
@@ -286,13 +314,7 @@ impl UpdateProjectInput {
         let ingest_token = value
             .ingest_token
             .clone()
-            .filter(|token| !token.trim().is_empty())
-            .or_else(|| {
-                value
-                    .regenerate_ingest_token
-                    .unwrap_or(false)
-                    .then(generate_ingest_token)
-            });
+            .filter(|token| !token.trim().is_empty());
 
         Self {
             name: value.name,
@@ -308,12 +330,52 @@ impl From<UpdateProjectRequest> for UpdateProjectInput {
     }
 }
 
+impl UpdateProjectIngestSettingsInput {
+    fn from_create_request(value: &CreateProjectRequest) -> Result<Self, HttpResponse> {
+        Self::from_parts(
+            value.project_key.clone(),
+            value.auth_mode.as_deref(),
+            value.allowed_ips.clone(),
+        )
+    }
+
+    fn from_update_request(value: &UpdateProjectRequest) -> Result<Self, HttpResponse> {
+        Self::from_parts(
+            value.project_key.clone(),
+            value.auth_mode.as_deref(),
+            value.allowed_ips.clone(),
+        )
+    }
+
+    fn from_parts(
+        project_key: Option<String>,
+        auth_mode: Option<&str>,
+        allowed_ips: Option<Vec<String>>,
+    ) -> Result<Self, HttpResponse> {
+        let auth_mode = match auth_mode {
+            Some("token") => Some(ProjectAuthMode::Token),
+            Some("public") => Some(ProjectAuthMode::Public),
+            Some(_) => return Err(HttpResponse::BadRequest().body("invalid auth_mode")),
+            None => None,
+        };
+
+        Ok(Self {
+            project_key,
+            auth_mode,
+            allowed_ips,
+        })
+    }
+}
+
 impl From<Project> for ProjectResponse {
     fn from(value: Project) -> Self {
         Self {
             id: value.id,
+            project_key: value.project_key,
             name: value.name,
             enabled: value.enabled,
+            auth_mode: value.auth_mode.as_str().to_string(),
+            allowed_ips: value.allowed_ips,
             ingest_token_prefix: crate::repositories::projects::ingest_token_prefix(
                 &value.ingest_token,
             ),

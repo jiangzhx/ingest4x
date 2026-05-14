@@ -7,6 +7,10 @@ pub struct Model {
     pub id: i32,
     #[sea_orm(unique)]
     pub ingest_token: String,
+    #[sea_orm(unique)]
+    pub project_key: String,
+    pub auth_mode: String,
+    pub allowed_ips: String,
     pub name: String,
     pub enabled: bool,
     pub created_at: i64,

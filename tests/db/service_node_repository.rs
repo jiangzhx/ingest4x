@@ -71,3 +71,56 @@ async fn service_node_registration_upserts_current_node_and_refreshes_heartbeat(
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0], refreshed);
 }
+
+#[tokio::test]
+async fn delete_service_node_removes_any_node_record() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let repo = ServiceNodeRepository::new(db);
+
+    repo.register_service_node(RegisterServiceNodeInput {
+        node_id: "node-active".to_string(),
+        hostname: None,
+        machine_ip: None,
+        ingest_bind_address: "0.0.0.0:8090".to_string(),
+        management_bind_address: "127.0.0.1:18090".to_string(),
+        version: "0.0.1".to_string(),
+        status: ServiceNodeStatus::Running,
+        metadata_json: None,
+    })
+    .await
+    .expect("active service node should register");
+
+    repo.delete_service_node("node-active")
+        .await
+        .expect("running service node record should delete");
+
+    repo.register_service_node(RegisterServiceNodeInput {
+        node_id: "node-stopped".to_string(),
+        hostname: None,
+        machine_ip: None,
+        ingest_bind_address: "0.0.0.0:8090".to_string(),
+        management_bind_address: "127.0.0.1:18090".to_string(),
+        version: "0.0.1".to_string(),
+        status: ServiceNodeStatus::Stopped,
+        metadata_json: None,
+    })
+    .await
+    .expect("stopped service node should register");
+    repo.delete_service_node("node-stopped")
+        .await
+        .expect("stopped service node should delete");
+
+    let missing_delete = repo
+        .delete_service_node("missing-node")
+        .await
+        .expect_err("missing service node delete should fail");
+    assert!(matches!(missing_delete, sea_orm::DbErr::RecordNotFound(_)));
+
+    let nodes = repo
+        .list_service_nodes()
+        .await
+        .expect("service nodes should list");
+    assert!(nodes.is_empty());
+}

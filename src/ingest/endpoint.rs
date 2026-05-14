@@ -1,15 +1,15 @@
+use crate::repositories::{Project, ProjectAuthMode};
 use crate::services::ProjectRegistryState;
 use crate::settings::{default_max_event_bytes, Settings};
 use crate::sinks::EventSinkState;
 use crate::utils::get_ip;
 use crate::utils::prometheus::{IngestPrometheusMetrics, WalPrometheusMetrics};
 use crate::wal::{new_record, WalWriter};
+use actix_web::http::header::CONTENT_TYPE;
 use actix_web::http::Method;
 use actix_web::web::{Data, Query};
 use actix_web::{web, HttpRequest, HttpResponse};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,17 +27,17 @@ pub async fn ingest(
     settings: Option<Data<Arc<Settings>>>,
 ) -> HttpResponse {
     let started = Instant::now();
-    let body = match request_payload(&req, body, query_params.into_inner()) {
-        Ok(body) => body,
+    let parsed = match request_payload(&req, body, query_params.into_inner()) {
+        Ok(parsed) => parsed,
         Err(issue) => return issue.into_response(),
     };
-    let project = match authenticate_project(&req, &project_registry) {
+    let project = match authenticate_project(&req, &parsed, &project_registry) {
         Ok(project) => project,
         Err(issue) => return issue.into_response(),
     };
 
     if let Some(issue) = reject_if_payload_too_large(
-        body.len(),
+        parsed.body.len(),
         settings
             .as_ref()
             .map(|settings| settings.get_ref().as_ref()),
@@ -45,14 +45,14 @@ pub async fn ingest(
         return issue.into_response();
     }
 
-    let payload = match validate_ingest_payload(&body) {
+    let payload = match validate_ingest_payload(&parsed.body) {
         Ok(payload) => payload,
         Err(issue) => return issue.into_response(),
     };
 
     append_wal_record(
         &req,
-        body,
+        parsed.body,
         project.id,
         payload.event_name.as_str(),
         &wal,
@@ -65,62 +65,205 @@ pub async fn ingest(
     .await
 }
 
-fn request_payload(
-    req: &HttpRequest,
-    body: web::Bytes,
-    query_params: HashMap<String, String>,
-) -> Result<Vec<u8>, IngestIssue> {
-    match *req.method() {
-        Method::GET => decode_query_payload(&query_params),
-        Method::POST => Ok(body.to_vec()),
-        _ => Err(IngestIssue::MethodNotAllowed),
-    }
-}
-
-fn decode_query_payload(query_params: &HashMap<String, String>) -> Result<Vec<u8>, IngestIssue> {
-    let Some(data) = query_params.get("data") else {
-        return Err(IngestIssue::MissingData);
-    };
-
-    match STANDARD.decode(data) {
-        Ok(decoded) => Ok(decoded),
-        Err(err) => Err(IngestIssue::InvalidBase64 {
-            message: err.to_string(),
-        }),
-    }
-}
-
 struct ValidatedIngestPayload {
     event_name: String,
 }
 
+struct ParsedIngestRequest {
+    body: Vec<u8>,
+    body_token: Option<String>,
+}
+
+fn request_payload(
+    req: &HttpRequest,
+    body: web::Bytes,
+    query_params: HashMap<String, String>,
+) -> Result<ParsedIngestRequest, IngestIssue> {
+    match *req.method() {
+        Method::GET => decode_query_payload(&query_params),
+        Method::POST => decode_post_payload(req, body.as_ref()),
+        _ => Err(IngestIssue::MethodNotAllowed),
+    }
+}
+
+fn decode_post_payload(req: &HttpRequest, body: &[u8]) -> Result<ParsedIngestRequest, IngestIssue> {
+    if body.is_empty() {
+        return Err(IngestIssue::MissingRequestBody);
+    }
+
+    if is_form_urlencoded(req) {
+        return decode_form_payload(body);
+    }
+
+    decode_json_payload(body)
+}
+
+fn decode_json_payload(body: &[u8]) -> Result<ParsedIngestRequest, IngestIssue> {
+    let mut json = parse_json(body)?;
+    let body_token = json
+        .as_object_mut()
+        .and_then(|object| remove_string_field(object, "x-ingest-token"));
+
+    Ok(ParsedIngestRequest {
+        body: serde_json::to_vec(&json).map_err(|err| IngestIssue::InvalidJson {
+            message: err.to_string(),
+        })?,
+        body_token,
+    })
+}
+
+fn decode_form_payload(body: &[u8]) -> Result<ParsedIngestRequest, IngestIssue> {
+    let pairs = serde_urlencoded::from_bytes::<Vec<(String, String)>>(body).map_err(|err| {
+        IngestIssue::InvalidForm {
+            message: err.to_string(),
+        }
+    })?;
+    let mut fields = BTreeMap::new();
+    let mut body_token = None;
+
+    for (key, value) in pairs {
+        if key == "x-ingest-token" {
+            body_token = non_empty_token(value);
+        } else {
+            fields.insert(key, value);
+        }
+    }
+
+    Ok(ParsedIngestRequest {
+        body: serde_json::to_vec(&fields_to_json_object(fields)).map_err(|err| {
+            IngestIssue::InvalidJson {
+                message: err.to_string(),
+            }
+        })?,
+        body_token,
+    })
+}
+
+fn decode_query_payload(
+    query_params: &HashMap<String, String>,
+) -> Result<ParsedIngestRequest, IngestIssue> {
+    let mut fields = BTreeMap::new();
+    for (key, value) in query_params {
+        if key == "x-ingest-token" {
+            return Err(IngestIssue::QueryIngestTokenNotSupported);
+        }
+        fields.insert(key.to_string(), value.to_string());
+    }
+
+    Ok(ParsedIngestRequest {
+        body: serde_json::to_vec(&fields_to_json_object(fields)).map_err(|err| {
+            IngestIssue::InvalidJson {
+                message: err.to_string(),
+            }
+        })?,
+        body_token: None,
+    })
+}
+
+fn parse_json(body: &[u8]) -> Result<Value, IngestIssue> {
+    serde_json::from_slice::<Value>(body).map_err(|err| IngestIssue::InvalidJson {
+        message: err.to_string(),
+    })
+}
+
+fn remove_string_field(object: &mut Map<String, Value>, field: &str) -> Option<String> {
+    object
+        .remove(field)
+        .and_then(|value| value.as_str().map(str::to_string))
+        .and_then(non_empty_token)
+}
+
+fn non_empty_token(value: String) -> Option<String> {
+    let token = value.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
+
+fn fields_to_json_object(fields: BTreeMap<String, String>) -> Value {
+    Value::Object(
+        fields
+            .into_iter()
+            .map(|(key, value)| (key, Value::String(value)))
+            .collect(),
+    )
+}
+
+fn is_form_urlencoded(req: &HttpRequest) -> bool {
+    req.headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .is_some_and(|content_type| {
+            content_type.eq_ignore_ascii_case("application/x-www-form-urlencoded")
+        })
+}
+
 fn authenticate_project(
     req: &HttpRequest,
+    parsed: &ParsedIngestRequest,
     project_registry: &ProjectRegistryState,
 ) -> Result<crate::repositories::Project, IngestIssue> {
-    let Some(token) = ingest_token_from_request(req) else {
-        return Err(IngestIssue::MissingIngestToken);
-    };
-    project_registry
-        .authenticate(token)
-        .ok_or(IngestIssue::InvalidIngestToken)
+    let project_key = req
+        .match_info()
+        .get("project_key")
+        .ok_or(IngestIssue::ProjectNotFound)?;
+    let project = project_registry
+        .project_by_key(project_key)
+        .ok_or(IngestIssue::ProjectNotFound)?;
+    authorize_project(req, parsed, &project)?;
+    Ok(project)
 }
 
 fn ingest_token_from_request(req: &HttpRequest) -> Option<&str> {
-    if let Some(value) = req.headers().get("x-ingest-token") {
-        return value
-            .to_str()
-            .ok()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-    }
-
-    let value = req.headers().get("authorization")?.to_str().ok()?.trim();
-    value
-        .strip_prefix("Bearer ")
-        .or_else(|| value.strip_prefix("bearer "))
+    req.headers()
+        .get("x-ingest-token")
+        .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+fn request_ingest_token(
+    req: &HttpRequest,
+    parsed: &ParsedIngestRequest,
+) -> Result<Option<String>, IngestIssue> {
+    let header_token = ingest_token_from_request(req).map(str::to_string);
+    match (header_token, parsed.body_token.clone()) {
+        (Some(header), Some(body)) if header != body => Err(IngestIssue::ConflictingIngestToken),
+        (Some(header), _) => Ok(Some(header)),
+        (None, Some(body)) => Ok(Some(body)),
+        (None, None) => Ok(None),
+    }
+}
+
+fn authorize_project(
+    req: &HttpRequest,
+    parsed: &ParsedIngestRequest,
+    project: &Project,
+) -> Result<(), IngestIssue> {
+    if !project.allowed_ips.is_empty() {
+        let ip = get_ip(req).unwrap_or_default();
+        if !project.allowed_ips.iter().any(|allowed| allowed == &ip) {
+            return Err(IngestIssue::IpNotAllowed);
+        }
+    }
+
+    match project.auth_mode {
+        ProjectAuthMode::Token => {
+            let Some(token) = request_ingest_token(req, parsed)? else {
+                return Err(IngestIssue::MissingIngestToken);
+            };
+            if token == project.ingest_token {
+                Ok(())
+            } else {
+                Err(IngestIssue::InvalidIngestToken)
+            }
+        }
+        ProjectAuthMode::Public => Ok(()),
+    }
 }
 
 fn validate_ingest_payload(body: &[u8]) -> Result<ValidatedIngestPayload, IngestIssue> {
@@ -154,10 +297,14 @@ enum IngestIssue {
     // Internal `/ingest` error codes are stable for logs/metrics; HTTP responses
     // intentionally keep the current compatibility surface.
     MethodNotAllowed,
-    MissingData,
+    ProjectNotFound,
+    MissingRequestBody,
     MissingIngestToken,
     InvalidIngestToken,
-    InvalidBase64 { message: String },
+    ConflictingIngestToken,
+    QueryIngestTokenNotSupported,
+    IpNotAllowed,
+    InvalidForm { message: String },
     PayloadTooLarge,
     InvalidJson { message: String },
     WalAppendFailed,
@@ -167,10 +314,14 @@ impl IngestIssue {
     fn code(&self) -> &'static str {
         match self {
             Self::MethodNotAllowed => "ingest_method_not_allowed",
-            Self::MissingData => "ingest_missing_data",
+            Self::ProjectNotFound => "ingest_project_not_found",
+            Self::MissingRequestBody => "ingest_missing_request_body",
             Self::MissingIngestToken => "ingest_missing_token",
             Self::InvalidIngestToken => "ingest_invalid_token",
-            Self::InvalidBase64 { .. } => "ingest_invalid_base64",
+            Self::ConflictingIngestToken => "ingest_conflicting_token",
+            Self::QueryIngestTokenNotSupported => "ingest_query_token_not_supported",
+            Self::IpNotAllowed => "ingest_ip_not_allowed",
+            Self::InvalidForm { .. } => "ingest_invalid_form",
             Self::PayloadTooLarge => "ingest_payload_too_large",
             Self::InvalidJson { .. } => "ingest_invalid_json",
             Self::WalAppendFailed => "ingest_wal_append_failed",
@@ -180,11 +331,19 @@ impl IngestIssue {
     fn into_response(self) -> HttpResponse {
         match self {
             Self::MethodNotAllowed => HttpResponse::MethodNotAllowed().finish(),
-            Self::MissingData => HttpResponse::BadRequest().body("missing query param: data"),
+            Self::ProjectNotFound => HttpResponse::NotFound().body("project not found"),
+            Self::MissingRequestBody => HttpResponse::BadRequest().body("missing request body"),
             Self::MissingIngestToken => HttpResponse::Unauthorized().body("missing ingest token"),
             Self::InvalidIngestToken => HttpResponse::Unauthorized().body("invalid ingest token"),
-            Self::InvalidBase64 { message } => {
-                HttpResponse::BadRequest().body(format!("invalid base64 data: {message}"))
+            Self::ConflictingIngestToken => {
+                HttpResponse::Unauthorized().body("conflicting ingest token")
+            }
+            Self::QueryIngestTokenNotSupported => {
+                HttpResponse::BadRequest().body("query ingest token is not supported")
+            }
+            Self::IpNotAllowed => HttpResponse::Forbidden().body("ip not allowed"),
+            Self::InvalidForm { message } => {
+                HttpResponse::BadRequest().body(format!("invalid form payload: {message}"))
             }
             Self::PayloadTooLarge => HttpResponse::PayloadTooLarge().body("Payload Too Large"),
             Self::InvalidJson { message } => {

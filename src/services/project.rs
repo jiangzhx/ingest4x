@@ -9,33 +9,35 @@ use std::time::Duration;
 
 pub struct ProjectRegistryState {
     repository: ProjectRepository,
-    projects: RwLock<HashMap<String, Project>>,
+    projects_by_token: RwLock<HashMap<String, Project>>,
+    projects_by_key: RwLock<HashMap<String, Project>>,
     version: AtomicU64,
     refresh_lock: AsyncMutex<()>,
 }
 
 impl ProjectRegistryState {
     pub async fn load(repository: ProjectRepository) -> ProjectRepositoryResult<Self> {
-        let (projects, version) = load_snapshot(&repository).await?;
+        let (projects_by_token, projects_by_key, version) = load_snapshot(&repository).await?;
 
         Ok(Self {
             repository,
-            projects: RwLock::new(projects),
+            projects_by_token: RwLock::new(projects_by_token),
+            projects_by_key: RwLock::new(projects_by_key),
             version: AtomicU64::new(version),
             refresh_lock: AsyncMutex::new(()),
         })
     }
 
-    pub fn authenticate(&self, ingest_token: &str) -> Option<Project> {
-        self.projects
+    pub fn project_by_key(&self, project_key: &str) -> Option<Project> {
+        self.projects_by_key
             .read()
             .expect("project registry read lock poisoned")
-            .get(ingest_token.trim())
+            .get(project_key.trim())
             .cloned()
     }
 
     pub fn contains_project_id(&self, project_id: i32) -> bool {
-        self.projects
+        self.projects_by_token
             .read()
             .expect("project registry read lock poisoned")
             .values()
@@ -51,18 +53,27 @@ impl ProjectRegistryState {
             return Ok(false);
         }
 
-        let (projects, version) = load_snapshot(&self.repository).await?;
+        let (projects_by_token, projects_by_key, version) = load_snapshot(&self.repository).await?;
 
-        Ok(self.apply_snapshot_if_newer(projects, version))
+        Ok(self.apply_snapshot_if_newer(projects_by_token, projects_by_key, version))
     }
 
-    fn apply_snapshot_if_newer(&self, projects: HashMap<String, Project>, version: u64) -> bool {
+    fn apply_snapshot_if_newer(
+        &self,
+        projects_by_token: HashMap<String, Project>,
+        projects_by_key: HashMap<String, Project>,
+        version: u64,
+    ) -> bool {
         if version <= self.version.load(Ordering::Acquire) {
             return false;
         }
 
-        let mut guard = self
-            .projects
+        let mut token_guard = self
+            .projects_by_token
+            .write()
+            .expect("project registry write lock poisoned");
+        let mut key_guard = self
+            .projects_by_key
             .write()
             .expect("project registry write lock poisoned");
 
@@ -70,7 +81,8 @@ impl ProjectRegistryState {
             return false;
         }
 
-        *guard = projects;
+        *token_guard = projects_by_token;
+        *key_guard = projects_by_key;
         self.version.store(version, Ordering::Release);
         true
     }
@@ -93,20 +105,23 @@ pub fn spawn_project_registry_refresh_loop(
 
 async fn load_snapshot(
     repository: &ProjectRepository,
-) -> ProjectRepositoryResult<(HashMap<String, Project>, u64)> {
+) -> ProjectRepositoryResult<(HashMap<String, Project>, HashMap<String, Project>, u64)> {
     loop {
         let version_before = repository.projects_version().await?;
         let projects = repository.list_enabled_projects().await?;
         let version_after = repository.projects_version().await?;
 
         if version_before == version_after {
-            return Ok((
-                projects
-                    .into_iter()
-                    .map(|project| (project.ingest_token.clone(), project))
-                    .collect(),
-                version_after,
-            ));
+            let projects_by_token = projects
+                .iter()
+                .cloned()
+                .map(|project| (project.ingest_token.clone(), project))
+                .collect();
+            let projects_by_key = projects
+                .into_iter()
+                .map(|project| (project.project_key.clone(), project))
+                .collect();
+            return Ok((projects_by_token, projects_by_key, version_after));
         }
     }
 }
@@ -145,6 +160,9 @@ mod tests {
             Project {
                 id: 2,
                 ingest_token: "igx_app_b".to_string(),
+                project_key: "app-b".to_string(),
+                auth_mode: crate::repositories::ProjectAuthMode::Token,
+                allowed_ips: Vec::new(),
                 name: "App B".to_string(),
                 enabled: true,
                 created_at: 0,
@@ -156,6 +174,9 @@ mod tests {
             Project {
                 id: 3,
                 ingest_token: "igx_app_c".to_string(),
+                project_key: "app-c".to_string(),
+                auth_mode: crate::repositories::ProjectAuthMode::Token,
+                allowed_ips: Vec::new(),
                 name: "App C".to_string(),
                 enabled: true,
                 created_at: 0,
@@ -169,7 +190,12 @@ mod tests {
             let registry = registry.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                registry.apply_snapshot_if_newer(older_snapshot, 2);
+                let older_key_snapshot = older_snapshot
+                    .values()
+                    .cloned()
+                    .map(|project| (project.project_key.clone(), project))
+                    .collect();
+                registry.apply_snapshot_if_newer(older_snapshot, older_key_snapshot, 2);
             })
         };
         let apply_newer = {
@@ -177,7 +203,12 @@ mod tests {
             let registry = registry.clone();
             std::thread::spawn(move || {
                 barrier.wait();
-                registry.apply_snapshot_if_newer(newer_snapshot, 3);
+                let newer_key_snapshot = newer_snapshot
+                    .values()
+                    .cloned()
+                    .map(|project| (project.project_key.clone(), project))
+                    .collect();
+                registry.apply_snapshot_if_newer(newer_snapshot, newer_key_snapshot, 3);
             })
         };
 
@@ -189,8 +220,8 @@ mod tests {
             .join()
             .expect("newer snapshot task should finish");
 
-        assert!(registry.authenticate("igx_app_b").is_none());
-        assert!(registry.authenticate("igx_app_c").is_some());
+        assert!(registry.project_by_key("App-B").is_none());
+        assert!(registry.project_by_key("app-c").is_some());
         assert_eq!(registry.version.load(Ordering::Acquire), 3);
     }
 }

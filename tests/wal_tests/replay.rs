@@ -87,7 +87,7 @@ dir = "{}"
     });
 
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(serde_json::to_vec(&input_payload).expect("serialize payload"))
         .insert_header(("content-type", "application/json"))
@@ -240,7 +240,7 @@ dir = "{}"
     }))
     .await;
     let req = test::TestRequest::post()
-        .uri("/ingest")
+        .uri("/ingest/APPID")
         .insert_header(("x-ingest-token", "igx_APPID"))
         .set_payload(
             serde_json::to_vec(&json!({
@@ -1282,7 +1282,7 @@ wal_segment_max_bytes = 16
 
     for installid in ["iid-clean-1", "iid-clean-2"] {
         let req = test::TestRequest::post()
-            .uri("/ingest")
+            .uri("/ingest/APPID")
             .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(
                 serde_json::to_vec(&json!({

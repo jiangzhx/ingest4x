@@ -1,16 +1,16 @@
 # WAL
 
-WAL（Write-Ahead Logging）是 ingest4x 的持久化入口层。`/ingest` 接收事件后，不会在请求线程执行规则、processor 或下游 sink 投递，而是先将原始事件写入本地 WAL，再由后台重放线程读取记录并执行业务处理与 sink 投递。
+WAL（Write-Ahead Logging）是 ingest4x 的持久化入口层。`/ingest/{project_key}` 接收事件后，不会在请求线程执行规则、processor 或下游 sink 投递，而是先将事件写入本地 WAL，再由后台重放线程读取记录并执行业务处理与 sink 投递。
 
-这将 ingress ACK 与下游投递解耦。只要事件已可靠写入 WAL，即使 Kafka/stdout/processor 暂时故障，`/ingest` 仍可返回成功；后续重放会重试或将错误记录隔离。
+这将 ingress ACK 与下游投递解耦。只要事件已可靠写入 WAL，即使 Kafka/stdout/processor 暂时故障，`/ingest/{project_key}` 仍可返回成功；后续重放会重试或将错误记录隔离。
 
 ## 端到端路径
 
 ```text
 client
-  -> /ingest
-  -> token auth
-  -> payload size/json check
+  -> /ingest/{project_key}
+  -> project auth
+  -> payload decode/size check
   -> WAL append
   -> 200
 
@@ -27,14 +27,14 @@ background replay
 
 关键点：
 
-- `/ingest` 仅支持单个 JSON 对象，不支持数组批量。
+- `/ingest/{project_key}` 每次请求只接收一个事件，不支持数组批量。HTTP 层支持 JSON body、form body 和 GET query 字段，详见 [接入协议](ingest-protocol.md)。
 - WAL 记录存储原始 payload 与请求元数据。
 - 字段归一化、校验、错误标记、路由在重放阶段发生，而不是 append 阶段。
 - 每个 event sink 拥有独立 checkpoint；某个 sink 卡住不会回滚其他 sink 的 checkpoint。
 
 ## ACK 语义
 
-默认是 `wal.no_sync = false`。此模式下，`/ingest` 仅在 WAL append 成功且写入路径等待当前 segment 的 `sync_data()` 成功后返回 `200`。
+默认是 `wal.no_sync = false`。此模式下，`/ingest/{project_key}` 仅在 WAL append 成功且写入路径等待当前 segment 的 `sync_data()` 成功后返回 `200`。
 
 ```toml
 [wal]
@@ -56,14 +56,14 @@ flush_max_records = 1000
 | `record_id` | 接收时生成的记录 ID，如 `wal-<received_at_ms>-<sequence>` |
 | `lsn` | append 阶段生成的递增逻辑序列号 |
 | `node_id` | 持久化在 WAL 目录中的服务节点 ID |
-| `project_id` | 通过 token 解析出的项目 ID |
+| `project_id` | 通过 `{project_key}` 解析并完成鉴权后的项目 ID |
 | `received_at_ms` | ingress 接收时间戳 |
 | `method` / `path` / `query` | 原始 HTTP 请求信息 |
 | `remote_addr` | 远端 socket 地址 |
 | `headers` | 过滤敏感鉴权头后的 request header |
-| `body` | 原始事件 JSON 字节 |
+| `body` | 写入 WAL 的事件 JSON 字节 |
 
-ingest token 不写入 WAL headers。`authorization` 与 `x-ingest-token` 在 header 生成时会被过滤。
+ingest token 不写入 WAL headers 或事件 payload。`x-ingest-token` 在 header 生成时会被过滤。
 
 `received_at_ms` 会进入 processor 的 `request` 上下文；它是接收时间戳，不是重放时间或客户端事件时间戳。
 
@@ -113,7 +113,7 @@ WAL 从 segment `1` 开始。每次 append 分配：
 wal_segment_max_bytes = 134217728
 ```
 
-写入前会检查磁盘剩余空间；若 `min_free_bytes` 非零且写入后剩余空间低于阈值，append 失败，`/ingest` 返回 `503`。
+写入前会检查磁盘剩余空间；若 `min_free_bytes` 非零且写入后剩余空间低于阈值，append 失败，`/ingest/{project_key}` 返回 `503`。
 
 ## 重放
 
@@ -272,7 +272,7 @@ WAL 提供“ingress + replay”链路内的持久性保证，不是完整的业
 
 | 现象 | 优先排查 |
 | --- | --- |
-| `/ingest` 返回 `503` | WAL 目录权限、磁盘空间、`wal.lock`、`wal_append_errors_total` |
+| `/ingest/{project_key}` 返回 `503` | WAL 目录权限、磁盘空间、`wal.lock`、`wal_append_errors_total` |
 | `/healthz` 显示 `wal_ready=false` | 检查 `wal.min_free_bytes` 与 WAL 可用空间 |
 | 重放堆积 | 关注 `wal_replay_lag_lsn`、sink 连通性、checkpoint 更新时间 |
 | Sink 未消费历史 | 检查 `auto_offset_reset` 与 checkpoint 是否已移动到尾部 |

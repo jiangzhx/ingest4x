@@ -116,8 +116,7 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
 
     register_current_service_node(&app_state, ServiceNodeStatus::Running).await?;
     spawn_service_node_heartbeat_loop(
-        app_state.service_node_repository.clone(),
-        app_state.wal.node_id(),
+        app_state.clone(),
         project_registry_refresh_interval(&settings),
     );
 
@@ -245,22 +244,35 @@ async fn register_current_service_node(
 }
 
 fn spawn_service_node_heartbeat_loop(
-    repository: Data<ServiceNodeRepository>,
-    node_id: String,
+    state: AppState,
     interval: Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let node_id = state.wal.node_id();
+
         loop {
             tokio::time::sleep(interval).await;
 
-            match repository.mark_service_node_seen(&node_id).await {
+            match state
+                .service_node_repository
+                .mark_service_node_seen(&node_id)
+                .await
+            {
                 Ok(Some(_)) => {}
                 Ok(None) => {
                     warn!(
                         node_id = node_id,
-                        "service node heartbeat skipped because current run is no longer active"
+                        "service node heartbeat found no current record; re-registering"
                     );
-                    break;
+                    if let Err(error) =
+                        register_current_service_node(&state, ServiceNodeStatus::Running).await
+                    {
+                        warn!(
+                            node_id = node_id,
+                            error = %error,
+                            "service node re-registration failed"
+                        );
+                    }
                 }
                 Err(error) => {
                     warn!(
@@ -402,7 +414,9 @@ fn wal_replay_retry_delay(consecutive_errors: u32) -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::{register_current_service_node, wal_replay_retry_delay};
+    use super::{
+        register_current_service_node, spawn_service_node_heartbeat_loop, wal_replay_retry_delay,
+    };
     use crate::repositories::ServiceNodeStatus;
     use crate::settings::{
         CheckpointSettings, IngestSettings, LoggingSettings, ManagementSettings, Settings,
@@ -464,6 +478,63 @@ mod tests {
         assert_eq!(nodes[0].status, ServiceNodeStatus::Running);
         assert_eq!(nodes[0].ingest_bind_address, "127.0.0.1:8090");
         assert_eq!(nodes[0].management_bind_address, "127.0.0.1:18090");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_re_registers_current_node_after_admin_cleanup() {
+        let temp = tempdir().expect("temp dir");
+        let settings = Arc::new(Settings {
+            ingest: IngestSettings {
+                bind_address: "127.0.0.1:8090".to_string(),
+                max_event_bytes: 1024,
+            },
+            logging: LoggingSettings::default(),
+            management: ManagementSettings {
+                bind_address: "127.0.0.1:18090".to_string(),
+                admin_password: None,
+            },
+            database: None,
+            wal: WalSettings {
+                dir: temp.path().join("wal").display().to_string(),
+                node_id: Some("node-cleaned-up".to_string()),
+                flush_max_interval: "10ms".to_string(),
+                flush_max_records: 1000,
+                no_sync: false,
+                wal_segment_max_bytes: 1024 * 1024,
+                min_free_bytes: 0,
+                checkpoint: CheckpointSettings::default(),
+            },
+        });
+        let app_state = super::build_app_state(settings)
+            .await
+            .expect("app state should build");
+        register_current_service_node(&app_state, ServiceNodeStatus::Running)
+            .await
+            .expect("service node should register");
+        app_state
+            .service_node_repository
+            .delete_service_node("node-cleaned-up")
+            .await
+            .expect("service node cleanup should delete current node record");
+
+        let heartbeat =
+            spawn_service_node_heartbeat_loop(app_state.clone(), Duration::from_millis(1));
+
+        for _ in 0..50 {
+            let nodes = app_state
+                .service_node_repository
+                .list_service_nodes()
+                .await
+                .expect("service nodes should list");
+            if nodes.iter().any(|node| node.node_id == "node-cleaned-up") {
+                heartbeat.abort();
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+
+        heartbeat.abort();
+        panic!("heartbeat should re-register a cleaned-up current node");
     }
 }
 

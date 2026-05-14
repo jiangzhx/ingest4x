@@ -5,6 +5,7 @@
 ## 目录
 
 - [项目说明（英文）](../../README.md)
+- [接入协议](ingest-protocol.md)
 - [WAL、checkpoint 与重放](wal.md)
 - [事件处理](event-processing/)
 - [管理端与 API](admin-api.md)
@@ -17,7 +18,7 @@
 
 ```text
 业务事件
-  -> /ingest
+  -> /ingest/{project_key}
   -> WAL
   -> 校验
   -> 转换与投递

@@ -1,13 +1,36 @@
-import { Alert, Button, Result, Space, Spin, Typography } from "antd";
+import { useState } from "react";
+import { App as AntApp, Alert, Button, Result, Space, Spin, Typography } from "antd";
 import { ServiceNodesTable } from "./ServiceNodesTable";
-import { useServiceNodesQuery } from "./hooks";
+import { useDeleteServiceNodeMutation, useServiceNodesQuery } from "./hooks";
+import type { ServiceNode } from "./types";
+import { getErrorMessage } from "./utils";
 
 export function ServiceNodesPage() {
+  const { message } = AntApp.useApp();
   const serviceNodesQuery = useServiceNodesQuery();
+  const deleteServiceNodeMutation = useDeleteServiceNodeMutation();
+  const [deletingNodeId, setDeletingNodeId] = useState<string | null>(null);
   const nodes = serviceNodesQuery.data ?? [];
   const hasLoadedNodes = serviceNodesQuery.data !== undefined;
   const showInitialError = serviceNodesQuery.isError && !hasLoadedNodes;
   const showRefreshError = serviceNodesQuery.isError && hasLoadedNodes;
+  const isDeletePending = deleteServiceNodeMutation.isPending;
+
+  const handleDeleteServiceNode = async (node: ServiceNode) => {
+    if (deletingNodeId) {
+      return;
+    }
+
+    setDeletingNodeId(node.node_id);
+    try {
+      await deleteServiceNodeMutation.mutateAsync(node.node_id);
+      message.success(`Service node ${node.node_id} cleaned up`);
+    } catch (error) {
+      message.error(getErrorMessage(error, "Failed to clean up service node."));
+    } finally {
+      setDeletingNodeId(null);
+    }
+  };
 
   if (serviceNodesQuery.isLoading) {
     return <Spin tip="Loading service nodes..." />;
@@ -58,7 +81,12 @@ export function ServiceNodesPage() {
         />
       ) : null}
 
-      <ServiceNodesTable nodes={nodes} />
+      <ServiceNodesTable
+        nodes={nodes}
+        deletingNodeId={deletingNodeId}
+        actionsDisabled={isDeletePending}
+        onDelete={handleDeleteServiceNode}
+      />
     </Space>
   );
 }

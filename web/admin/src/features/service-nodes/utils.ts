@@ -46,3 +46,14 @@ export function getHeartbeatAge(lastSeenAt: number, now = Date.now()): string {
 
   return `${Math.floor(ageMinutes / 60)}h`;
 }
+
+export function getErrorMessage(
+  error: unknown,
+  fallback = "Request failed, please try again later.",
+): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
+}

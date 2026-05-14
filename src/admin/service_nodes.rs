@@ -1,7 +1,8 @@
 use crate::repositories::{ServiceNode, ServiceNodeRepository};
 use crate::settings::Settings;
-use actix_web::web::{self, Data, ServiceConfig};
+use actix_web::web::{self, Data, Path, ServiceConfig};
 use actix_web::HttpResponse;
+use sea_orm::DbErr;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -25,14 +26,18 @@ struct ServiceNodeResponse {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(list_service_nodes),
+    paths(list_service_nodes, delete_service_node),
     components(schemas(ServiceNodeResponse)),
     tags((name = "admin.service_nodes", description = "Admin service node endpoints"))
 )]
 pub struct AdminApiDoc;
 
 pub fn configure(cfg: &mut ServiceConfig) {
-    cfg.route("/service-nodes", web::get().to(list_service_nodes));
+    cfg.route("/service-nodes", web::get().to(list_service_nodes))
+        .route(
+            "/service-nodes/{node_id}",
+            web::delete().to(delete_service_node),
+        );
 }
 
 #[utoipa::path(
@@ -56,6 +61,30 @@ async fn list_service_nodes(
                 .map(|node| ServiceNodeResponse::from_node(node, stale_after_ms))
                 .collect::<Vec<_>>(),
         ),
+        Err(error) => HttpResponse::InternalServerError().body(error.to_string()),
+    }
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/admin/service-nodes/{node_id}",
+    tag = "admin.service_nodes",
+    params(
+        ("node_id" = String, Path, description = "Service node id")
+    ),
+    responses(
+        (status = 204, description = "Service node deleted"),
+        (status = 404, description = "Service node not found", body = String),
+        (status = 500, description = "Repository failure", body = String)
+    )
+)]
+async fn delete_service_node(
+    node_id: Path<String>,
+    repository: Data<ServiceNodeRepository>,
+) -> HttpResponse {
+    match repository.delete_service_node(&node_id).await {
+        Ok(()) => HttpResponse::NoContent().finish(),
+        Err(DbErr::RecordNotFound(message)) => HttpResponse::NotFound().body(message),
         Err(error) => HttpResponse::InternalServerError().body(error.to_string()),
     }
 }

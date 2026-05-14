@@ -17,8 +17,9 @@ pub use processors::{
     ValidateProcessorScriptInput, ValidateProcessorScriptModuleInput,
 };
 pub use projects::{
-    generate_ingest_token, CreateProjectInput, Project, ProjectRepository, ProjectRepositoryError,
-    ProjectRepositoryResult, UpdateProjectInput,
+    generate_ingest_token, CreateProjectInput, Project, ProjectAuthMode, ProjectRepository,
+    ProjectRepositoryError, ProjectRepositoryResult, UpdateProjectIngestSettingsInput,
+    UpdateProjectInput,
 };
 pub use rules::{
     CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput, ProjectRuleSet, Rule,

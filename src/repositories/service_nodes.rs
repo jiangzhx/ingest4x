@@ -162,6 +162,20 @@ impl ServiceNodeRepository {
 
         Ok(nodes.into_iter().map(Into::into).collect())
     }
+
+    pub async fn delete_service_node(&self, node_id: &str) -> ServiceNodeRepositoryResult<()> {
+        let result = service_nodes::Entity::delete_by_id(node_id.to_string())
+            .exec(&self.db)
+            .await?;
+
+        if result.rows_affected == 0 {
+            return Err(DbErr::RecordNotFound(format!(
+                "service node '{node_id}' not found"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 fn current_timestamp() -> i64 {

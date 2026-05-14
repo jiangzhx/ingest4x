@@ -139,6 +139,71 @@ async fn list_service_nodes_marks_old_running_nodes_as_stale() {
 }
 
 #[actix_rt::test]
+async fn delete_service_node_removes_any_node_record() {
+    let app_state = create_app_state().await;
+    app_state
+        .service_node_repository()
+        .register_service_node(RegisterServiceNodeInput {
+            node_id: "node-stale".to_string(),
+            hostname: None,
+            machine_ip: None,
+            ingest_bind_address: "0.0.0.0:8090".to_string(),
+            management_bind_address: "127.0.0.1:18090".to_string(),
+            version: "0.0.1".to_string(),
+            status: ServiceNodeStatus::Stopped,
+            metadata_json: None,
+        })
+        .await
+        .expect("stopped candidate should register");
+    app_state
+        .service_node_repository()
+        .register_service_node(RegisterServiceNodeInput {
+            node_id: "node-active".to_string(),
+            hostname: None,
+            machine_ip: None,
+            ingest_bind_address: "0.0.0.0:8090".to_string(),
+            management_bind_address: "127.0.0.1:18090".to_string(),
+            version: "0.0.1".to_string(),
+            status: ServiceNodeStatus::Running,
+            metadata_json: None,
+        })
+        .await
+        .expect("active node should register");
+    let app = test::init_service(App::new().configure(|cfg| {
+        server::configure_private_app(cfg, app_state.clone());
+    }))
+    .await;
+
+    let active_delete = test::call_service(
+        &app,
+        with_admin_password(test::TestRequest::delete())
+            .uri("/api/admin/service-nodes/node-active")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(active_delete.status(), StatusCode::NO_CONTENT);
+
+    let stale_delete = test::call_service(
+        &app,
+        with_admin_password(test::TestRequest::delete())
+            .uri("/api/admin/service-nodes/node-stale")
+            .to_request(),
+    )
+    .await;
+    assert_eq!(stale_delete.status(), StatusCode::NO_CONTENT);
+
+    let list_response = test::call_service(
+        &app,
+        with_admin_password(test::TestRequest::get())
+            .uri("/api/admin/service-nodes")
+            .to_request(),
+    )
+    .await;
+    let body: Value = test::read_body_json(list_response).await;
+    assert_eq!(body, json!([]));
+}
+
+#[actix_rt::test]
 async fn openapi_json_includes_admin_service_nodes_path() {
     let app_state = create_app_state().await;
     let app = test::init_service(App::new().configure(|cfg| {
@@ -161,6 +226,11 @@ async fn openapi_json_includes_admin_service_nodes_path() {
     assert_eq!(
         body["paths"]["/api/admin/service-nodes"]["get"]["responses"]["200"]["description"],
         "List service nodes"
+    );
+    assert_eq!(
+        body["paths"]["/api/admin/service-nodes/{node_id}"]["delete"]["responses"]["204"]
+            ["description"],
+        "Service node deleted"
     );
 }
 

@@ -33,13 +33,25 @@ export function getErrorMessage(
   return fallback;
 }
 
+export function parseAllowedIps(value?: string): string[] {
+  return (value ?? "")
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function toCreateProjectPayload(
   project: ProjectFormValues,
 ): CreateProjectPayload {
-  const ingestToken = project.ingest_token?.trim();
+  const authMode = project.auth_mode;
+  const ingestToken =
+    authMode === "token" ? project.ingest_token?.trim() : undefined;
   return {
     name: project.name.trim(),
+    project_key: project.project_key.trim(),
     enabled: project.enabled,
+    auth_mode: authMode,
+    allowed_ips: parseAllowedIps(project.allowed_ips_text),
     ...(ingestToken ? { ingest_token: ingestToken } : {}),
   };
 }
@@ -47,12 +59,15 @@ export function toCreateProjectPayload(
 export function toUpdateProjectPayload(
   project: ProjectFormValues,
 ): UpdateProjectPayload {
-  const ingestToken = project.ingest_token?.trim();
+  const ingestToken =
+    project.auth_mode === "token" ? project.ingest_token?.trim() : undefined;
 
   return {
     name: project.name.trim(),
+    project_key: project.project_key.trim(),
     enabled: project.enabled,
+    auth_mode: project.auth_mode,
+    allowed_ips: parseAllowedIps(project.allowed_ips_text),
     ...(ingestToken ? { ingest_token: ingestToken } : {}),
-    ...(project.regenerate_ingest_token ? { regenerate_ingest_token: true } : {}),
   };
 }

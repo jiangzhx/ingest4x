@@ -73,7 +73,10 @@ async fn create_then_list_projects() {
             created,
             json!({
                 "name": "Admin App",
+                "project_key": "Admin-App",
                 "enabled": true,
+                "auth_mode": "token",
+                "allowed_ips": [],
                 "id": created["id"],
                 "ingest_token": "igx_admin_app",
                 "ingest_token_prefix": "igx_admin_ap...",
@@ -141,6 +144,45 @@ async fn update_changes_name_and_enabled() {
         assert_eq!(updated["id"], project["id"]);
         assert_eq!(updated["name"], "Updated Name");
         assert_eq!(updated["enabled"], false);
+    })
+    .await;
+}
+
+#[actix_rt::test]
+async fn update_project_key_conflict_rolls_back_other_fields() {
+    with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
+        let app = create_app_with_mock_projects("").await;
+        let first = create_project_for_test(&app, "APPID1", "First App").await;
+        let second = create_project_for_test(&app, "APPID2", "Second App").await;
+
+        let response = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::put())
+                .uri(format!("/api/admin/projects/{}", first["id"]).as_str())
+                .set_json(json!({
+                    "name": "Renamed After Conflict",
+                    "project_key": second["project_key"]
+                }))
+                .to_request(),
+        )
+        .await;
+        let status = response.status();
+
+        assert_eq!(status, StatusCode::CONFLICT);
+
+        let detail_response = test::call_service(
+            &app,
+            with_admin_password(test::TestRequest::get())
+                .uri(format!("/api/admin/projects/{}", first["id"]).as_str())
+                .to_request(),
+        )
+        .await;
+        let detail_status = detail_response.status();
+        let detailed: Value = test::read_body_json(detail_response).await;
+
+        assert_eq!(detail_status, StatusCode::OK);
+        assert_eq!(detailed["name"], first["name"]);
+        assert_eq!(detailed["project_key"], first["project_key"]);
     })
     .await;
 }
@@ -234,7 +276,7 @@ async fn admin_create_is_visible_to_ingest_immediately() {
         let ingest_before = test::call_service(
             &public_app,
             test::TestRequest::post()
-                .uri("/ingest")
+                .uri("/ingest/Admin-App")
                 .insert_header(("x-ingest-token", "igx_admin_app"))
                 .set_json(valid_ingest_payload("admin-app"))
                 .to_request(),
@@ -243,10 +285,10 @@ async fn admin_create_is_visible_to_ingest_immediately() {
         let ingest_before_status = ingest_before.status();
         let ingest_before_body = test::read_body(ingest_before).await;
 
-        assert_eq!(ingest_before_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(ingest_before_status, StatusCode::NOT_FOUND);
         assert_eq!(
             std::str::from_utf8(ingest_before_body.as_ref()).unwrap(),
-            "invalid ingest token"
+            "project not found"
         );
 
         let create_response = test::call_service(
@@ -267,7 +309,7 @@ async fn admin_create_is_visible_to_ingest_immediately() {
         let ingest_after = test::call_service(
             &public_app,
             test::TestRequest::post()
-                .uri("/ingest")
+                .uri("/ingest/Admin-App")
                 .insert_header(("x-ingest-token", "igx_admin_app"))
                 .set_json(valid_ingest_payload("admin-app"))
                 .to_request(),
@@ -281,6 +323,59 @@ async fn admin_create_is_visible_to_ingest_immediately() {
             std::str::from_utf8(ingest_after_body.as_ref()).unwrap(),
             "200"
         );
+    })
+    .await;
+}
+
+#[actix_rt::test]
+async fn admin_create_can_configure_public_mode_with_ip_allowlist_for_path_ingest() {
+    with_admin_password_env(Some(TEST_ADMIN_PASSWORD), || async {
+        let app_state = create_app_state("").await;
+        let public_app = test::init_service(App::new().configure(|cfg| {
+            server::configure_public_app(cfg, app_state.clone());
+        }))
+        .await;
+        let private_app = test::init_service(App::new().configure(|cfg| {
+            server::configure_private_app(cfg, app_state.clone());
+        }))
+        .await;
+
+        let create_response = test::call_service(
+            &private_app,
+            with_admin_password(test::TestRequest::post())
+                .uri("/api/admin/projects")
+                .set_json(json!({
+                    "name": "Public IP App",
+                    "project_key": "public-ip-app",
+                    "enabled": true,
+                    "auth_mode": "public",
+                    "allowed_ips": ["8.8.8.8"],
+                    "ingest_token": "igx_public_ip_app"
+                }))
+                .to_request(),
+        )
+        .await;
+
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let created: Value = test::read_body_json(create_response).await;
+        assert_eq!(created["project_key"], json!("public-ip-app"));
+        assert_eq!(created["auth_mode"], json!("public"));
+        assert_eq!(created["allowed_ips"], json!(["8.8.8.8"]));
+
+        let ingest_response = test::call_service(
+            &public_app,
+            test::TestRequest::post()
+                .peer_addr("8.8.8.8:8080".parse().unwrap())
+                .uri("/ingest/public-ip-app")
+                .set_json(valid_ingest_payload("public-ip-app"))
+                .to_request(),
+        )
+        .await;
+        let status = ingest_response.status();
+        let body = test::read_body(ingest_response).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), "200");
     })
     .await;
 }

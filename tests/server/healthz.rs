@@ -75,7 +75,7 @@ flush_max_records = 1
     let ingest_resp = test::call_service(
         &public_app,
         test::TestRequest::post()
-            .uri("/ingest")
+            .uri("/ingest/APPID")
             .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(
                 serde_json::to_vec(&json!({
@@ -152,7 +152,7 @@ flush_max_records = 1
     let ingest_resp = test::call_service(
         &public_app,
         test::TestRequest::post()
-            .uri("/ingest")
+            .uri("/ingest/APPID")
             .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(
                 serde_json::to_vec(&json!({
@@ -258,7 +258,7 @@ flush_max_records = 1
     let ingest_resp = test::call_service(
         &public_app,
         test::TestRequest::post()
-            .uri("/ingest")
+            .uri("/ingest/APPID")
             .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(
                 serde_json::to_vec(&json!({
@@ -349,7 +349,7 @@ flush_max_records = 1
     let ingest_resp = test::call_service(
         &public_app,
         test::TestRequest::post()
-            .uri("/ingest")
+            .uri("/ingest/APPID")
             .insert_header(("x-ingest-token", "igx_APPID"))
             .set_payload(
                 serde_json::to_vec(&json!({

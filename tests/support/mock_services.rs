@@ -10,7 +10,8 @@ use ingest4x::ingest::ingest;
 use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{
     CreateProjectInput, CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput,
-    ProjectRepository, RuleRepository, UpdateRuleSetInput,
+    ProjectAuthMode, ProjectRepository, RuleRepository, UpdateProjectIngestSettingsInput,
+    UpdateRuleSetInput,
 };
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
@@ -218,7 +219,8 @@ async fn create_app_with_project_event_settings_and_processor(
         .app_data(rule_repository.clone())
         .app_data(processor.clone())
         .app_data(wal)
-        .route("/ingest", web::post().to(ingest));
+        .route("/ingest/{project_key}", web::post().to(ingest))
+        .route("/ingest/{project_key}", web::get().to(ingest));
 
     (
         test::init_service(app).await,
@@ -269,18 +271,36 @@ async fn create_project_state(
         .await
         .expect("sqlite database should initialize");
     let repository = ProjectRepository::new(db.clone());
-    let rule_repository = RuleRepository::new(db);
+    let rule_repository = RuleRepository::new(db.clone());
 
     if !project.is_empty() {
+        let project_settings = project;
+        let allowed_ips = project_settings.get("allowed_ips").map(|ips| {
+            ips.split(',')
+                .map(str::trim)
+                .filter(|ip| !ip.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        });
+        let auth_mode = project_settings
+            .get("auth_mode")
+            .map(|strategy| ProjectAuthMode::from_storage(strategy));
         let project = repository
-            .create_project(CreateProjectInput {
-                name: project
-                    .get("name")
-                    .cloned()
-                    .unwrap_or_else(|| "APPID".to_string()),
-                enabled: true,
-                ingest_token: "igx_test_token".to_string(),
-            })
+            .create_project_with_ingest_settings(
+                CreateProjectInput {
+                    name: project_settings
+                        .get("name")
+                        .cloned()
+                        .unwrap_or_else(|| "APPID".to_string()),
+                    enabled: true,
+                    ingest_token: "igx_test_token".to_string(),
+                },
+                UpdateProjectIngestSettingsInput {
+                    project_key: project_settings.get("project_key").cloned(),
+                    auth_mode,
+                    allowed_ips,
+                },
+            )
             .await
             .expect("mock project should be created");
 

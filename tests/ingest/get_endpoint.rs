@@ -1,9 +1,8 @@
 use crate::support::mock_services::build_app_state_with_test_processor;
 use actix_http::StatusCode;
 use actix_web::{test, App};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use ingest4x::db::init_sqlite_database;
+use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{
     CreateDeliveryTargetInput, CreateEventSinkInput, CreateProjectInput, DeliveryTargetType,
     EventSinkRepository, ProjectRepository,
@@ -22,7 +21,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 
 #[actix_rt::test]
-async fn get_ingest_decodes_base64_json_and_sends_it_to_kafka_sink() {
+async fn get_ingest_maps_query_fields_and_sends_it_to_kafka_sink() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("mock-config.toml");
@@ -57,7 +56,7 @@ flush_max_records = 1
         Settings::init_with_file(config_path.to_str().expect("config path"))
             .expect("settings should load"),
     );
-    let app_state = build_app_state_with_test_processor(settings)
+    let app_state = build_app_state_with_passthrough_processor(settings)
         .await
         .expect("build app state");
     let app = test::init_service(App::new().configure(|cfg| {
@@ -65,21 +64,17 @@ flush_max_records = 1
     }))
     .await;
 
-    let input_payload = json!({
-        "appid": "UNRELATED_APPID",
-        "xwhat": "custom_event",
-        "xcontext": {
-            "installid": "iid-1",
-            "os": "ios",
-            "idfa": "idfa-1",
-            "currencytype": "cny"
-        }
-    });
-
-    let encoded = STANDARD.encode(serde_json::to_vec(&input_payload).expect("serialize payload"));
-    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+    let query = serde_urlencoded::to_string([
+        ("appid", "UNRELATED_APPID"),
+        ("xwhat", "custom_event"),
+        ("installid", "iid-1"),
+        ("os", "ios"),
+        ("idfa", "idfa-1"),
+        ("currencytype", "cny"),
+    ])
+    .expect("encode query");
     let req = test::TestRequest::get()
-        .uri(format!("/ingest?{query}").as_str())
+        .uri(format!("/ingest/APPID?{query}").as_str())
         .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
 
@@ -109,28 +104,36 @@ flush_max_records = 1
     let kafka_string = read_message_payload(&consumer).await;
     let emitted = parse_event_sink_line(kafka_string.as_str());
 
-    assert_eq!(emitted["appid"], input_payload["appid"]);
-    assert_eq!(emitted["xwhat"], input_payload["xwhat"]);
-    assert_eq!(emitted["xcontext"]["installid"], json!("iid-1"));
-    assert_eq!(emitted["xcontext"]["os"], json!("ios"));
-    assert_eq!(emitted["xcontext"]["idfa"], json!("idfa-1"));
-    assert_eq!(emitted["xcontext"]["currencytype"], json!("CNY"));
-    assert_eq!(emitted["xcontext"]["platform"], json!("ios"));
-    assert!(emitted["xcontext"]["process_info"].is_object());
-    assert!(emitted["xcontext"]["process_info"]["receive_time"].is_number());
-    assert_eq!(
-        emitted["xcontext"]["process_info"]["ingest4x_version"],
-        json!(env!("CARGO_PKG_VERSION"))
-    );
-    assert_eq!(emitted["xwhen"], json!(received_at_ms));
-    assert_eq!(
-        emitted["xcontext"]["process_info"]["receive_time"],
-        json!(received_at_ms)
-    );
+    assert_eq!(emitted["appid"], json!("UNRELATED_APPID"));
+    assert_eq!(emitted["xwhat"], json!("custom_event"));
+    assert_eq!(emitted["installid"], json!("iid-1"));
+    assert_eq!(emitted["os"], json!("ios"));
+    assert_eq!(emitted["idfa"], json!("idfa-1"));
+    assert_eq!(emitted["currencytype"], json!("cny"));
+    assert!(emitted.get("xcontext").is_none());
+    assert!(emitted.get("raw").is_none());
+    assert!(received_at_ms > 0);
 }
 
 fn parse_event_sink_line(line: &str) -> Value {
     serde_json::from_str(line).expect("event sink line should be valid json")
+}
+
+async fn build_app_state_with_passthrough_processor(
+    settings: Arc<Settings>,
+) -> std::io::Result<server::AppState> {
+    let processor = ProcessorState::new(
+        r#"
+fn process(event, request) {
+    emit(SINK_EVENTS, event);
+}
+"#
+        .to_string(),
+        10_000,
+    )
+    .expect("passthrough processor should initialize");
+
+    server::build_app_state_with_processor(settings, processor).await
 }
 
 #[actix_rt::test]
@@ -177,18 +180,11 @@ flush_max_records = 1
     }))
     .await;
 
-    let invalid_payload = json!({
-        "appid": "APPID",
-        "xwhat": "custom_event",
-        "xcontext": {
-            "os": "ios"
-        }
-    });
-
-    let encoded = STANDARD.encode(serde_json::to_vec(&invalid_payload).expect("serialize payload"));
-    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+    let query =
+        serde_urlencoded::to_string([("appid", "APPID"), ("xwhat", "custom_event"), ("os", "ios")])
+            .expect("encode query");
     let req = test::TestRequest::get()
-        .uri(format!("/ingest?{query}").as_str())
+        .uri(format!("/ingest/APPID?{query}").as_str())
         .insert_header(("x-ingest-token", "igx_APPID"))
         .to_request();
 
@@ -208,12 +204,15 @@ flush_max_records = 1
     assert!(emitted["xcontext"]["process_info"]["reason"]
         .as_str()
         .unwrap()
-        .contains("xcontext.installid"));
+        .contains("xcontext"));
     emitted["xcontext"]
         .as_object_mut()
         .unwrap()
         .remove("process_info");
-    assert_eq!(emitted, invalid_payload);
+    assert_eq!(emitted["appid"], json!("APPID"));
+    assert_eq!(emitted["xwhat"], json!("custom_event"));
+    assert_eq!(emitted["os"], json!("ios"));
+    assert!(emitted["xcontext"].as_object().unwrap().is_empty());
 }
 
 #[actix_rt::test]
@@ -258,20 +257,16 @@ dir = "{}"
     }))
     .await;
 
-    let input_payload = json!({
-        "appid": "UNKNOWN",
-        "xwhat": "custom_event",
-        "xcontext": {
-            "installid": "iid-1",
-            "os": "ios",
-            "idfa": "idfa-1"
-        }
-    });
-
-    let encoded = STANDARD.encode(serde_json::to_vec(&input_payload).expect("serialize payload"));
-    let query = serde_urlencoded::to_string([("data", encoded.as_str())]).expect("encode query");
+    let query = serde_urlencoded::to_string([
+        ("appid", "UNKNOWN"),
+        ("xwhat", "custom_event"),
+        ("installid", "iid-1"),
+        ("os", "ios"),
+        ("idfa", "idfa-1"),
+    ])
+    .expect("encode query");
     let req = test::TestRequest::get()
-        .uri(format!("/ingest?{query}").as_str())
+        .uri(format!("/ingest/APPID?{query}").as_str())
         .insert_header(("x-ingest-token", "igx_missing_token"))
         .to_request();
 

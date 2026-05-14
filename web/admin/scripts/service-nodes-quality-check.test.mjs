@@ -41,6 +41,7 @@ registerHooks({
 });
 
 const {
+  deleteServiceNode,
   normalizeServiceNodeResponse,
   normalizeServiceNodesResponse,
 } = await import(resolveModuleUrl("../src/features/service-nodes/api.ts"));
@@ -76,7 +77,9 @@ test("admin shell and router expose the service nodes page", () => {
 
 test("service nodes page uses query data with manual refresh", () => {
   assert.match(pageSource, /useServiceNodesQuery\(\)/);
+  assert.match(pageSource, /useDeleteServiceNodeMutation\(\)/);
   assert.match(pageSource, /<ServiceNodesTable/);
+  assert.match(pageSource, /onDelete=\{handleDeleteServiceNode\}/);
   assert.match(pageSource, /serviceNodesQuery\.refetch\(\)/);
   assert.match(pageSource, /Service Nodes/);
 });
@@ -95,6 +98,39 @@ test("service nodes table shows node identity, addresses, status and heartbeat",
   assert.match(tableSource, /management_bind_address/);
   assert.match(tableSource, /last_seen_at/);
   assert.match(tableSource, /getServiceNodeStatusLabel/);
+});
+
+test("service nodes table exposes cleanup for any node record", () => {
+  assert.match(tableSource, /title: "Actions"/);
+  assert.match(tableSource, /<Popconfirm/);
+  assert.match(tableSource, /Clean Up/);
+  assert.doesNotMatch(tableSource, /node\.status === "stale"/);
+  assert.doesNotMatch(tableSource, /node\.status === "stopped"/);
+  assert.doesNotMatch(tableSource, /disabled=\{!canDeleteServiceNode/);
+});
+
+test("service nodes api deletes a node by node_id", async () => {
+  const originalFetch = globalThis.fetch;
+
+  try {
+    let requestedUrl = "";
+    let requestedMethod = "";
+    globalThis.fetch = async (input, init) => {
+      requestedUrl = String(input);
+      requestedMethod = init?.method ?? "GET";
+      return new Response(null, { status: 204 });
+    };
+
+    await deleteServiceNode("node a/b");
+
+    assert.equal(
+      requestedUrl,
+      "/api/admin/service-nodes/node%20a%2Fb",
+    );
+    assert.equal(requestedMethod, "DELETE");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("service nodes api normalizes valid response payloads at runtime", () => {

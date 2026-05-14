@@ -5,6 +5,7 @@
 ## Entry
 
 - [Project README](https://github.com/jiangzhx/ingest4x#readme)
+- [Ingest protocol](ingest-protocol.md)
 - [WAL, checkpoint, and replay](wal.md)
 - [Event processing](event-processing/)
 - [Admin console and API](admin-api.md)
@@ -17,7 +18,7 @@
 
 ```text
 business event
-  -> /ingest
+  -> /ingest/{project_key}
   -> WAL
   -> validation
   -> transform and delivery

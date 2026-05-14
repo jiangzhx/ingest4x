@@ -7,7 +7,7 @@
 | [校验](event-validation.md) | `fn validate(event)` | WAL 重放 | 校验事件字段是否满足项目规则 |
 | [转换与投递](event-transformation.md) | `fn process(event, request)` | WAL 重放 | 执行规则校验、变更/扩展字段并决定投递目标 |
 
-上述两阶段都不在 ingress `/ingest` 请求线程执行。`/ingest` 仅处理鉴权/体积/写 WAL；真实处理发生在后台重放中。
+上述两阶段都不在 ingress `/ingest/{project_key}` 请求线程执行。`/ingest/{project_key}` 仅处理项目解析、鉴权、体积校验和写 WAL；真实处理发生在后台重放中。
 
 ## 处理流程
 

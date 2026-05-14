@@ -1,4 +1,4 @@
-import { Empty, Space, Table, Tag, Typography } from "antd";
+import { Button, Empty, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { ServiceNode } from "./types";
 import {
@@ -10,9 +10,17 @@ import {
 
 type ServiceNodesTableProps = {
   nodes: ServiceNode[];
+  deletingNodeId?: string | null;
+  actionsDisabled?: boolean;
+  onDelete: (node: ServiceNode) => Promise<void>;
 };
 
-export function ServiceNodesTable({ nodes }: ServiceNodesTableProps) {
+export function ServiceNodesTable({
+  nodes,
+  deletingNodeId = null,
+  actionsDisabled = false,
+  onDelete,
+}: ServiceNodesTableProps) {
   const columns: ColumnsType<ServiceNode> = [
     {
       title: "Node ID",
@@ -88,6 +96,37 @@ export function ServiceNodesTable({ nodes }: ServiceNodesTableProps) {
           {formatServiceNodeTimestamp(value)}
         </Typography.Text>
       ),
+    },
+    {
+      title: "Actions",
+      key: "actions",
+      width: 140,
+      fixed: "right",
+      render: (_, node) => {
+        const isDeleting = deletingNodeId === node.node_id;
+        const disableRowActions = actionsDisabled && !isDeleting;
+
+        return (
+          <Popconfirm
+            title="Clean up service node"
+            description={`Remove ${node.node_id} from the current node list. Active nodes will register again on heartbeat.`}
+            okText="Clean Up"
+            cancelText="Cancel"
+            disabled={disableRowActions || isDeleting}
+            okButtonProps={{ danger: true, loading: isDeleting }}
+            onConfirm={() => onDelete(node)}
+          >
+            <Button
+              size="small"
+              danger
+              disabled={disableRowActions}
+              loading={isDeleting}
+            >
+              {isDeleting ? "Cleaning..." : "Clean Up"}
+            </Button>
+          </Popconfirm>
+        );
+      },
     },
   ];
 

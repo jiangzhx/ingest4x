@@ -117,12 +117,37 @@ test("project management owns processor binding and defaults to default", () => 
   assert.doesNotMatch(projectProcessorPanelSource, /onUseDefault/);
 });
 
+test("projects table keeps processor labels from squeezing timestamp columns", () => {
+  assert.match(projectsTableSource, /tableLayout="fixed"/);
+  assert.match(projectsTableSource, /key: "processor"[\s\S]*ellipsis: true/);
+  assert.match(projectsTableSource, /<Tooltip title=\{label\}>/);
+  assert.match(projectsTableSource, /style=\{\{ maxWidth: "100%"/);
+  assert.match(projectsTableSource, /textOverflow: "ellipsis"/);
+});
+
+test("projects admin exposes project ingest path and auth settings", () => {
+  assert.match(projectFormSource, /name="project_key"/);
+  assert.match(projectFormSource, /\/ingest\/\{projectKey \|\| "\{project_key\}"\}/);
+  assert.match(projectFormSource, /name="auth_mode"/);
+  assert.match(projectFormSource, /Public/);
+  assert.match(projectFormSource, /name="allowed_ips_text"/);
+  assert.match(projectFormSource, /authMode === "token" \?/);
+  assert.match(projectFormSource, /label="Ingest Token"/);
+  assert.match(projectFormSource, /ingest_token: project\?\.ingest_token \?\? ""/);
+  assert.match(projectsTableSource, /const endpointText = `\/ingest\/\$\{project\.project_key\}`;/);
+  assert.match(projectsTableSource, /aria-label="Copy endpoint"/);
+  assert.match(projectsTableSource, /project\.auth_mode === "public"/);
+});
+
 test("projects api normalizes valid response payloads at runtime", () => {
   assert.deepEqual(
     normalizeProjectResponse({
       id: 7,
+      project_key: "demo",
       name: "  Demo Project ",
       enabled: true,
+      auth_mode: "token",
+      allowed_ips: [],
       ingest_token: "igx_demo_token",
       ingest_token_prefix: "igx_demo...",
       created_at: 1700000000.8,
@@ -130,8 +155,11 @@ test("projects api normalizes valid response payloads at runtime", () => {
     }),
     {
       id: 7,
+      project_key: "demo",
       name: "Demo Project",
       enabled: true,
+      auth_mode: "token",
+      allowed_ips: [],
       ingest_token: "igx_demo_token",
       ingest_token_prefix: "igx_demo...",
       created_at: 1700000000,
@@ -143,8 +171,11 @@ test("projects api normalizes valid response payloads at runtime", () => {
     normalizeProjectsResponse([
       {
         id: 1,
+        project_key: "a",
         name: "A",
         enabled: false,
+        auth_mode: "public",
+        allowed_ips: [" 127.0.0.1 "],
         ingest_token: "igx_a_token",
         ingest_token_prefix: "igx_a",
         created_at: 1,
@@ -154,8 +185,11 @@ test("projects api normalizes valid response payloads at runtime", () => {
     [
       {
         id: 1,
+        project_key: "a",
         name: "A",
         enabled: false,
+        auth_mode: "public",
+        allowed_ips: ["127.0.0.1"],
         ingest_token: "igx_a_token",
         ingest_token_prefix: "igx_a",
         created_at: 1,
@@ -175,8 +209,9 @@ test("project creation keeps full ingest token visible and copyable", async () =
   assert.doesNotMatch(projectsTableSource, /disabled=\{!tokenText\}/);
   assert.match(projectsTableSource, /handleCopyToken\(tokenText\)/);
   assert.doesNotMatch(projectsTableSource, /copyable=/);
-  assert.match(projectFormSource, /regenerate_ingest_token/);
-  assert.match(projectFormSource, /Regenerate token when saving/);
+  assert.doesNotMatch(projectFormSource, /Current Token/);
+  assert.doesNotMatch(projectFormSource, /New Ingest Token/);
+  assert.doesNotMatch(projectFormSource, /Regenerate token when saving/);
 
   const originalFetch = globalThis.fetch;
 
@@ -185,8 +220,11 @@ test("project creation keeps full ingest token visible and copyable", async () =
       new Response(
         JSON.stringify({
           id: 3,
+          project_key: "created-project",
           name: "Created Project",
           enabled: true,
+          auth_mode: "token",
+          allowed_ips: [],
           ingest_token: "igx_created_full_token",
           ingest_token_prefix: "igx_created_...",
           created_at: 10,
@@ -203,12 +241,18 @@ test("project creation keeps full ingest token visible and copyable", async () =
     assert.deepEqual(
       await createProject({
         name: "Created Project",
+        project_key: "created-project",
         enabled: true,
+        auth_mode: "token",
+        allowed_ips: [],
       }),
       {
         id: 3,
+        project_key: "created-project",
         name: "Created Project",
         enabled: true,
+        auth_mode: "token",
+        allowed_ips: [],
         ingest_token: "igx_created_full_token",
         ingest_token_prefix: "igx_created_...",
         created_at: 10,
@@ -229,17 +273,20 @@ test("project token copy falls back when browser clipboard is unavailable", () =
   assert.match(projectsTableSource, /message\.error\("Failed to copy token, please copy manually"\)/);
 });
 
-  test("projects api rejects invalid response payloads at runtime", () => {
-    assert.throws(
-      () => normalizeProjectsResponse({ items: [] }),
-      /Invalid project API response: project list is not an array/,
-    );
+test("projects api rejects invalid response payloads at runtime", () => {
+  assert.throws(
+    () => normalizeProjectsResponse({ items: [] }),
+    /Invalid project API response: project list is not an array/,
+  );
   assert.throws(
     () =>
       normalizeProjectResponse({
         id: 1,
+        project_key: "demo",
         name: "Demo Project",
         enabled: "yes",
+        auth_mode: "token",
+        allowed_ips: [],
         ingest_token: "igx_demo_token",
         ingest_token_prefix: "igx_demo",
         created_at: 1,
@@ -251,8 +298,11 @@ test("project token copy falls back when browser clipboard is unavailable", () =
     () =>
       normalizeProjectResponse({
         id: 1,
+        project_key: "demo",
         name: "Demo Project",
         enabled: true,
+        auth_mode: "token",
+        allowed_ips: [],
         ingest_token: "igx_demo_token",
         ingest_token_prefix: "   ",
         created_at: 1,
@@ -264,14 +314,33 @@ test("project token copy falls back when browser clipboard is unavailable", () =
     () =>
       normalizeProjectResponse({
         id: 1,
+        project_key: "demo",
         name: "Demo Project",
         enabled: true,
+        auth_mode: "token",
+        allowed_ips: [],
         ingest_token: "igx_demo_token",
         ingest_token_prefix: "igx_demo",
         created_at: -1,
         updated_at: 2,
       }),
     /Invalid project API response: created_at is missing or not a valid timestamp/,
+  );
+  assert.throws(
+    () =>
+      normalizeProjectResponse({
+        id: 1,
+        project_key: "demo",
+        name: "Demo Project",
+        enabled: true,
+        auth_mode: "ip",
+        allowed_ips: [],
+        ingest_token: "igx_demo_token",
+        ingest_token_prefix: "igx_demo",
+        created_at: 1,
+        updated_at: 2,
+      }),
+    /Invalid project API response: auth_mode is missing or invalid/,
   );
 });
 

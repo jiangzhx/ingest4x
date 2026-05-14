@@ -1,4 +1,4 @@
-import { requestJson } from "../../shared/http";
+import { request, requestJson } from "../../shared/http";
 import type { ServiceNode, ServiceNodeStatus } from "./types";
 
 type ServiceNodeResponse = {
@@ -125,4 +125,10 @@ export async function listServiceNodes(): Promise<ServiceNode[]> {
   );
 
   return normalizeServiceNodesResponse(response);
+}
+
+export async function deleteServiceNode(nodeId: string): Promise<void> {
+  await request(`/api/admin/service-nodes/${encodeURIComponent(nodeId)}`, {
+    method: "DELETE",
+  });
 }

@@ -2,13 +2,17 @@ import { request, requestJson } from "../../shared/http";
 import type {
   CreateProjectPayload,
   Project,
+  ProjectAuthMode,
   UpdateProjectPayload,
 } from "./types";
 
 type ProjectResponse = {
   id?: unknown;
+  project_key?: unknown;
   name?: unknown;
   enabled?: unknown;
+  auth_mode?: unknown;
+  allowed_ips?: unknown;
   ingest_token?: unknown;
   ingest_token_prefix?: unknown;
   created_at?: unknown;
@@ -21,7 +25,7 @@ function invalidProjectData(message: string): Error {
 
 function normalizeRequiredString(
   value: unknown,
-  fieldName: "name" | "ingest_token" | "ingest_token_prefix",
+  fieldName: "project_key" | "name" | "ingest_token" | "ingest_token_prefix",
 ): string {
   if (typeof value !== "string") {
     throw invalidProjectData(`${fieldName} is missing or not a string`);
@@ -54,6 +58,28 @@ function normalizeTimestamp(
   return Math.trunc(value);
 }
 
+function normalizeAuthMode(value: unknown): ProjectAuthMode {
+  if (value === "token" || value === "public") {
+    return value;
+  }
+
+  throw invalidProjectData("auth_mode is missing or invalid");
+}
+
+function normalizeStringList(value: unknown, fieldName: "allowed_ips"): string[] {
+  if (!Array.isArray(value)) {
+    throw invalidProjectData(`${fieldName} is missing or not an array`);
+  }
+
+  return value.map((item, index) => {
+    if (typeof item !== "string") {
+      throw invalidProjectData(`${fieldName}[${index}] is not a string`);
+    }
+
+    return item.trim();
+  });
+}
+
 export function normalizeProjectResponse(value: ProjectResponse): Project {
   if (!value || typeof value !== "object") {
     throw invalidProjectData("project data is not an object");
@@ -65,8 +91,11 @@ export function normalizeProjectResponse(value: ProjectResponse): Project {
 
   const project: Project = {
     id: normalizePositiveInteger(value.id, "id"),
+    project_key: normalizeRequiredString(value.project_key, "project_key"),
     name: normalizeRequiredString(value.name, "name"),
     enabled: value.enabled,
+    auth_mode: normalizeAuthMode(value.auth_mode),
+    allowed_ips: normalizeStringList(value.allowed_ips, "allowed_ips"),
     ingest_token: normalizeRequiredString(value.ingest_token, "ingest_token"),
     ingest_token_prefix: normalizeRequiredString(
       value.ingest_token_prefix,
