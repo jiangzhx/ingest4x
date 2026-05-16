@@ -68,3 +68,5 @@ max_bytes = 67108864
 max_events = 1000
 # replay window 内，单个 sink send_batch 最多包含多少 JSON event 字节。
 max_bytes = 67108864
+# 小批量聚合最长等待时间；"0s" 表示不等待，达到 replay window 末尾就立即投递。
+timeout = "0s"

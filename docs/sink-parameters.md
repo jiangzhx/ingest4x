@@ -143,7 +143,8 @@ S3/COS examples use OpenDAL option names:
   "path_prefix": "events",
   "batch": {
     "max_events": 1000,
-    "max_bytes": 16777216
+    "max_bytes": 16777216,
+    "timeout": "5s"
   },
   "columns": [
     {
@@ -182,6 +183,7 @@ Supported `batch` fields:
 | --- | --- | --- | --- |
 | `max_events` | integer | No | Max events in one `send_batch` call for this sink |
 | `max_bytes` | integer | No | Max JSON event bytes in one `send_batch` call for this sink |
+| `timeout` | string | No | Max wait before flushing a small batch, for example `"0s"`, `"5s"`, or `"1m"` |
 
 Supported column fields:
 
@@ -192,7 +194,7 @@ Supported column fields:
 | `type` | string | Yes | Physical Parquet type: `string`, `number`, `integer`, `boolean`, or `json` |
 | `nullable` | boolean | No | Defaults to `false`; missing or null required values fail the sink write |
 
-`rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. `batch` is a common Event Sink field, not a Delivery Target field, so different sinks sharing the same storage target can use different batch sizes. WAL pipeline checkpoint advances only after all emitted sink writes in the replay window reach their commit points.
+`rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. `batch` is a common Event Sink field, not a Delivery Target field, so different sinks sharing the same storage target can use different batch sizes and wait times. Missing `batch` fields inherit `[wal.replay.sink_batch]`; `"timeout": "0s"` disables waiting. WAL pipeline checkpoint advances only after all emitted sink writes in the replay window reach their commit points.
 
 ## stdout
 

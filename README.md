@@ -310,6 +310,7 @@ max_bytes = 67108864
 [wal.replay.sink_batch]
 max_events = 1000
 max_bytes = 67108864
+timeout = "0s"
 ```
 
 Key settings:
@@ -326,6 +327,7 @@ Key settings:
 | `wal.write.no_sync` | `false` means reliable append with fsync-style durability; `true` is a performance-first weaker durability mode |
 | `wal.replay.max_records` | max WAL records in one replay window |
 | `wal.replay.sink_batch.max_events` | default max events in one sink `send_batch` call; Event Sink `destination_json.batch` can override |
+| `wal.replay.sink_batch.timeout` | max wait before flushing a small sink batch; `"0s"` keeps immediate replay-window flush |
 
 `ingest4x.example.toml` contains a full MySQL + local Kafka sample.
 

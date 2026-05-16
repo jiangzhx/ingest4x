@@ -117,7 +117,7 @@ Before append, available disk space is checked. If `wal.write.min_free_bytes` is
 
 A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default read limit is `1024`).
 
-Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window. The replay window is flushed when `wal.replay.max_records` or `wal.replay.max_bytes` is reached. Inside that replay window, each sink's pending JSON events are split into one or more `send_batch` calls by `wal.replay.sink_batch.max_events` and `wal.replay.sink_batch.max_bytes`.
+Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window. The replay window is flushed when `wal.replay.max_records` or `wal.replay.max_bytes` is reached. If the replay window is small and `wal.replay.sink_batch.timeout` is non-zero, replay can wait before flushing so later WAL records can join the same sink batch. Inside that replay window, each sink's pending JSON events are split into one or more `send_batch` calls by `wal.replay.sink_batch.max_events` and `wal.replay.sink_batch.max_bytes`.
 
 Per-record planning flow:
 
@@ -261,6 +261,7 @@ max_bytes = 67108864
 [wal.replay.sink_batch]
 max_events = 1000
 max_bytes = 67108864
+timeout = "0s"
 ```
 
 Meaning:
@@ -280,8 +281,9 @@ Meaning:
 | `wal.replay.max_bytes` | Max WAL bytes in one replay window |
 | `wal.replay.sink_batch.max_events` | Default max events in one sink `send_batch` call inside a replay window |
 | `wal.replay.sink_batch.max_bytes` | Default max JSON event bytes in one sink `send_batch` call inside a replay window |
+| `wal.replay.sink_batch.timeout` | Default max wait before flushing a small sink batch; accepts values like `"0s"`, `"5s"`, or `"1m"` |
 
-Each Event Sink can override the global sink batch defaults with `destination_json.batch`. Missing `batch` fields inherit the global defaults.
+Each Event Sink can override the global sink batch defaults with `destination_json.batch`. Missing `batch` fields inherit the global defaults. Use `"0s"` to disable waiting for a sink; file/object sinks such as Parquet commonly use `"5s"` or `"10s"` to reduce small files.
 
 ## Boundary notes
 

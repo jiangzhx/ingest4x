@@ -107,6 +107,13 @@ impl ReplayIssue {
         }
     }
 
+    pub(crate) fn sink_batch_config_invalid(error: impl Display) -> Self {
+        Self::Runtime {
+            code: "replay_sink_batch_config_invalid",
+            message: error.to_string(),
+        }
+    }
+
     pub(crate) fn checkpoint_write_failed(error: impl Display) -> Self {
         Self::Runtime {
             code: "replay_checkpoint_write_failed",

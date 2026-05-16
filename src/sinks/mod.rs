@@ -112,6 +112,8 @@ pub struct EventSinkBatchConfig {
     pub max_events: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<String>,
 }
 
 impl EventSinkBatchConfig {
@@ -121,6 +123,10 @@ impl EventSinkBatchConfig {
         }
         if self.max_bytes == Some(0) {
             return Err("batch.max_bytes must be greater than 0".to_string());
+        }
+        if let Some(timeout) = &self.timeout {
+            humantime::parse_duration(timeout)
+                .map_err(|error| format!("batch.timeout invalid duration: {error}"))?;
         }
         Ok(())
     }
@@ -348,7 +354,8 @@ mod tests {
             .normalize_event_sink_config(json!({
                 "path_prefix": "events",
                 "batch": {
-                    "max_events": 2
+                    "max_events": 2,
+                    "timeout": "5s"
                 },
                 "columns": [
                     {
@@ -373,7 +380,8 @@ mod tests {
                 ],
                 "include_event_json": true,
                 "batch": {
-                    "max_events": 2
+                    "max_events": 2,
+                    "timeout": "5s"
                 }
             })
         );

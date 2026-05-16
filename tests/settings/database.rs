@@ -125,12 +125,14 @@ dir = "wal"
 [wal.replay.sink_batch]
 max_events = 2
 max_bytes = 4096
+timeout = "5s"
 "#,
     );
 
     let sink_batch = &settings.wal.replay.sink_batch;
     assert_eq!(sink_batch.max_events, 2);
     assert_eq!(sink_batch.max_bytes, 4096);
+    assert_eq!(sink_batch.timeout, "5s");
 }
 
 fn load_settings(database_section: &str) -> Settings {

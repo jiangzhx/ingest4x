@@ -117,7 +117,7 @@ segment_max_bytes = 134217728
 
 服务启动时会启动 WAL 重放循环。每次运行默认读取一批记录（默认 read limit 为 `1024`）。
 
-重放仍然逐条 WAL record 执行 rules 与 processor，因为 Rhai 当前每次接收一个 JSON event。processor 输出校验完成后，系统会在当前 replay window 内按 sink 暂存 delivery。当达到 `wal.replay.max_records` 或 `wal.replay.max_bytes` 时，当前 replay window 会被 flush。在这个 replay window 内，每个 sink 的待投递 JSON events 会再按 `wal.replay.sink_batch.max_events` 与 `wal.replay.sink_batch.max_bytes` 切成一次或多次 `send_batch` 调用。
+重放仍然逐条 WAL record 执行 rules 与 processor，因为 Rhai 当前每次接收一个 JSON event。processor 输出校验完成后，系统会在当前 replay window 内按 sink 暂存 delivery。当达到 `wal.replay.max_records` 或 `wal.replay.max_bytes` 时，当前 replay window 会被 flush。如果 replay window 很小且 `wal.replay.sink_batch.timeout` 非零，重放可以先等待一段时间，让后续 WAL record 合并进同一个 sink batch。在这个 replay window 内，每个 sink 的待投递 JSON events 会再按 `wal.replay.sink_batch.max_events` 与 `wal.replay.sink_batch.max_bytes` 切成一次或多次 `send_batch` 调用。
 
 逐条规划流程：
 
@@ -261,6 +261,7 @@ max_bytes = 67108864
 [wal.replay.sink_batch]
 max_events = 1000
 max_bytes = 67108864
+timeout = "0s"
 ```
 
 含义：
@@ -280,8 +281,9 @@ max_bytes = 67108864
 | `wal.replay.max_bytes` | 单个 replay window 的最大 WAL 字节数 |
 | `wal.replay.sink_batch.max_events` | replay window 内单次 sink `send_batch` 的默认最大 event 数 |
 | `wal.replay.sink_batch.max_bytes` | replay window 内单次 sink `send_batch` 的默认最大 JSON event 字节数 |
+| `wal.replay.sink_batch.timeout` | 小批量 sink batch 的默认最长等待时间，支持 `"0s"`、`"5s"`、`"1m"` 等格式 |
 
-每个 Event Sink 都可以通过 `destination_json.batch` 覆盖全局 sink batch 默认值。`batch` 中未配置的字段会继承全局默认值。
+每个 Event Sink 都可以通过 `destination_json.batch` 覆盖全局 sink batch 默认值。`batch` 中未配置的字段会继承全局默认值。使用 `"0s"` 可以关闭等待；Parquet 这类文件/对象存储 sink 通常可以配置 `"5s"` 或 `"10s"` 来减少小文件。
 
 ## 边界说明
 

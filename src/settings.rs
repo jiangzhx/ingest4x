@@ -121,6 +121,8 @@ pub struct ReplaySinkBatchSettings {
     pub max_events: usize,
     #[serde(default = "default_replay_sink_batch_max_bytes")]
     pub max_bytes: u64,
+    #[serde(default = "default_replay_sink_batch_timeout")]
+    pub timeout: String,
 }
 
 impl Default for WalWriteSettings {
@@ -160,6 +162,7 @@ impl Default for ReplaySinkBatchSettings {
         Self {
             max_events: default_replay_sink_batch_max_events(),
             max_bytes: default_replay_sink_batch_max_bytes(),
+            timeout: default_replay_sink_batch_timeout(),
         }
     }
 }
@@ -206,6 +209,10 @@ pub const fn default_replay_sink_batch_max_events() -> usize {
 
 pub const fn default_replay_sink_batch_max_bytes() -> u64 {
     64 * 1024 * 1024
+}
+
+pub fn default_replay_sink_batch_timeout() -> String {
+    "0s".to_string()
 }
 
 pub const fn default_processor_max_operations() -> u64 {

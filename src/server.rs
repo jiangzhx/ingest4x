@@ -12,7 +12,10 @@ use crate::utils::get_host_ip;
 use crate::utils::prometheus::{
     init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
 };
-use crate::wal::replay::{initialize_replay_checkpoint, replay_once, WalReplayContext};
+use crate::wal::replay::{
+    initialize_replay_checkpoint, replay_once, replay_once_with_state, WalReplayContext,
+    WalReplayRuntimeState,
+};
 use crate::wal::WalWriter;
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{App, HttpResponse, HttpServer};
@@ -337,19 +340,46 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
     })
     .await?;
 
+    observe_wal_metrics(state);
+    Ok(replayed)
+}
+
+async fn replay_wal_once_with_state(
+    state: &AppState,
+    runtime_state: &mut WalReplayRuntimeState,
+) -> anyhow::Result<usize> {
+    let replayed = replay_once_with_state(
+        WalReplayContext {
+            dir: std::path::Path::new(&state.settings.wal.dir),
+            event_sinks: &state.event_sinks,
+            project_registry: &state.project_registry,
+            rule_repository: &state.rule_repository,
+            processor: state.processor.get_ref(),
+            checkpoint: state.settings.wal.checkpoint.clone(),
+            replay: state.settings.wal.replay.clone(),
+        },
+        runtime_state,
+    )
+    .await?;
+
+    observe_wal_metrics(state);
+
+    Ok(replayed)
+}
+
+fn observe_wal_metrics(state: &AppState) {
     if let Some(metrics) = state.wal_metrics.as_ref() {
         let sink_names = state.event_sinks.sink_names();
         metrics.observe(&state.settings, state.wal.get_ref(), &sink_names);
     }
-
-    Ok(replayed)
 }
 
 fn spawn_wal_replay_loop(state: AppState) {
     tokio::spawn(async move {
         let mut consecutive_errors = 0_u32;
+        let mut replay_runtime_state = WalReplayRuntimeState::default();
         loop {
-            match replay_wal_once(&state).await {
+            match replay_wal_once_with_state(&state, &mut replay_runtime_state).await {
                 Ok(0) => {
                     consecutive_errors = 0;
                     tokio::time::sleep(Duration::from_secs(1)).await;

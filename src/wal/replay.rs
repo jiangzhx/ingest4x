@@ -49,6 +49,7 @@ struct ReplayWindowPolicy {
 struct SinkBatchPolicy {
     max_events: usize,
     max_bytes: u64,
+    timeout: Duration,
 }
 
 struct ReplayCheckpointState {
@@ -68,6 +69,17 @@ struct SinkDeliveryEvent {
     lsn: u64,
     event: Value,
     bytes: u64,
+}
+
+#[derive(Default)]
+pub struct WalReplayRuntimeState {
+    pending_since_by_sink: HashMap<String, Instant>,
+}
+
+#[derive(Clone, Copy)]
+enum ReplayBatchFlushMode {
+    AllowDefer,
+    Force,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,6 +173,20 @@ pub fn initialize_replay_checkpoint(dir: &Path, event_sinks: &EventSinkState) ->
 }
 
 pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
+    replay_once_inner(context, None).await
+}
+
+pub async fn replay_once_with_state(
+    context: WalReplayContext<'_>,
+    runtime_state: &mut WalReplayRuntimeState,
+) -> Result<usize> {
+    replay_once_inner(context, Some(runtime_state)).await
+}
+
+async fn replay_once_inner(
+    context: WalReplayContext<'_>,
+    mut runtime_state: Option<&mut WalReplayRuntimeState>,
+) -> Result<usize> {
     let checkpoint_policy = checkpoint_flush_policy(&context.checkpoint)?;
     let replay_policy = replay_window_policy(&context.replay);
     if context.event_sinks.sink_names().is_empty() {
@@ -184,6 +210,8 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                 &checkpoint_policy,
                 &mut checkpoint_state,
                 &replay_batch,
+                runtime_state.as_deref_mut(),
+                ReplayBatchFlushMode::Force,
             )
             .await?;
             return Err(ReplayIssue::wal_lsn_gap(*expected, entry.position.lsn).into());
@@ -196,6 +224,8 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                     &checkpoint_policy,
                     &mut checkpoint_state,
                     &replay_batch,
+                    runtime_state.as_deref_mut(),
+                    ReplayBatchFlushMode::Force,
                 )
                 .await?;
                 replay_batch.clear();
@@ -210,6 +240,8 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                     &checkpoint_policy,
                     &mut checkpoint_state,
                     &replay_batch,
+                    runtime_state.as_deref_mut(),
+                    ReplayBatchFlushMode::Force,
                 )
                 .await?;
                 return Err(issue.into());
@@ -223,6 +255,8 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                     &checkpoint_policy,
                     &mut checkpoint_state,
                     &replay_batch,
+                    runtime_state.as_deref_mut(),
+                    ReplayBatchFlushMode::Force,
                 )
                 .await?;
                 replay_batch.clear();
@@ -245,19 +279,26 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                 &checkpoint_policy,
                 &mut checkpoint_state,
                 &replay_batch,
+                runtime_state.as_deref_mut(),
+                ReplayBatchFlushMode::Force,
             )
             .await?;
             replay_batch.clear();
         }
     }
 
-    replay_batch_to_sinks(
+    let flushed = replay_batch_to_sinks(
         &context,
         &checkpoint_policy,
         &mut checkpoint_state,
         &replay_batch,
+        runtime_state.as_deref_mut(),
+        ReplayBatchFlushMode::AllowDefer,
     )
     .await?;
+    if !flushed {
+        return Ok(0);
+    }
     flush_pending_checkpoint(context.dir, &mut checkpoint_state)
         .map_err(ReplayIssue::checkpoint_write_failed)?;
     cleanup_covered_segments(context.dir, &checkpoint_state)
@@ -390,8 +431,14 @@ fn replay_window_policy(settings: &ReplaySettings) -> ReplayWindowPolicy {
 fn sink_batch_policy(
     settings: &ReplaySettings,
     override_config: Option<&EventSinkBatchConfig>,
-) -> SinkBatchPolicy {
-    SinkBatchPolicy {
+) -> std::result::Result<SinkBatchPolicy, ReplayIssue> {
+    let timeout = override_config
+        .and_then(|config| config.timeout.as_deref())
+        .unwrap_or(settings.sink_batch.timeout.as_str());
+    let timeout = humantime::parse_duration(timeout).map_err(|error| {
+        ReplayIssue::sink_batch_config_invalid(format!("invalid sink_batch.timeout: {error}"))
+    })?;
+    Ok(SinkBatchPolicy {
         max_events: override_config
             .and_then(|config| config.max_events)
             .unwrap_or(settings.sink_batch.max_events)
@@ -400,7 +447,8 @@ fn sink_batch_policy(
             .and_then(|config| config.max_bytes)
             .unwrap_or(settings.sink_batch.max_bytes)
             .max(1),
-    }
+        timeout,
+    })
 }
 
 fn should_flush_checkpoint(
@@ -502,9 +550,11 @@ async fn replay_batch_to_sinks(
     checkpoint_policy: &CheckpointFlushPolicy,
     checkpoint_state: &mut ReplayCheckpointState,
     batch: &[ReplayEntryDeliveries],
-) -> std::result::Result<(), ReplayIssue> {
+    mut runtime_state: Option<&mut WalReplayRuntimeState>,
+    mode: ReplayBatchFlushMode,
+) -> std::result::Result<bool, ReplayIssue> {
     if batch.is_empty() {
-        return Ok(());
+        return Ok(true);
     }
     let mut sink_events_by_name: HashMap<String, Vec<SinkDeliveryEvent>> = HashMap::new();
     for item in batch {
@@ -526,6 +576,19 @@ async fn replay_batch_to_sinks(
         }
     }
 
+    let deferred_sinks = if mode_allows_defer(mode) {
+        sinks_deferred_by_batch_timeout(
+            context,
+            runtime_state.as_deref_mut(),
+            &sink_events_by_name,
+        )?
+    } else {
+        Vec::new()
+    };
+    if !deferred_sinks.is_empty() {
+        return Ok(false);
+    }
+
     let mut sink_names = sink_events_by_name.keys().cloned().collect::<Vec<_>>();
     sink_names.sort();
     for sink_name in sink_names {
@@ -533,7 +596,7 @@ async fn replay_batch_to_sinks(
             .get(&sink_name)
             .expect("sink events should exist for sink name");
         let sink_batch_override = context.event_sinks.batch_config(&sink_name);
-        let sink_batch_policy = sink_batch_policy(&context.replay, sink_batch_override.as_ref());
+        let sink_batch_policy = sink_batch_policy(&context.replay, sink_batch_override.as_ref())?;
         if let Err((failed_lsn, error)) =
             send_sink_events_in_batches(context, &sink_name, sink_events, &sink_batch_policy).await
         {
@@ -547,6 +610,11 @@ async fn replay_batch_to_sinks(
                 "wal replay sink delivery failed; pipeline checkpoint will not advance"
             );
             return Err(issue);
+        }
+    }
+    if let Some(runtime_state) = runtime_state {
+        for sink_name in sink_events_by_name.keys() {
+            runtime_state.pending_since_by_sink.remove(sink_name);
         }
     }
 
@@ -568,7 +636,59 @@ async fn replay_batch_to_sinks(
             .map_err(ReplayIssue::checkpoint_write_failed)?;
     }
 
-    Ok(())
+    Ok(true)
+}
+
+fn mode_allows_defer(mode: ReplayBatchFlushMode) -> bool {
+    matches!(mode, ReplayBatchFlushMode::AllowDefer)
+}
+
+fn sinks_deferred_by_batch_timeout(
+    context: &WalReplayContext<'_>,
+    runtime_state: Option<&mut WalReplayRuntimeState>,
+    sink_events_by_name: &HashMap<String, Vec<SinkDeliveryEvent>>,
+) -> std::result::Result<Vec<String>, ReplayIssue> {
+    if sink_events_by_name.is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(runtime_state) = runtime_state else {
+        return Ok(Vec::new());
+    };
+
+    let now = Instant::now();
+    let mut sink_names = sink_events_by_name.keys().cloned().collect::<Vec<_>>();
+    sink_names.sort();
+    let mut deferred_sinks = Vec::new();
+    for sink_name in sink_names {
+        let sink_events = sink_events_by_name
+            .get(&sink_name)
+            .expect("sink events should exist for sink name");
+        let sink_batch_override = context.event_sinks.batch_config(&sink_name);
+        let policy = sink_batch_policy(&context.replay, sink_batch_override.as_ref())?;
+        if policy.timeout.is_zero()
+            || sink_events.len() >= policy.max_events
+            || sink_delivery_events_bytes(sink_events) >= policy.max_bytes
+        {
+            return Ok(Vec::new());
+        }
+
+        let pending_since = runtime_state
+            .pending_since_by_sink
+            .entry(sink_name.clone())
+            .or_insert(now);
+        if now.duration_since(*pending_since) >= policy.timeout {
+            return Ok(Vec::new());
+        }
+        deferred_sinks.push(sink_name);
+    }
+
+    Ok(deferred_sinks)
+}
+
+fn sink_delivery_events_bytes(events: &[SinkDeliveryEvent]) -> u64 {
+    events
+        .iter()
+        .fold(0, |bytes, event| bytes.saturating_add(event.bytes))
 }
 
 async fn send_sink_events_in_batches(
