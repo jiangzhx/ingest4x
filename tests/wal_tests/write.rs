@@ -1288,6 +1288,7 @@ fn wal_settings(wal_dir: &Path) -> WalSettings {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     }
 }
 

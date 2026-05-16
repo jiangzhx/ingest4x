@@ -89,6 +89,24 @@ flush_bytes = 67108864
     assert_eq!(checkpoint.flush_bytes, 64 * 1024 * 1024);
 }
 
+#[test]
+fn settings_reads_replay_window_fields() {
+    let settings = load_settings(
+        r#"
+[wal]
+dir = "wal"
+
+[wal.replay]
+max_records = 2000
+max_bytes = 33554432
+"#,
+    );
+
+    let replay = &settings.wal.replay;
+    assert_eq!(replay.max_records, 2000);
+    assert_eq!(replay.max_bytes, 32 * 1024 * 1024);
+}
+
 fn load_settings(database_section: &str) -> Settings {
     load_settings_with_management_section(&format!(
         r#"

@@ -16,7 +16,7 @@ use ingest4x::repositories::{
 };
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
-use ingest4x::settings::{AutoOffsetReset, CheckpointSettings, Settings};
+use ingest4x::settings::{AutoOffsetReset, CheckpointSettings, ReplaySettings, Settings};
 use ingest4x::sinks::init_event_sinks_from_runtime_sinks;
 use ingest4x::wal::replay::{initialize_replay_checkpoint, replay_once, WalReplayContext};
 use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
@@ -337,6 +337,7 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -359,6 +360,7 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("replay wal"),
@@ -521,6 +523,7 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -559,6 +562,7 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
                 flush_records: 1000,
                 flush_bytes: 64 * 1024 * 1024,
             },
+            replay: Default::default(),
         })
         .await
         .expect("replay wal"),
@@ -618,6 +622,7 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -640,6 +645,7 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("processor without emit should drop and advance WAL"),
@@ -695,6 +701,7 @@ async fn wal_replay_advances_pipeline_checkpoint_for_unemitted_registered_sink()
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -717,6 +724,7 @@ async fn wal_replay_advances_pipeline_checkpoint_for_unemitted_registered_sink()
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("replay should advance pipeline checkpoint"),
@@ -776,6 +784,7 @@ async fn wal_pipeline_checkpoint_matches_writer_recovery() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     };
     let writer = WalWriter::new(&settings).expect("wal writer");
     writer
@@ -798,6 +807,7 @@ async fn wal_pipeline_checkpoint_matches_writer_recovery() {
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("replay should advance pipeline checkpoint"),
@@ -862,6 +872,7 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -884,6 +895,7 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("latest reset should skip existing WAL"),
@@ -937,6 +949,7 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
 
@@ -961,6 +974,7 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("latest reset initialized before append should read future WAL"),
@@ -1015,6 +1029,7 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1038,6 +1053,7 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("unknown sink target should quarantine and continue"),
@@ -1108,6 +1124,7 @@ async fn wal_replay_sends_records_to_blackhole_and_advances_checkpoint() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1130,6 +1147,7 @@ async fn wal_replay_sends_records_to_blackhole_and_advances_checkpoint() {
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("blackhole replay should succeed"),
@@ -1222,6 +1240,7 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1256,6 +1275,7 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect("parquet replay should succeed"),
@@ -1372,6 +1392,7 @@ async fn wal_replay_flushes_sink_batch_at_checkpoint_record_threshold() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     for installid in ["iid-batch-1", "iid-batch-2"] {
@@ -1397,8 +1418,12 @@ async fn wal_replay_flushes_sink_batch_at_checkpoint_record_threshold() {
             processor: &processor,
             checkpoint: CheckpointSettings {
                 flush_interval: "1h".to_string(),
-                flush_records: 1,
+                flush_records: 1000,
                 flush_bytes: 64 * 1024 * 1024,
+            },
+            replay: ReplaySettings {
+                max_records: 1,
+                max_bytes: 64 * 1024 * 1024,
             },
         })
         .await
@@ -1458,6 +1483,7 @@ async fn wal_replay_blocks_failed_blackhole_sink_without_advancing_checkpoint() 
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1479,6 +1505,7 @@ async fn wal_replay_blocks_failed_blackhole_sink_without_advancing_checkpoint() 
         rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
+        replay: Default::default(),
     })
     .await
     .expect_err("failed blackhole sink should block replay");
@@ -1541,6 +1568,7 @@ async fn wal_replay_retries_committed_sink_when_another_sink_blocks_pipeline_che
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1563,6 +1591,7 @@ async fn wal_replay_retries_committed_sink_when_another_sink_blocks_pipeline_che
             rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
         })
         .await
         .expect_err("failing sink should block pipeline checkpoint");
@@ -1627,6 +1656,7 @@ async fn wal_replay_rejects_tampered_checkpoint() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1648,6 +1678,7 @@ async fn wal_replay_rejects_tampered_checkpoint() {
         rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
+        replay: Default::default(),
     };
     assert_eq!(replay_once(context).await.expect("initial replay"), 1);
 
@@ -1669,6 +1700,7 @@ async fn wal_replay_rejects_tampered_checkpoint() {
         rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
+        replay: Default::default(),
     })
     .await
     .expect_err("tampered checkpoint should fail checksum validation");
@@ -1800,6 +1832,7 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1821,6 +1854,7 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
+        replay: Default::default(),
     };
     assert_eq!(replay_once(context).await.expect("initial replay"), 1);
     fs::write(wal_dir.join("node_id"), "different-node\n").expect("change node id");
@@ -1832,6 +1866,7 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
+        replay: Default::default(),
     })
     .await
     .expect_err("checkpoint node_id mismatch should fail");
@@ -1881,6 +1916,7 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         wal_segment_max_bytes: 128 * 1024 * 1024,
         min_free_bytes: 0,
         checkpoint: Default::default(),
+        replay: Default::default(),
     })
     .expect("wal writer");
     writer
@@ -1917,6 +1953,7 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
             flush_records: 1,
             flush_bytes: 64 * 1024 * 1024,
         },
+        replay: Default::default(),
     })
     .await
     .expect_err("LSN gap should stop WAL replay");

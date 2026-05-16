@@ -372,6 +372,7 @@ fn test_wal_settings(dir: &Path) -> WalSettings {
         wal_segment_max_bytes: ingest4x::settings::default_wal_segment_max_bytes(),
         min_free_bytes: 0,
         checkpoint: CheckpointSettings::default(),
+        replay: Default::default(),
     }
 }
 

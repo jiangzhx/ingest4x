@@ -1,7 +1,7 @@
 use crate::ingest::processor::{ProcessorRequestContext, ProcessorRuntime};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
-use crate::settings::{AutoOffsetReset, CheckpointSettings};
+use crate::settings::{AutoOffsetReset, CheckpointSettings, ReplaySettings};
 use crate::sinks::EventSinkState;
 use crate::wal::{
     error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
@@ -32,12 +32,18 @@ pub struct WalReplayContext<'a> {
     pub rule_repository: &'a RuleRepository,
     pub processor: &'a dyn ProcessorRuntime,
     pub checkpoint: CheckpointSettings,
+    pub replay: ReplaySettings,
 }
 
 struct CheckpointFlushPolicy {
     flush_interval: Duration,
     flush_records: usize,
     flush_bytes: u64,
+}
+
+struct ReplayWindowPolicy {
+    max_records: usize,
+    max_bytes: u64,
 }
 
 struct ReplayCheckpointState {
@@ -145,6 +151,7 @@ pub fn initialize_replay_checkpoint(dir: &Path, event_sinks: &EventSinkState) ->
 
 pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     let checkpoint_policy = checkpoint_flush_policy(&context.checkpoint)?;
+    let replay_policy = replay_window_policy(&context.replay);
     if context.event_sinks.sink_names().is_empty() {
         return Ok(0);
     }
@@ -221,7 +228,7 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
             entry,
             deliveries_by_sink,
         });
-        if replay_batch_reaches_flush_policy(&replay_batch, &checkpoint_policy) {
+        if replay_batch_reaches_window_policy(&replay_batch, &replay_policy) {
             replay_batch_to_sinks(
                 &context,
                 &checkpoint_policy,
@@ -362,6 +369,13 @@ fn checkpoint_flush_policy(
     })
 }
 
+fn replay_window_policy(settings: &ReplaySettings) -> ReplayWindowPolicy {
+    ReplayWindowPolicy {
+        max_records: settings.max_records.max(1),
+        max_bytes: settings.max_bytes.max(1),
+    }
+}
+
 fn should_flush_checkpoint(
     policy: &CheckpointFlushPolicy,
     records: usize,
@@ -373,11 +387,11 @@ fn should_flush_checkpoint(
         || last_flush.elapsed() >= policy.flush_interval
 }
 
-fn replay_batch_reaches_flush_policy(
+fn replay_batch_reaches_window_policy(
     batch: &[ReplayEntryDeliveries],
-    policy: &CheckpointFlushPolicy,
+    policy: &ReplayWindowPolicy,
 ) -> bool {
-    batch.len() >= policy.flush_records || replay_batch_bytes(batch) >= policy.flush_bytes
+    batch.len() >= policy.max_records || replay_batch_bytes(batch) >= policy.max_bytes
 }
 
 fn replay_batch_bytes(batch: &[ReplayEntryDeliveries]) -> u64 {

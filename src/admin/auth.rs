@@ -132,6 +132,7 @@ mod tests {
                 wal_segment_max_bytes: crate::settings::default_wal_segment_max_bytes(),
                 min_free_bytes: 0,
                 checkpoint: Default::default(),
+                replay: Default::default(),
             },
         }
     }

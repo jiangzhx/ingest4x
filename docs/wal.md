@@ -117,7 +117,7 @@ Before append, available disk space is checked. If `min_free_bytes` is non-zero 
 
 A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default read limit is `1024`).
 
-Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window and each sink receives one `send_batch` call for its pending events. The replay window is flushed when `wal.checkpoint.flush_records` or `wal.checkpoint.flush_bytes` is reached, so these settings also bound a single sink `send_batch` call and the duplicate-delivery window after partial sink success.
+Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window and each sink receives one `send_batch` call for its pending events. The replay window is flushed when `wal.replay.max_records` or `wal.replay.max_bytes` is reached, so these settings bound a single sink `send_batch` call and the duplicate-delivery window after partial sink success.
 
 Per-record planning flow:
 
@@ -250,6 +250,10 @@ min_free_bytes = 0
 flush_interval = "1s"
 flush_records = 1000
 flush_bytes = 67108864
+
+[wal.replay]
+max_records = 1000
+max_bytes = 67108864
 ```
 
 Meaning:
@@ -263,8 +267,10 @@ Meaning:
 | `wal.wal_segment_max_bytes` | Max segment size |
 | `wal.min_free_bytes` | Minimum free space threshold, if non-zero |
 | `wal.checkpoint.flush_interval` | Max interval between checkpoint flushes |
-| `wal.checkpoint.flush_records` | Max records before flushing the current replay window and checkpoint |
-| `wal.checkpoint.flush_bytes` | Max WAL bytes before flushing the current replay window and checkpoint |
+| `wal.checkpoint.flush_records` | Max successfully replayed records before checkpoint file flush |
+| `wal.checkpoint.flush_bytes` | Max successfully replayed WAL bytes before checkpoint file flush |
+| `wal.replay.max_records` | Max WAL records in one replay window / sink batch |
+| `wal.replay.max_bytes` | Max WAL bytes in one replay window / sink batch |
 
 ## Boundary notes
 

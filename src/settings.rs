@@ -81,6 +81,8 @@ pub struct WalSettings {
     pub min_free_bytes: u64,
     #[serde(default)]
     pub checkpoint: CheckpointSettings,
+    #[serde(default)]
+    pub replay: ReplaySettings,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -94,12 +96,30 @@ pub struct CheckpointSettings {
     pub flush_bytes: u64,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct ReplaySettings {
+    #[serde(default = "default_replay_max_records")]
+    pub max_records: usize,
+    #[serde(default = "default_replay_max_bytes")]
+    pub max_bytes: u64,
+}
+
 impl Default for CheckpointSettings {
     fn default() -> Self {
         Self {
             flush_interval: default_checkpoint_flush_interval(),
             flush_records: default_checkpoint_flush_records(),
             flush_bytes: default_checkpoint_flush_bytes(),
+        }
+    }
+}
+
+impl Default for ReplaySettings {
+    fn default() -> Self {
+        Self {
+            max_records: default_replay_max_records(),
+            max_bytes: default_replay_max_bytes(),
         }
     }
 }
@@ -129,6 +149,14 @@ pub const fn default_checkpoint_flush_records() -> usize {
 }
 
 pub const fn default_checkpoint_flush_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+pub const fn default_replay_max_records() -> usize {
+    1000
+}
+
+pub const fn default_replay_max_bytes() -> u64 {
     64 * 1024 * 1024
 }
 

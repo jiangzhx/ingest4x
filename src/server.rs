@@ -333,6 +333,7 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
         rule_repository: &state.rule_repository,
         processor: state.processor.get_ref(),
         checkpoint: state.settings.wal.checkpoint.clone(),
+        replay: state.settings.wal.replay.clone(),
     })
     .await?;
 
@@ -457,6 +458,7 @@ mod tests {
                 wal_segment_max_bytes: 1024 * 1024,
                 min_free_bytes: 0,
                 checkpoint: CheckpointSettings::default(),
+                replay: Default::default(),
             },
         });
         let app_state = super::build_app_state(settings)
@@ -503,6 +505,7 @@ mod tests {
                 wal_segment_max_bytes: 1024 * 1024,
                 min_free_bytes: 0,
                 checkpoint: CheckpointSettings::default(),
+                replay: Default::default(),
             },
         });
         let app_state = super::build_app_state(settings)

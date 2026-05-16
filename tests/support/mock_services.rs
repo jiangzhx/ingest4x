@@ -16,7 +16,7 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    CheckpointSettings, IngestSettings, ManagementSettings, Settings, WalSettings,
+    CheckpointSettings, IngestSettings, ManagementSettings, ReplaySettings, Settings, WalSettings,
 };
 use ingest4x::wal::replay::{
     initialize_replay_checkpoint, replay_once as replay_wal_once, WalReplayContext,
@@ -101,6 +101,7 @@ pub struct TestService {
     rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
     checkpoint: CheckpointSettings,
+    replay: ReplaySettings,
 }
 
 fn create_kafka_cluster(topic: &str) -> (MockCluster<'static, DefaultProducerContext>, String) {
@@ -209,6 +210,7 @@ async fn create_app_with_project_event_settings_and_processor(
     let processor = Data::new(processor);
     let wal_settings = test_wal_settings(wal_dir.path());
     let checkpoint = wal_settings.checkpoint.clone();
+    let replay = wal_settings.replay.clone();
     let wal = Data::new(WalWriter::new(&wal_settings).expect("test wal should initialize"));
     initialize_replay_checkpoint(wal_dir.path(), &event_sinks)
         .expect("test replay checkpoint should initialize");
@@ -235,6 +237,7 @@ async fn create_app_with_project_event_settings_and_processor(
             rule_repository,
             processor,
             checkpoint,
+            replay,
         },
     )
 }
@@ -247,6 +250,7 @@ pub async fn replay_once(testservice: &TestService) -> anyhow::Result<usize> {
         rule_repository: &testservice.rule_repository,
         processor: testservice.processor.get_ref(),
         checkpoint: testservice.checkpoint.clone(),
+        replay: testservice.replay.clone(),
     })
     .await
 }
@@ -261,6 +265,7 @@ fn test_wal_settings(dir: &Path) -> WalSettings {
         wal_segment_max_bytes: ingest4x::settings::default_wal_segment_max_bytes(),
         min_free_bytes: 0,
         checkpoint: CheckpointSettings::default(),
+        replay: ReplaySettings::default(),
     }
 }
 
