@@ -87,10 +87,10 @@ Runtime refreshes processor snapshot every `database.refresh_interval_secs`; adm
 | Processor compile failure | Admin write or runtime refresh fails |
 | Processor runtime error | Replay treats the record as processor failure and moves it to quarantine |
 | `emit` target missing | Replay treats as delivery plan error and moves to quarantine |
-| Sink commit failure | Not quarantined; target sink checkpoint does not advance and will retry later |
+| Sink commit failure | Not quarantined; pipeline checkpoint does not advance and the replay window retries later |
 
 `blackhole` is production-grade diagnostic sink:
-`mode = "ok"` drops events and advances checkpoint; `mode = "slow"` succeeds after `delay_ms` delay; `mode = "fail"` returns a sink failure before commit to verify that failed sinks do not advance checkpoints and cause WAL backlog.
+`mode = "ok"` drops events and allows checkpoint progress; `mode = "slow"` succeeds after `delay_ms` delay; `mode = "fail"` returns a sink failure before commit to verify that failed sinks block the pipeline checkpoint and cause WAL backlog.
 
 ## Default script
 

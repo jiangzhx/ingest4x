@@ -15,13 +15,13 @@ client
   -> 200
 
 background replay
-  -> read WAL after sink checkpoints
+  -> read WAL after pipeline checkpoint
   -> parse original body
   -> load project rules
   -> run Rhai processor
   -> emit deliveries
   -> batch deliveries by sink and wait for sink-defined commit
-  -> advance each sink checkpoint
+  -> advance pipeline checkpoint
   -> cleanup covered WAL segments
 ```
 
@@ -30,7 +30,7 @@ Key points:
 - `/ingest` only accepts a single JSON object, not batch arrays.
 - WAL record stores raw payload plus request metadata.
 - Field normalization, validation, error marking, and routing happen in replay, not append path.
-- Each event sink has an independent checkpoint; one sink stall does not roll back another sink checkpoint.
+- Replay has one pipeline checkpoint. If any emitted sink fails, the checkpoint does not advance and the replay window is retried.
 
 ## ACK semantics
 
@@ -82,19 +82,17 @@ Main files under directory:
 wal/
   node_id
   wal.lock
+  checkpoint.json
   00000000000000000001.wal
   00000000000000000002.wal
-  checkpoints/
-    events.json
-    events_error.json
 ```
 
 Notes:
 
 - `node_id`: service node ID. Created on first start; startup fails if configured explicit node ID differs from persisted value.
 - `wal.lock`: directory lock preventing concurrent processes on same WAL.
+- `checkpoint.json`: durable pipeline replay checkpoint.
 - `*.wal`: segmented WAL files. Each segment has fixed header then consecutive record frames.
-- `checkpoints/*.json`: per-event-sink replay checkpoint.
 
 WAL records inside `.wal` are binary frames (not JSONL). Frames include magic/version/payload length/CRC metadata. Payload is Rust-serialized. Do not parse `.wal` as plain text logs when troubleshooting.
 
@@ -129,13 +127,13 @@ Per-record planning flow:
 4. Invoke Rhai processor: `process(event, request)`.
 5. Validate processor `emit` sink target exists.
 
-Per-sink delivery flow:
+Delivery flow:
 
 1. Group planned deliveries by sink target.
 2. Call each sink once with the batched JSON events for the current replay window.
-3. Advance that sink checkpoint only after its batch reaches the sink-defined commit point.
+3. Advance the pipeline checkpoint only after every emitted sink batch reaches its sink-defined commit point.
 
-Each sink defines its own commit point. Kafka can treat a successful broker delivery report as commit; local file sinks must wait for their final file commit; object storage sinks must wait for upload completion or multipart complete. WAL replay only observes the sink runtime result: `Ok` allows checkpoint progress, and `Err` keeps the checkpoint behind for retry.
+Each sink defines its own commit point. Kafka can treat a successful broker delivery report as commit; local file sinks must wait for their final file commit; object storage sinks must wait for upload completion or multipart complete. WAL replay only observes the sink runtime result: all `Ok` results allow pipeline checkpoint progress; any `Err` keeps the checkpoint behind for retry.
 
 Replay uses current DB rules/processor/sink configuration, not the configuration at time of append. So records appended before config changes are processed under new config.
 
@@ -143,10 +141,10 @@ The processor/sink boundary uses JSON events as the common in-memory format. Col
 
 ## Checkpoint
 
-Each event sink has independent checkpoint:
+Replay has one pipeline checkpoint:
 
 ```text
-<wal.dir>/checkpoints/<sink>.json
+<wal.dir>/checkpoint.json
 ```
 
 Checkpoint record:
@@ -154,7 +152,7 @@ Checkpoint record:
 | Field | Meaning |
 | --- | --- |
 | `node_id` | WAL node owning this checkpoint |
-| `sink_id` | Event sink ID |
+| `sink_id` | Always `null` for pipeline checkpoint |
 | `checkpoint_lsn` | Covered LSN |
 | `checkpoint_segment_id` | Segment ID covered |
 | `checkpoint_segment_offset` | Next read offset |
@@ -162,26 +160,26 @@ Checkpoint record:
 
 Checkpoint write path uses temp file, `sync_data()`, rename, and directory sync to avoid partial checkpoint being treated as valid.
 
-For a new sink with no checkpoint, `auto_offset_reset` defines start point:
+When no checkpoint exists, active sink `auto_offset_reset` settings define the pipeline start point:
 
 | Value | Behavior |
 | --- | --- |
-| `earliest` | Replay from earliest readable WAL offset |
-| `latest` | Initialize checkpoint to current WAL tail and consume only new events |
+| any sink is `earliest` | Replay from earliest readable WAL offset |
+| all sinks are `latest` | Initialize checkpoint to current WAL tail and consume only new events |
 
 Default seed uses `latest` for `events`, `events_error`, and `loadtest_events` sinks.
 
-If existing checkpoint is behind current WAL floor, old segments were likely cleaned up and reset follows this sink’s `auto_offset_reset`.
+If the existing checkpoint is behind current WAL floor, old segments were likely cleaned up and reset follows the same pipeline `auto_offset_reset` merge rule.
 
 ## Retention and cleanup
 
-A WAL segment is cleaned only after all enabled sinks’ minimum checkpoint has passed it. In practice:
+A WAL segment is cleaned only after the pipeline checkpoint has passed it. In practice:
 
-- Fast sink checkpoints keep advancing.
-- Slow/failing sink checkpoints hold back older segments.
-- Global cleanup watermark is minimum checkpoint across all active sinks.
+- A slow or failing sink blocks pipeline checkpoint progress.
+- Sinks that committed before another sink failed may receive duplicate events on retry.
+- Downstream sinks should be idempotent if duplicate delivery is not acceptable.
 
-A long-failing sink can block WAL space reuse; fix/disable the sink or explicitly reset checkpoint to recover.
+A long-failing sink can block WAL space reuse; fix or disable the sink, then replay can advance again.
 
 ## Failure handling
 
@@ -196,7 +194,7 @@ Common quarantine cases:
 
 Quarantine does not write to business sinks. Instead it writes a structured event to `ingest4x::wal::quarantine` target containing record ID, LSN, request metadata, error code/message, and base64 original body. The WAL entry is marked handled and checkpoints may continue advancing.
 
-Sink commit failures are not quarantine. If a sink fails before reaching its own commit point, its checkpoint does not advance; replay retries with backoff. Other sinks that already committed the same record can still advance their checkpoints.
+Sink commit failures are not quarantine. If any emitted sink fails before reaching its own commit point, the pipeline checkpoint does not advance and replay retries with backoff. Other sinks that already committed events from the same replay window can receive those events again on retry.
 
 ## Observability
 
@@ -226,7 +224,7 @@ Admin `/metrics` exports WAL-related Prometheus metrics, including:
 | `wal_active_segment_id` | Current active segment |
 | `wal_active_segment_bytes` | Bytes written in active segment |
 | `wal_max_lsn` | Largest writer-allocated LSN |
-| `wal_checkpoint_lsn` | Current minimum sink checkpoint level |
+| `wal_checkpoint_lsn` | Current pipeline checkpoint level |
 | `wal_replay_lag_lsn` | Difference between max LSN and checkpoint LSN |
 | `wal_append_errors_total` | WAL append error count |
 | `wal_replay_errors_total` | Replay error count |
@@ -274,7 +272,7 @@ WAL guarantees durability after ingress and replay participation only; it is not
 
 - WAL does not generate business event IDs.
 - WAL does not de-duplicate duplicate submissions.
-- Replay can retry the same record if process crashes between sink commit and checkpoint write; downstream exactly-once systems should use event IDs or business keys.
+- Replay can retry the same record if process crashes between sink commit and checkpoint write, or if another sink blocks pipeline checkpoint progress after one sink has already committed. Downstream exactly-once systems should use event IDs or business keys.
 - WAL payload format is currently coupled to Rust serialization; schema compatibility across old WAL versions is not guaranteed long term.
 - In multi-node deployment each node should use unique WAL directory and node ID. Never share one WAL directory across processes.
 

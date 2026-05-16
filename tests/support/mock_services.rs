@@ -19,7 +19,7 @@ use ingest4x::settings::{
     CheckpointSettings, IngestSettings, ManagementSettings, Settings, WalSettings,
 };
 use ingest4x::wal::replay::{
-    initialize_sink_checkpoints, replay_once as replay_wal_once, WalReplayContext,
+    initialize_replay_checkpoint, replay_once as replay_wal_once, WalReplayContext,
 };
 use ingest4x::wal::WalWriter;
 use rdkafka::mocking::MockCluster;
@@ -210,8 +210,8 @@ async fn create_app_with_project_event_settings_and_processor(
     let wal_settings = test_wal_settings(wal_dir.path());
     let checkpoint = wal_settings.checkpoint.clone();
     let wal = Data::new(WalWriter::new(&wal_settings).expect("test wal should initialize"));
-    initialize_sink_checkpoints(wal_dir.path(), &event_sinks)
-        .expect("test sink checkpoints should initialize");
+    initialize_replay_checkpoint(wal_dir.path(), &event_sinks)
+        .expect("test replay checkpoint should initialize");
 
     let mut app = App::new().app_data(event_sinks.clone());
     app = app

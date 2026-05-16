@@ -180,7 +180,7 @@ Supported column fields:
 | `type` | string | Yes | Physical Parquet type: `string`, `number`, `integer`, `boolean`, or `json` |
 | `nullable` | boolean | No | Defaults to `false`; missing or null required values fail the sink write |
 
-`rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. WAL checkpoint advances only after the sink write reaches its commit point.
+`rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. WAL pipeline checkpoint advances only after all emitted sink writes in the replay window reach their commit points.
 
 ## stdout
 

@@ -180,7 +180,7 @@ S3/COS 示例使用 OpenDAL option 名称：
 | `type` | string | 是 | 物理 Parquet 类型：`string`、`number`、`integer`、`boolean` 或 `json` |
 | `nullable` | boolean | 否 | 默认 `false`；必填值缺失或为 null 时 sink 写入失败 |
 
-`rules` 仍然是事件契约。Parquet `columns` 只描述当前 sink 的物理投影与列顺序。如果省略 `columns`，sink 仍会把完整 emit event 写入 `event_json` 列。只有 sink 写入达到自身 commit 点后，WAL checkpoint 才会前进。
+`rules` 仍然是事件契约。Parquet `columns` 只描述当前 sink 的物理投影与列顺序。如果省略 `columns`，sink 仍会把完整 emit event 写入 `event_json` 列。只有当前 replay window 内所有已 emit sink 的写入都达到各自 commit 点后，WAL pipeline checkpoint 才会前进。
 
 ## stdout
 

@@ -31,7 +31,7 @@ const SEGMENT_EXTENSION: &str = "wal";
 const FIRST_SEGMENT_ID: u64 = 1;
 const NODE_ID_FILE: &str = "node_id";
 const WAL_LOCK_FILE: &str = "wal.lock";
-const CHECKPOINT_DIR: &str = "checkpoints";
+const CHECKPOINT_FILE: &str = "checkpoint.json";
 
 static RECORD_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[cfg(debug_assertions)]
@@ -163,16 +163,13 @@ impl WalWriter {
 
     fn new_with_active_sinks(
         settings: &WalSettings,
-        active_sink_names: Option<&[String]>,
+        _active_sink_names: Option<&[String]>,
     ) -> io::Result<Self> {
         let dir = PathBuf::from(&settings.dir);
         fs::create_dir_all(&dir)?;
         let lock_file = acquire_wal_lock(&dir)?;
         let node_id = resolve_node_id(settings.node_id.as_deref(), &dir)?;
-        let checkpoint = match active_sink_names {
-            Some(sink_names) => read_max_checkpoint_for_sinks(&dir, &node_id, sink_names)?,
-            None => read_max_sink_checkpoint(&dir, &node_id)?,
-        };
+        let checkpoint = read_pipeline_checkpoint(&dir, &node_id)?;
         let segment_id = recover_active_segment_id(&dir, checkpoint.as_ref())?;
         let next_lsn = recover_next_lsn(&dir, checkpoint.as_ref())?;
         ensure_segment_file(&dir, segment_id, &node_id, next_lsn)?;
@@ -390,15 +387,12 @@ impl WalWriterInner {
         ensure_wal_disk_space(&self.dir, self.min_free_bytes, estimated_wal_bytes)
     }
 
-    fn snapshot(&self, sink_names: Option<&[String]>) -> io::Result<WalSnapshot> {
+    fn snapshot(&self, _sink_names: Option<&[String]>) -> io::Result<WalSnapshot> {
         let state = self
             .state
             .lock()
             .map_err(|_| io::Error::other("wal writer mutex poisoned"))?;
-        let checkpoint_lsn = match sink_names {
-            Some(sink_names) => read_min_sink_checkpoint_lsn(&self.dir, &self.node_id, sink_names)?,
-            None => read_min_checkpoint_lsn(&self.dir, &self.node_id)?,
-        };
+        let checkpoint_lsn = read_checkpoint_lsn(&self.dir, &self.node_id)?;
         let available_bytes = fs2::available_space(&self.dir)?;
         let ready = available_bytes >= self.min_free_bytes;
 
@@ -1251,112 +1245,25 @@ struct WalCheckpointChecksum<'a> {
     updated_at: u64,
 }
 
-fn read_max_sink_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint>> {
-    let checkpoints = read_all_sink_checkpoints(dir, node_id)?;
-    Ok(max_checkpoint(checkpoints))
-}
-
-fn read_max_checkpoint_for_sinks(
-    dir: &Path,
-    node_id: &str,
-    sink_names: &[String],
-) -> io::Result<Option<WalCheckpoint>> {
-    let mut checkpoints = Vec::new();
-    for sink_name in sink_names {
-        let path = sink_checkpoint_path(dir, sink_name);
-        if path.exists() {
-            checkpoints.push(read_checkpoint_file(&path, node_id, Some(sink_name))?);
-        }
+fn read_pipeline_checkpoint(dir: &Path, node_id: &str) -> io::Result<Option<WalCheckpoint>> {
+    let path = checkpoint_path(dir);
+    if !path.exists() {
+        return Ok(None);
     }
-    Ok(max_checkpoint(checkpoints))
+    Ok(Some(read_checkpoint_file(&path, node_id)?))
 }
 
-fn max_checkpoint(checkpoints: Vec<WalCheckpoint>) -> Option<WalCheckpoint> {
-    checkpoints.into_iter().max_by_key(|checkpoint| {
-        (
-            checkpoint.checkpoint_lsn,
-            checkpoint.checkpoint_segment_id,
-            checkpoint.checkpoint_segment_offset,
-        )
-    })
-}
-
-fn read_min_checkpoint_lsn(dir: &Path, node_id: &str) -> io::Result<u64> {
-    Ok(read_all_sink_checkpoints(dir, node_id)?
-        .into_iter()
+fn read_checkpoint_lsn(dir: &Path, node_id: &str) -> io::Result<u64> {
+    Ok(read_pipeline_checkpoint(dir, node_id)?
         .map(|checkpoint| checkpoint.checkpoint_lsn)
-        .min()
         .unwrap_or(0))
 }
 
-fn read_min_sink_checkpoint_lsn(
-    dir: &Path,
-    node_id: &str,
-    sink_names: &[String],
-) -> io::Result<u64> {
-    if sink_names.is_empty() {
-        return Ok(0);
-    }
-
-    let mut min_lsn = None;
-    for sink_name in sink_names {
-        let path = sink_checkpoint_path(dir, sink_name);
-        if !path.exists() {
-            return Ok(0);
-        }
-        let checkpoint = read_checkpoint_file(&path, node_id, Some(sink_name))?;
-        min_lsn = Some(min_lsn.map_or(checkpoint.checkpoint_lsn, |current: u64| {
-            current.min(checkpoint.checkpoint_lsn)
-        }));
-    }
-    Ok(min_lsn.unwrap_or(0))
+fn checkpoint_path(dir: &Path) -> PathBuf {
+    dir.join(CHECKPOINT_FILE)
 }
 
-fn read_all_sink_checkpoints(dir: &Path, node_id: &str) -> io::Result<Vec<WalCheckpoint>> {
-    let checkpoint_dir = dir.join(CHECKPOINT_DIR);
-    if !checkpoint_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut checkpoints = Vec::new();
-    for entry in fs::read_dir(checkpoint_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("json") {
-            continue;
-        }
-        checkpoints.push(read_checkpoint_file(&path, node_id, None)?);
-    }
-    Ok(checkpoints)
-}
-
-fn sink_checkpoint_path(dir: &Path, sink_name: &str) -> PathBuf {
-    dir.join(CHECKPOINT_DIR)
-        .join(format!("{}.json", checkpoint_file_stem(sink_name)))
-}
-
-pub(crate) fn checkpoint_file_stem(sink_name: &str) -> String {
-    let mut stem = String::new();
-    for byte in sink_name.as_bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
-            stem.push(char::from(*byte));
-        } else {
-            stem.push('_');
-            stem.push_str(format!("{byte:02x}").as_str());
-        }
-    }
-    if stem.is_empty() {
-        "sink".to_string()
-    } else {
-        stem
-    }
-}
-
-fn read_checkpoint_file(
-    path: &Path,
-    node_id: &str,
-    expected_sink_id: Option<&str>,
-) -> io::Result<WalCheckpoint> {
+fn read_checkpoint_file(path: &Path, node_id: &str) -> io::Result<WalCheckpoint> {
     if !path.exists() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -1375,25 +1282,14 @@ fn read_checkpoint_file(
             ),
         ));
     }
-    if checkpoint.sink_id.is_none() {
+    if checkpoint.sink_id.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "checkpoint sink_id mismatch: checkpoint={:?} current=<sink>",
+                "checkpoint sink_id mismatch: checkpoint={:?} current=<pipeline>",
                 checkpoint.sink_id
             ),
         ));
-    }
-    if let Some(expected_sink_id) = expected_sink_id {
-        if checkpoint.sink_id.as_deref() != Some(expected_sink_id) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "checkpoint sink_id mismatch: checkpoint={:?} current={}",
-                    checkpoint.sink_id, expected_sink_id
-                ),
-            ));
-        }
     }
     let bytes = serde_json::to_vec(&WalCheckpointChecksum {
         version: checkpoint.version,

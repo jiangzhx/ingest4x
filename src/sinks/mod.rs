@@ -33,7 +33,7 @@ pub trait EventSink: Send + Sync {
     /// Writes the events to this sink and returns only after the sink-defined
     /// reliable commit point has been reached.
     ///
-    /// WAL replay advances the sink checkpoint after this method returns `Ok`.
+    /// WAL replay can advance the pipeline checkpoint after all emitted sinks return `Ok`.
     /// Implementations must return an error for partial, temporary, or
     /// uncommitted downstream states.
     fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>>;

@@ -4,7 +4,6 @@ use crate::services::ProjectRegistryState;
 use crate::settings::{AutoOffsetReset, CheckpointSettings};
 use crate::sinks::EventSinkState;
 use crate::wal::{
-    checkpoint_file_stem,
     error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
     read_entries_after_limit, read_wal_bounds, remove_segments_covered_by_checkpoint, WalBounds,
     WalEntry, WalPosition, WalRecord,
@@ -17,11 +16,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tracing::warn;
 
-const CHECKPOINT_DIR: &str = "checkpoints";
+const CHECKPOINT_FILE: &str = "checkpoint.json";
 const NODE_ID_FILE: &str = "node_id";
 const QUARANTINE_SCHEMA: &str = "ingest4x.wal.quarantine.v1";
 const REPLAY_BATCH_SIZE: usize = 1024;
@@ -41,10 +40,8 @@ struct CheckpointFlushPolicy {
     flush_bytes: u64,
 }
 
-struct SinkReplayState {
+struct ReplayCheckpointState {
     checkpoint: Option<WalPosition>,
-    blocked: bool,
-    failure: Option<String>,
     pending_checkpoint: Option<WalPosition>,
     pending_records: usize,
     pending_bytes: u64,
@@ -141,8 +138,8 @@ const fn checkpoint_version() -> u16 {
     1
 }
 
-pub fn initialize_sink_checkpoints(dir: &Path, event_sinks: &EventSinkState) -> io::Result<()> {
-    let _states = read_sink_replay_states(dir, event_sinks)?;
+pub fn initialize_replay_checkpoint(dir: &Path, event_sinks: &EventSinkState) -> io::Result<()> {
+    let _state = read_replay_checkpoint_state(dir, event_sinks)?;
     Ok(())
 }
 
@@ -152,9 +149,9 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
         return Ok(0);
     }
 
-    let mut sink_states = read_sink_replay_states(context.dir, context.event_sinks)
+    let mut checkpoint_state = read_replay_checkpoint_state(context.dir, context.event_sinks)
         .map_err(ReplayIssue::checkpoint_corrupt)?;
-    let replay_start = min_checkpoint(&sink_states);
+    let replay_start = checkpoint_state.checkpoint;
     let entries = read_entries_after_limit(context.dir, replay_start, Some(REPLAY_BATCH_SIZE))
         .map_err(ReplayIssue::wal_read_failed)?;
     let mut expected_lsn = replay_start.map(|position| position.lsn + 1);
@@ -167,7 +164,7 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
             replay_batch_to_sinks(
                 &context,
                 &checkpoint_policy,
-                &mut sink_states,
+                &mut checkpoint_state,
                 &replay_batch,
             )
             .await?;
@@ -179,12 +176,12 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                 replay_batch_to_sinks(
                     &context,
                     &checkpoint_policy,
-                    &mut sink_states,
+                    &mut checkpoint_state,
                     &replay_batch,
                 )
                 .await?;
                 replay_batch.clear();
-                quarantine_replay_issue(&mut sink_states, &entry, &issue);
+                quarantine_replay_issue(&mut checkpoint_state, &entry, &issue);
                 expected_lsn = Some(entry.position.lsn + 1);
                 replayed += 1;
                 continue;
@@ -193,7 +190,7 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                 replay_batch_to_sinks(
                     &context,
                     &checkpoint_policy,
-                    &mut sink_states,
+                    &mut checkpoint_state,
                     &replay_batch,
                 )
                 .await?;
@@ -206,12 +203,12 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
                 replay_batch_to_sinks(
                     &context,
                     &checkpoint_policy,
-                    &mut sink_states,
+                    &mut checkpoint_state,
                     &replay_batch,
                 )
                 .await?;
                 replay_batch.clear();
-                quarantine_replay_issue(&mut sink_states, &entry, &issue);
+                quarantine_replay_issue(&mut checkpoint_state, &entry, &issue);
                 expected_lsn = Some(entry.position.lsn + 1);
                 replayed += 1;
                 continue;
@@ -229,22 +226,14 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     replay_batch_to_sinks(
         &context,
         &checkpoint_policy,
-        &mut sink_states,
+        &mut checkpoint_state,
         &replay_batch,
     )
     .await?;
-    flush_pending_checkpoints(context.dir, &mut sink_states)
+    flush_pending_checkpoint(context.dir, &mut checkpoint_state)
         .map_err(ReplayIssue::checkpoint_write_failed)?;
-    cleanup_covered_segments(context.dir, &sink_states)
+    cleanup_covered_segments(context.dir, &checkpoint_state)
         .map_err(ReplayIssue::checkpoint_write_failed)?;
-
-    let failures = sink_failures(&sink_states);
-    if !failures.is_empty() {
-        return Err(anyhow::anyhow!(
-            "wal replay sink delivery failed: {}",
-            failures.join("; ")
-        ));
-    }
 
     Ok(replayed)
 }
@@ -270,7 +259,7 @@ struct QuarantinedWalRecord<'a> {
 }
 
 fn quarantine_replay_issue(
-    sink_states: &mut HashMap<String, SinkReplayState>,
+    checkpoint_state: &mut ReplayCheckpointState,
     entry: &WalEntry,
     issue: &ReplayIssue,
 ) {
@@ -287,7 +276,7 @@ fn quarantine_replay_issue(
         error = %issue,
         "wal record quarantined; replay will continue"
     );
-    mark_all_sink_checkpoints_pending(sink_states, entry);
+    mark_checkpoint_pending(checkpoint_state, entry);
 }
 
 fn quarantine_record<'a>(entry: &'a WalEntry, issue: &'a ReplayIssue) -> QuarantinedWalRecord<'a> {
@@ -324,53 +313,28 @@ fn quarantine_event_xwhat(body: &[u8]) -> Option<String> {
         .map(str::to_string)
 }
 
-fn read_sink_replay_states(
+fn read_replay_checkpoint_state(
     dir: &Path,
     event_sinks: &EventSinkState,
-) -> io::Result<HashMap<String, SinkReplayState>> {
-    let mut states = HashMap::new();
+) -> io::Result<ReplayCheckpointState> {
     let bounds = read_wal_bounds(dir)?;
-    let sink_names = event_sinks.sink_names();
-    for sink_name in sink_names {
-        let reset = event_sinks
-            .auto_offset_reset(&sink_name)
-            .unwrap_or(AutoOffsetReset::Latest);
-        states.insert(
-            sink_name.clone(),
-            SinkReplayState {
-                checkpoint: read_checkpoint(dir, sink_name.as_str(), reset, &bounds)?,
-                blocked: false,
-                failure: None,
-                pending_checkpoint: None,
-                pending_records: 0,
-                pending_bytes: 0,
-                last_checkpoint_flush: Instant::now(),
-            },
-        );
-    }
-    Ok(states)
+    let reset = pipeline_auto_offset_reset(event_sinks);
+    Ok(ReplayCheckpointState {
+        checkpoint: read_checkpoint(dir, reset, &bounds)?,
+        pending_checkpoint: None,
+        pending_records: 0,
+        pending_bytes: 0,
+        last_checkpoint_flush: Instant::now(),
+    })
 }
 
-fn mark_all_sink_checkpoints_pending(
-    sink_states: &mut HashMap<String, SinkReplayState>,
-    entry: &WalEntry,
-) {
-    for state in sink_states.values_mut() {
-        if state.blocked || checkpoint_covers_entry(state.checkpoint, entry) {
-            continue;
+fn pipeline_auto_offset_reset(event_sinks: &EventSinkState) -> AutoOffsetReset {
+    for sink_name in event_sinks.sink_names() {
+        if event_sinks.auto_offset_reset(&sink_name) == Some(AutoOffsetReset::Earliest) {
+            return AutoOffsetReset::Earliest;
         }
-        mark_sink_checkpoint_pending(state, entry);
     }
-}
-
-fn min_checkpoint(states: &HashMap<String, SinkReplayState>) -> Option<WalPosition> {
-    if states.values().any(|state| state.checkpoint.is_none()) {
-        return None;
-    }
-    states
-        .values()
-        .filter_map(|state| state.checkpoint)
-        .min_by_key(|position| (position.lsn, position.segment, position.offset))
+    AutoOffsetReset::Latest
 }
 
 fn checkpoint_flush_policy(
@@ -467,74 +431,76 @@ fn group_deliveries_by_sink(
 async fn replay_batch_to_sinks(
     context: &WalReplayContext<'_>,
     checkpoint_policy: &CheckpointFlushPolicy,
-    sink_states: &mut HashMap<String, SinkReplayState>,
+    checkpoint_state: &mut ReplayCheckpointState,
     batch: &[ReplayEntryDeliveries],
 ) -> std::result::Result<(), ReplayIssue> {
     if batch.is_empty() {
         return Ok(());
     }
-    let sink_names = sink_states.keys().cloned().collect::<Vec<_>>();
+    let mut sink_events_by_name: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut first_delivery_lsn_by_name: HashMap<String, u64> = HashMap::new();
+    for item in batch {
+        if checkpoint_covers_entry(checkpoint_state.checkpoint, &item.entry) {
+            continue;
+        }
+        for (sink_name, events) in &item.deliveries_by_sink {
+            if events.is_empty() {
+                continue;
+            }
+            first_delivery_lsn_by_name
+                .entry(sink_name.clone())
+                .or_insert(item.entry.position.lsn);
+            sink_events_by_name
+                .entry(sink_name.clone())
+                .or_default()
+                .extend(events.iter().cloned());
+        }
+    }
+
+    let mut sink_names = sink_events_by_name.keys().cloned().collect::<Vec<_>>();
+    sink_names.sort();
     for sink_name in sink_names {
-        let Some(state) = sink_states.get_mut(&sink_name) else {
+        let sink_events = sink_events_by_name
+            .get(&sink_name)
+            .expect("sink events should exist for sink name");
+        if let Err(error) = context
+            .event_sinks
+            .send_events_to_sink(&sink_name, sink_events)
+            .await
+        {
+            let failed_lsn = first_delivery_lsn_by_name
+                .get(&sink_name)
+                .copied()
+                .unwrap_or(batch[0].entry.position.lsn);
+            let issue = ReplayIssue::sink_send_failed(sink_name.clone(), failed_lsn, error);
+            warn!(
+                sink = sink_name.as_str(),
+                lsn = failed_lsn,
+                code = issue.code(),
+                action = issue.action().as_str(),
+                error = %issue,
+                "wal replay sink delivery failed; pipeline checkpoint will not advance"
+            );
+            return Err(issue);
+        }
+    }
+
+    for item in batch {
+        if checkpoint_covers_entry(checkpoint_state.checkpoint, &item.entry) {
             continue;
-        };
-        if state.blocked {
-            continue;
         }
-
-        let mut sink_events = Vec::new();
-        let mut first_delivery_lsn = None;
-        for item in batch {
-            if checkpoint_covers_entry(state.checkpoint, &item.entry) {
-                continue;
-            }
-            if let Some(events) = item.deliveries_by_sink.get(&sink_name) {
-                if !events.is_empty() {
-                    first_delivery_lsn.get_or_insert(item.entry.position.lsn);
-                    sink_events.extend(events.iter().cloned());
-                }
-            }
-        }
-
-        if !sink_events.is_empty() {
-            if let Err(error) = context
-                .event_sinks
-                .send_events_to_sink(&sink_name, &sink_events)
-                .await
-            {
-                let failed_lsn = first_delivery_lsn.unwrap_or(batch[0].entry.position.lsn);
-                let issue = ReplayIssue::sink_send_failed(sink_name.clone(), failed_lsn, error);
-                state.blocked = true;
-                state.failure = Some(issue.to_string());
-                warn!(
-                    sink = sink_name.as_str(),
-                    lsn = failed_lsn,
-                    code = issue.code(),
-                    action = issue.action().as_str(),
-                    error = %issue,
-                    "wal replay sink delivery failed; sink checkpoint will not advance"
-                );
-                continue;
-            }
-        }
-
-        for item in batch {
-            if checkpoint_covers_entry(state.checkpoint, &item.entry) {
-                continue;
-            }
-            mark_sink_checkpoint_pending(state, &item.entry);
-        }
-        if should_flush_checkpoint(
-            checkpoint_policy,
-            state.pending_records,
-            state.pending_bytes,
-            state.last_checkpoint_flush,
-        ) {
-            flush_sink_checkpoint(context.dir, sink_name.as_str(), state)
-                .map_err(ReplayIssue::checkpoint_write_failed)?;
-            cleanup_covered_segments(context.dir, sink_states)
-                .map_err(ReplayIssue::checkpoint_write_failed)?;
-        }
+        mark_checkpoint_pending(checkpoint_state, &item.entry);
+    }
+    if should_flush_checkpoint(
+        checkpoint_policy,
+        checkpoint_state.pending_records,
+        checkpoint_state.pending_bytes,
+        checkpoint_state.last_checkpoint_flush,
+    ) {
+        flush_pending_checkpoint(context.dir, checkpoint_state)
+            .map_err(ReplayIssue::checkpoint_write_failed)?;
+        cleanup_covered_segments(context.dir, checkpoint_state)
+            .map_err(ReplayIssue::checkpoint_write_failed)?;
     }
 
     Ok(())
@@ -544,7 +510,7 @@ fn checkpoint_covers_entry(checkpoint: Option<WalPosition>, entry: &WalEntry) ->
     checkpoint.is_some_and(|checkpoint| checkpoint.lsn >= entry.position.lsn)
 }
 
-fn mark_sink_checkpoint_pending(state: &mut SinkReplayState, entry: &WalEntry) {
+fn mark_checkpoint_pending(state: &mut ReplayCheckpointState, entry: &WalEntry) {
     state.pending_checkpoint = Some(entry.next_position);
     state.pending_records += 1;
     state.pending_bytes += entry
@@ -553,15 +519,11 @@ fn mark_sink_checkpoint_pending(state: &mut SinkReplayState, entry: &WalEntry) {
         .saturating_sub(entry.position.offset);
 }
 
-fn flush_sink_checkpoint(
-    dir: &Path,
-    sink_name: &str,
-    state: &mut SinkReplayState,
-) -> io::Result<()> {
+fn flush_pending_checkpoint(dir: &Path, state: &mut ReplayCheckpointState) -> io::Result<()> {
     let Some(position) = state.pending_checkpoint else {
         return Ok(());
     };
-    write_checkpoint(dir, sink_name, position)?;
+    write_checkpoint(dir, position)?;
     state.checkpoint = Some(position);
     state.pending_checkpoint = None;
     state.pending_records = 0;
@@ -570,36 +532,14 @@ fn flush_sink_checkpoint(
     Ok(())
 }
 
-fn flush_pending_checkpoints(
-    dir: &Path,
-    sink_states: &mut HashMap<String, SinkReplayState>,
-) -> io::Result<()> {
-    let sink_names = sink_states.keys().cloned().collect::<Vec<_>>();
-    for sink_name in sink_names {
-        if let Some(state) = sink_states.get_mut(&sink_name) {
-            flush_sink_checkpoint(dir, sink_name.as_str(), state)?;
-        }
-    }
-    Ok(())
-}
-
 fn cleanup_covered_segments(
     dir: &Path,
-    sink_states: &HashMap<String, SinkReplayState>,
+    checkpoint_state: &ReplayCheckpointState,
 ) -> io::Result<()> {
-    let Some(watermark) = min_checkpoint(sink_states) else {
+    let Some(watermark) = checkpoint_state.checkpoint else {
         return Ok(());
     };
     remove_segments_covered_by_checkpoint(dir, watermark.lsn, watermark.segment)
-}
-
-fn sink_failures(sink_states: &HashMap<String, SinkReplayState>) -> Vec<String> {
-    let mut failures = sink_states
-        .values()
-        .filter_map(|state| state.failure.clone())
-        .collect::<Vec<_>>();
-    failures.sort();
-    failures
 }
 
 fn request_context(record: &WalRecord) -> ProcessorRequestContext {
@@ -617,43 +557,40 @@ fn request_context(record: &WalRecord) -> ProcessorRequestContext {
     .with_received_at_ms(record.received_at_ms())
 }
 
-fn sink_checkpoint_path(dir: &Path, sink_name: &str) -> PathBuf {
-    dir.join(CHECKPOINT_DIR)
-        .join(format!("{}.json", checkpoint_file_stem(sink_name)))
+fn checkpoint_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(CHECKPOINT_FILE)
 }
 
 fn read_checkpoint(
     dir: &Path,
-    sink_name: &str,
     reset: AutoOffsetReset,
     bounds: &WalBounds,
 ) -> io::Result<Option<WalPosition>> {
-    let path = sink_checkpoint_path(dir, sink_name);
+    let path = checkpoint_path(dir);
     if !path.exists() {
-        return reset_checkpoint(dir, sink_name, reset, bounds);
+        return reset_checkpoint(dir, reset, bounds);
     }
 
     let checkpoint = read_checkpoint_file(&path)?;
     validate_checkpoint(dir, &checkpoint, &path)?;
-    if checkpoint.sink_id.as_deref() != Some(sink_name) {
+    if checkpoint.sink_id.is_some() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "checkpoint sink_id mismatch: checkpoint={:?} current={}",
-                checkpoint.sink_id, sink_name
+                "checkpoint sink_id mismatch: checkpoint={:?} current=<pipeline>",
+                checkpoint.sink_id
             ),
         ));
     }
     let position = checkpoint.position();
     if checkpoint_before_wal_floor(position, bounds) {
-        return reset_checkpoint(dir, sink_name, reset, bounds);
+        return reset_checkpoint(dir, reset, bounds);
     }
     Ok(Some(position))
 }
 
 fn reset_checkpoint(
     dir: &Path,
-    sink_name: &str,
     reset: AutoOffsetReset,
     bounds: &WalBounds,
 ) -> io::Result<Option<WalPosition>> {
@@ -663,7 +600,7 @@ fn reset_checkpoint(
             let Some(position) = bounds.tail else {
                 return Ok(None);
             };
-            write_checkpoint(dir, sink_name, position)?;
+            write_checkpoint(dir, position)?;
             Ok(Some(position))
         }
     }
@@ -699,12 +636,11 @@ fn validate_checkpoint(dir: &Path, checkpoint: &WalCheckpoint, path: &Path) -> i
     Ok(())
 }
 
-fn write_checkpoint(dir: &Path, sink_name: &str, position: WalPosition) -> io::Result<()> {
-    let checkpoint_dir = dir.join(CHECKPOINT_DIR);
-    fs::create_dir_all(&checkpoint_dir)?;
-    let path = sink_checkpoint_path(dir, sink_name);
-    let temp_path = checkpoint_dir.join(format!("{}.json.tmp", checkpoint_file_stem(sink_name)));
-    let checkpoint = WalCheckpoint::new(position, read_node_id(dir)?, Some(sink_name))?;
+fn write_checkpoint(dir: &Path, position: WalPosition) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let path = checkpoint_path(dir);
+    let temp_path = dir.join(format!("{CHECKPOINT_FILE}.tmp"));
+    let checkpoint = WalCheckpoint::new(position, read_node_id(dir)?, None)?;
     let bytes = serde_json::to_vec(&checkpoint).map_err(io::Error::other)?;
     let mut temp_file = OpenOptions::new()
         .create(true)
@@ -715,7 +651,7 @@ fn write_checkpoint(dir: &Path, sink_name: &str, position: WalPosition) -> io::R
     temp_file.sync_data()?;
     drop(temp_file);
     fs::rename(&temp_path, &path)?;
-    File::open(&checkpoint_dir)?.sync_all()
+    File::open(dir)?.sync_all()
 }
 
 fn read_node_id(dir: &Path) -> io::Result<String> {

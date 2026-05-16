@@ -12,7 +12,7 @@ use crate::utils::get_host_ip;
 use crate::utils::prometheus::{
     init_private_prometheus, init_public_prometheus, IngestPrometheusMetrics, WalPrometheusMetrics,
 };
-use crate::wal::replay::{initialize_sink_checkpoints, replay_once, WalReplayContext};
+use crate::wal::replay::{initialize_replay_checkpoint, replay_once, WalReplayContext};
 use crate::wal::WalWriter;
 use actix_web::web::{Data, ServiceConfig};
 use actix_web::{App, HttpResponse, HttpServer};
@@ -196,7 +196,7 @@ async fn build_app_state_from_parts(
         WalWriter::new_for_active_sinks(&settings.wal, &sink_names)
             .map_err(|error| std::io::Error::other(error.to_string()))?,
     );
-    initialize_sink_checkpoints(std::path::Path::new(&settings.wal.dir), &event_sinks)
+    initialize_replay_checkpoint(std::path::Path::new(&settings.wal.dir), &event_sinks)
         .map_err(|error| std::io::Error::other(error.to_string()))?;
 
     Ok(AppState {
