@@ -221,6 +221,16 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
             entry,
             deliveries_by_sink,
         });
+        if replay_batch_reaches_flush_policy(&replay_batch, &checkpoint_policy) {
+            replay_batch_to_sinks(
+                &context,
+                &checkpoint_policy,
+                &mut checkpoint_state,
+                &replay_batch,
+            )
+            .await?;
+            replay_batch.clear();
+        }
     }
 
     replay_batch_to_sinks(
@@ -361,6 +371,24 @@ fn should_flush_checkpoint(
     records >= policy.flush_records
         || bytes >= policy.flush_bytes
         || last_flush.elapsed() >= policy.flush_interval
+}
+
+fn replay_batch_reaches_flush_policy(
+    batch: &[ReplayEntryDeliveries],
+    policy: &CheckpointFlushPolicy,
+) -> bool {
+    batch.len() >= policy.flush_records || replay_batch_bytes(batch) >= policy.flush_bytes
+}
+
+fn replay_batch_bytes(batch: &[ReplayEntryDeliveries]) -> u64 {
+    batch.iter().fold(0, |bytes, item| {
+        bytes.saturating_add(
+            item.entry
+                .next_position
+                .offset
+                .saturating_sub(item.entry.position.offset),
+        )
+    })
 }
 
 async fn process_record(

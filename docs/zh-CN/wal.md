@@ -115,9 +115,9 @@ wal_segment_max_bytes = 134217728
 
 ## 重放
 
-服务启动时会启动 WAL 重放循环。每次运行默认读取一批记录（默认 batch size `1024`）。
+服务启动时会启动 WAL 重放循环。每次运行默认读取一批记录（默认 read limit 为 `1024`）。
 
-重放仍然逐条 WAL record 执行 rules 与 processor，因为 Rhai 当前每次接收一个 JSON event。processor 输出校验完成后，系统会在当前 replay window 内按 sink 暂存 delivery，每个 sink 最终收到一次 `send_batch` 调用。
+重放仍然逐条 WAL record 执行 rules 与 processor，因为 Rhai 当前每次接收一个 JSON event。processor 输出校验完成后，系统会在当前 replay window 内按 sink 暂存 delivery，每个 sink 最终收到一次 `send_batch` 调用。当达到 `wal.checkpoint.flush_records` 或 `wal.checkpoint.flush_bytes` 时，当前 replay window 会被 flush；因此这些配置也会限制单次 sink `send_batch` 的大小，以及部分 sink 已成功后可能重复投递的窗口。
 
 逐条规划流程：
 
@@ -263,8 +263,8 @@ flush_bytes = 67108864
 | `wal.wal_segment_max_bytes` | 分段最大大小 |
 | `wal.min_free_bytes` | 最小空闲阈值，非零时生效 |
 | `wal.checkpoint.flush_interval` | 两次 checkpoint flush 最大间隔 |
-| `wal.checkpoint.flush_records` | checkpoint flush 的最大记录数 |
-| `wal.checkpoint.flush_bytes` | checkpoint flush 的最大字节数 |
+| `wal.checkpoint.flush_records` | flush 当前 replay window 与 checkpoint 的最大记录数 |
+| `wal.checkpoint.flush_bytes` | flush 当前 replay window 与 checkpoint 的最大 WAL 字节数 |
 
 ## 边界说明
 

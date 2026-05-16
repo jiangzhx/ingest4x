@@ -115,9 +115,9 @@ Before append, available disk space is checked. If `min_free_bytes` is non-zero 
 
 ## Replay
 
-A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default batch size is `1024`).
+A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default read limit is `1024`).
 
-Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window and each sink receives one `send_batch` call for its pending events.
+Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window and each sink receives one `send_batch` call for its pending events. The replay window is flushed when `wal.checkpoint.flush_records` or `wal.checkpoint.flush_bytes` is reached, so these settings also bound a single sink `send_batch` call and the duplicate-delivery window after partial sink success.
 
 Per-record planning flow:
 
@@ -263,8 +263,8 @@ Meaning:
 | `wal.wal_segment_max_bytes` | Max segment size |
 | `wal.min_free_bytes` | Minimum free space threshold, if non-zero |
 | `wal.checkpoint.flush_interval` | Max interval between checkpoint flushes |
-| `wal.checkpoint.flush_records` | Max records before checkpoint flush |
-| `wal.checkpoint.flush_bytes` | Max bytes before checkpoint flush |
+| `wal.checkpoint.flush_records` | Max records before flushing the current replay window and checkpoint |
+| `wal.checkpoint.flush_bytes` | Max WAL bytes before flushing the current replay window and checkpoint |
 
 ## Boundary notes
 
