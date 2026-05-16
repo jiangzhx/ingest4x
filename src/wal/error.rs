@@ -1,4 +1,5 @@
 use crate::repositories::RuleRepositoryError;
+use anyhow::Error as AnyhowError;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::io;
@@ -152,10 +153,13 @@ impl ReplayIssue {
         }
     }
 
-    pub(crate) fn sink_send_failed(sink: String, lsn: u64, error: impl Display) -> Self {
+    pub(crate) fn sink_send_failed(sink: String, lsn: u64, error: AnyhowError) -> Self {
         Self::Sink {
             code: "replay_sink_send_failed",
-            message: format!("sink `{sink}` failed at lsn {lsn}: {error}"),
+            message: format!(
+                "sink `{sink}` failed at lsn {lsn}: {}",
+                format_anyhow_chain(&error)
+            ),
             sink,
         }
     }
@@ -252,6 +256,14 @@ impl Display for ReplayIssue {
 
 impl Error for ReplayIssue {}
 
+fn format_anyhow_chain(error: &AnyhowError) -> String {
+    error
+        .chain()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ReplayAction, ReplayIssue};
@@ -275,5 +287,17 @@ mod tests {
         );
         assert_eq!(database_error.code(), "replay_control_plane_unavailable");
         assert_eq!(database_error.action(), ReplayAction::StopReplay);
+    }
+
+    #[test]
+    fn sink_send_failed_preserves_anyhow_error_chain() {
+        let error = anyhow::anyhow!("missing required parquet column `installid`")
+            .context("event sink `parquet_events` failed");
+
+        let issue = ReplayIssue::sink_send_failed("parquet_events".to_string(), 1, error);
+
+        assert!(issue.message().contains(
+            "event sink `parquet_events` failed: missing required parquet column `installid`"
+        ));
     }
 }

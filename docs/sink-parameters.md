@@ -85,6 +85,103 @@ Supported `destination_json` fields:
 | --- | --- | --- | --- |
 | `topic` | string | Yes | Kafka topic to send events to |
 
+## parquet
+
+Purpose: write events as Parquet files through OpenDAL-backed storage.
+
+The storage config follows OpenDAL's `scheme + options` model. Current enabled schemes are `fs`, `s3`, and `cos`; tests cover local filesystem writes.
+
+### Delivery target (`target_type = "parquet"`)
+
+```json
+{
+  "scheme": "fs",
+  "options": {
+    "root": "/var/lib/ingest4x/parquet"
+  }
+}
+```
+
+Supported `config_json` fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `scheme` | string | Yes | OpenDAL service scheme, currently `fs`, `s3`, or `cos` |
+| `options` | object | Yes | OpenDAL service options, for example `{"root": "/var/lib/ingest4x/parquet"}` for `fs` |
+
+S3/COS examples use OpenDAL option names:
+
+```json
+{
+  "scheme": "s3",
+  "options": {
+    "bucket": "ingest4x",
+    "region": "ap-shanghai",
+    "endpoint": "https://s3.example.com",
+    "access_key_id": "...",
+    "secret_access_key": "..."
+  }
+}
+```
+
+```json
+{
+  "scheme": "cos",
+  "options": {
+    "bucket": "ingest4x-1250000000",
+    "region": "ap-shanghai",
+    "secret_id": "...",
+    "secret_key": "..."
+  }
+}
+```
+
+### Event sink `destination_json`
+
+```json
+{
+  "path_prefix": "events",
+  "columns": [
+    {
+      "name": "appid",
+      "path": "appid",
+      "type": "string"
+    },
+    {
+      "name": "xwhat",
+      "path": "xwhat",
+      "type": "string"
+    },
+    {
+      "name": "installid",
+      "path": "xcontext.installid",
+      "type": "string",
+      "nullable": true
+    }
+  ],
+  "include_event_json": true
+}
+```
+
+Supported `destination_json` fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `path_prefix` | string | Yes | Relative path prefix under the OpenDAL operator root; files are committed as `.parquet` files |
+| `columns` | array | No | Ordered Parquet projection columns. Each column reads from the emitted JSON event by `path` |
+| `include_event_json` | boolean | No | Defaults to `true`; appends the full emitted event as an `event_json` string column |
+
+Supported column fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Output Parquet column name |
+| `path` | string | Yes | Dot-separated path in the emitted JSON event, or `$` for the whole event |
+| `type` | string | Yes | Physical Parquet type: `string`, `number`, `integer`, `boolean`, or `json` |
+| `nullable` | boolean | No | Defaults to `false`; missing or null required values fail the sink write |
+
+`rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. WAL checkpoint advances only after the sink write reaches its commit point.
+
 ## stdout
 
 Purpose: write events to service stdout for development and debugging.

@@ -20,7 +20,7 @@ background replay
   -> load project rules
   -> run Rhai processor
   -> emit deliveries
-  -> send to event sinks
+  -> batch deliveries by sink and wait for sink-defined commit
   -> advance each sink checkpoint
   -> cleanup covered WAL segments
 ```
@@ -119,17 +119,27 @@ Before append, available disk space is checked. If `min_free_bytes` is non-zero 
 
 A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default batch size is `1024`).
 
-Per-record flow:
+Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window and each sink receives one `send_batch` call for its pending events.
+
+Per-record planning flow:
 
 1. Parse `body` as JSON.
 2. Verify `project_id` still exists in in-memory registry.
 3. Compile and load current project rules.
 4. Invoke Rhai processor: `process(event, request)`.
 5. Validate processor `emit` sink target exists.
-6. Deliver by sink.
-7. Advance corresponding sink checkpoint after successful delivery.
+
+Per-sink delivery flow:
+
+1. Group planned deliveries by sink target.
+2. Call each sink once with the batched JSON events for the current replay window.
+3. Advance that sink checkpoint only after its batch reaches the sink-defined commit point.
+
+Each sink defines its own commit point. Kafka can treat a successful broker delivery report as commit; local file sinks must wait for their final file commit; object storage sinks must wait for upload completion or multipart complete. WAL replay only observes the sink runtime result: `Ok` allows checkpoint progress, and `Err` keeps the checkpoint behind for retry.
 
 Replay uses current DB rules/processor/sink configuration, not the configuration at time of append. So records appended before config changes are processed under new config.
+
+The processor/sink boundary uses JSON events as the common in-memory format. Columnar sinks such as Parquet convert the batched JSON events into Arrow arrays internally during encoding; Kafka/stdout can continue to use JSON without an Arrow round trip.
 
 ## Checkpoint
 
@@ -186,7 +196,7 @@ Common quarantine cases:
 
 Quarantine does not write to business sinks. Instead it writes a structured event to `ingest4x::wal::quarantine` target containing record ID, LSN, request metadata, error code/message, and base64 original body. The WAL entry is marked handled and checkpoints may continue advancing.
 
-Sink delivery failures are not quarantine. If a sink fails, its checkpoint does not advance; replay retries with backoff. Other sinks that already handled the same record can still advance their checkpoints.
+Sink commit failures are not quarantine. If a sink fails before reaching its own commit point, its checkpoint does not advance; replay retries with backoff. Other sinks that already committed the same record can still advance their checkpoints.
 
 ## Observability
 
@@ -264,7 +274,7 @@ WAL guarantees durability after ingress and replay participation only; it is not
 
 - WAL does not generate business event IDs.
 - WAL does not de-duplicate duplicate submissions.
-- Replay can retry the same record if process crashes between sink delivery and checkpoint write; downstream exactly-once systems should use event IDs or business keys.
+- Replay can retry the same record if process crashes between sink commit and checkpoint write; downstream exactly-once systems should use event IDs or business keys.
 - WAL payload format is currently coupled to Rust serialization; schema compatibility across old WAL versions is not guaranteed long term.
 - In multi-node deployment each node should use unique WAL directory and node ID. Never share one WAL directory across processes.
 

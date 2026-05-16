@@ -78,6 +78,10 @@ async fn admin_can_list_registered_sink_types() {
                     "label": "Kafka"
                 },
                 {
+                    "target_type": "parquet",
+                    "label": "Parquet"
+                },
+                {
                     "target_type": "stdout",
                     "label": "stdout"
                 }

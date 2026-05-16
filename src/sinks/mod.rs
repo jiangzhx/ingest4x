@@ -7,6 +7,7 @@ use serde_json::Value;
 
 pub mod blackhole;
 pub mod kafka;
+pub mod parquet;
 pub mod state;
 pub mod stdout;
 
@@ -29,12 +30,19 @@ pub trait EventSink: Send + Sync {
     where
         Self: Sized;
 
+    /// Writes the events to this sink and returns only after the sink-defined
+    /// reliable commit point has been reached.
+    ///
+    /// WAL replay advances the sink checkpoint after this method returns `Ok`.
+    /// Implementations must return an error for partial, temporary, or
+    /// uncommitted downstream states.
     fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>>;
 
     fn check_alive(&self) -> BoxFuture<'_, Result<()>>;
 }
 
 pub trait EventSinkRuntime: Send + Sync {
+    /// See [`EventSink::send_batch`] for the checkpoint and commit contract.
     fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>>;
 
     fn check_alive(&self) -> BoxFuture<'_, Result<()>>;
@@ -208,6 +216,57 @@ mod tests {
             }))
             .is_err());
     }
+
+    #[test]
+    fn parquet_provider_exposes_metadata_and_normalizes_json_configs() {
+        let provider = provider_for("parquet").expect("parquet provider should be registered");
+
+        assert_eq!(
+            provider.sink_type(),
+            SinkTypeMetadata {
+                target_type: "parquet",
+                label: "Parquet",
+            }
+        );
+        assert_eq!(
+            provider
+                .normalize_delivery_target_config(json!({
+                    "scheme": "fs",
+                    "options": {
+                        "root": "/tmp/ingest4x-parquet"
+                    }
+                }))
+                .expect("target config should normalize"),
+            r#"{"scheme":"fs","options":{"root":"/tmp/ingest4x-parquet"}}"#
+        );
+        assert_eq!(
+            provider
+                .normalize_event_sink_config(json!({
+                    "path_prefix": "events",
+                    "columns": [
+                        {
+                            "name": "appid",
+                            "path": "appid",
+                            "type": "string"
+                        },
+                        {
+                            "name": "currencyamount",
+                            "path": "xcontext.currencyamount",
+                            "type": "number",
+                            "nullable": true
+                        }
+                    ]
+                }))
+                .expect("destination should normalize"),
+            r#"{"path_prefix":"events","columns":[{"name":"appid","path":"appid","type":"string","nullable":false},{"name":"currencyamount","path":"xcontext.currencyamount","type":"number","nullable":true}],"include_event_json":true}"#
+        );
+        assert!(provider
+            .normalize_event_sink_config(json!({
+                "path_prefix": "events",
+                "unknown": true
+            }))
+            .is_err());
+    }
 }
 
 pub fn normalize_delivery_target_config(
@@ -261,8 +320,12 @@ fn provider_for(target_type: &str) -> Option<&'static dyn ErasedEventSinkProvide
 }
 
 fn providers() -> &'static [&'static dyn ErasedEventSinkProvider] {
-    static PROVIDERS: [&dyn ErasedEventSinkProvider; 3] =
-        [&blackhole::PROVIDER, &kafka::PROVIDER, &stdout::PROVIDER];
+    static PROVIDERS: [&dyn ErasedEventSinkProvider; 4] = [
+        &blackhole::PROVIDER,
+        &kafka::PROVIDER,
+        &parquet::PROVIDER,
+        &stdout::PROVIDER,
+    ];
     &PROVIDERS
 }
 

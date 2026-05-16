@@ -2,14 +2,17 @@ use crate::support::mock_services::build_app_state_with_test_processor;
 use crate::support::sinks::{blackhole_runtime_sink, kafka_runtime_sink, stdout_runtime_sink};
 use actix_http::StatusCode;
 use actix_web::{test, App};
+use arrow_array::{Float64Array, StringArray};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use bytes::Bytes;
 use ingest4x::db::init_sqlite_database;
 use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{
     CreateDeliveryTargetInput, CreateEventSinkInput, CreateProcessorScriptInput,
-    CreateProcessorScriptModuleInput, CreateProjectInput, DeliveryTargetType, EventSinkRepository,
-    ProcessorRepository, ProcessorScriptStatus, ProjectRepository, RuleRepository,
+    CreateProcessorScriptModuleInput, CreateProjectInput, DeliveryTarget, DeliveryTargetType,
+    EventSinkRepository, ProcessorRepository, ProcessorScriptStatus, ProjectRepository,
+    RuleRepository, RuntimeEventSink,
 };
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
@@ -17,6 +20,7 @@ use ingest4x::settings::{AutoOffsetReset, CheckpointSettings, Settings};
 use ingest4x::sinks::init_event_sinks_from_runtime_sinks;
 use ingest4x::wal::replay::{initialize_sink_checkpoints, replay_once, WalReplayContext};
 use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::mocking::MockCluster;
 use rdkafka::producer::DefaultProducerContext;
@@ -1158,6 +1162,167 @@ async fn wal_replay_sends_records_to_blackhole_and_advances_checkpoint() {
 }
 
 #[actix_rt::test]
+async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoint() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let parquet_dir = temp.path().join("parquet");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            name: "APPID".to_string(),
+            enabled: true,
+            ingest_token: "igx_APPID".to_string(),
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![RuntimeEventSink {
+        sink_id: "parquet_events".to_string(),
+        name: "parquet events".to_string(),
+        destination_json: json!({
+            "path_prefix": "events",
+            "columns": [
+                {
+                    "name": "appid",
+                    "path": "appid",
+                    "type": "string"
+                },
+                {
+                    "name": "installid",
+                    "path": "xcontext.installid",
+                    "type": "string"
+                },
+                {
+                    "name": "currencyamount",
+                    "path": "xcontext.currencyamount",
+                    "type": "number"
+                }
+            ]
+        }),
+        auto_offset_reset: AutoOffsetReset::Earliest,
+        target: DeliveryTarget {
+            id: 1,
+            target_id: "local_parquet".to_string(),
+            name: "Local Parquet".to_string(),
+            target_type: DeliveryTargetType::parse("parquet")
+                .expect("parquet target type should be registered"),
+            config_json: json!({
+                "scheme": "fs",
+                "options": {
+                    "root": parquet_dir
+                }
+            }),
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        },
+    }])
+    .expect("event sinks should initialize");
+    let processor = processor_with_sinks(
+        r#"
+            fn process(event, request) {
+                emit(SINK_PARQUET_EVENTS, event);
+            }
+        "#,
+        &["parquet_events"],
+    );
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        flush_max_interval: "1s".to_string(),
+        flush_max_records: 100_000,
+        no_sync: false,
+        wal_segment_max_bytes: 128 * 1024 * 1024,
+        min_free_bytes: 0,
+        checkpoint: Default::default(),
+    })
+    .expect("wal writer");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-parquet-ok",
+                "os": "ios",
+                "currencyamount": 12.5
+            }
+        })))
+        .expect("append record");
+    writer
+        .append(&test_wal_record(json!({
+            "appid": "APPID",
+            "xwhat": "custom_event",
+            "xcontext": {
+                "installid": "iid-parquet-second",
+                "os": "ios",
+                "currencyamount": 24.5
+            }
+        })))
+        .expect("append record");
+    drop(writer);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+        })
+        .await
+        .expect("parquet replay should succeed"),
+        2
+    );
+
+    let parquet_files = list_files_with_extension(&parquet_dir, "parquet");
+    assert_eq!(parquet_files.len(), 1);
+    let parquet_bytes = fs::read(&parquet_files[0]).expect("read parquet file");
+    assert!(parquet_bytes.starts_with(b"PAR1"));
+    assert!(parquet_bytes.ends_with(b"PAR1"));
+    let builder = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(parquet_bytes))
+        .expect("build parquet reader");
+    let mut reader = builder.build().expect("open parquet reader");
+    let batch = reader
+        .next()
+        .expect("record batch should exist")
+        .expect("record batch should decode");
+    assert_eq!(batch.num_rows(), 2);
+    let appid = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("appid column should be string");
+    let installid = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("installid column should be string");
+    let amount = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("currencyamount column should be number");
+    assert_eq!(appid.value(0), "APPID");
+    assert_eq!(installid.value(0), "iid-parquet-ok");
+    assert_eq!(amount.value(0), 12.5);
+    assert_eq!(appid.value(1), "APPID");
+    assert_eq!(installid.value(1), "iid-parquet-second");
+    assert_eq!(amount.value(1), 24.5);
+    let checkpoint: Value = serde_json::from_slice(
+        &fs::read(wal_dir.join("checkpoints/parquet_events.json")).expect("sink checkpoint"),
+    )
+    .expect("sink checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
+}
+
+#[actix_rt::test]
 async fn wal_replay_blocks_failed_blackhole_sink_without_advancing_checkpoint() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
@@ -1605,6 +1770,18 @@ fn create_kafka_config(prefix: &str) -> TestKafkaConfig {
 
 fn sqlite_url(dir: &Path) -> String {
     format!("sqlite://{}?mode=rwc", dir.join("ingest4x.db").display())
+}
+
+fn list_files_with_extension(dir: &Path, extension: &str) -> Vec<std::path::PathBuf> {
+    let mut files = walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some(extension))
+        .collect::<Vec<_>>();
+    files.sort();
+    files
 }
 
 async fn seed_kafka_event_sinks(

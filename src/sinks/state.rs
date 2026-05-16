@@ -30,6 +30,11 @@ impl EventSinkState {
         router.send_delivery(delivery).await
     }
 
+    pub(crate) async fn send_events_to_sink(&self, target: &str, events: &[Value]) -> Result<()> {
+        let router = self.current_router();
+        router.send_events_to_sink(target, events).await
+    }
+
     pub fn sink_names(&self) -> Vec<String> {
         self.current_router().sink_names()
     }
@@ -183,15 +188,19 @@ impl EventRouter {
     }
 
     async fn send_delivery(&self, delivery: &ProcessorDelivery) -> Result<()> {
+        let events = [delivery.event.clone()];
+        self.send_events_to_sink(&delivery.target, &events).await
+    }
+
+    async fn send_events_to_sink(&self, target: &str, events: &[Value]) -> Result<()> {
         let sink = self
             .sinks
-            .get(&delivery.target)
-            .ok_or_else(|| anyhow!("unknown event sink target `{}`", delivery.target))?;
-        let events = [delivery.event.clone()];
+            .get(target)
+            .ok_or_else(|| anyhow!("unknown event sink target `{target}`"))?;
         sink.sink
-            .send_batch(&events)
+            .send_batch(events)
             .await
-            .with_context(|| format!("event sink `{}` failed", delivery.target))
+            .with_context(|| format!("event sink `{target}` failed"))
     }
 
     fn sink_names(&self) -> Vec<String> {

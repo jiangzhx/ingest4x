@@ -85,6 +85,103 @@
 | --- | --- | --- | --- |
 | `topic` | string | 是 | 目标 topic |
 
+## parquet
+
+用途：通过 OpenDAL-backed storage 将事件写成 Parquet 文件。
+
+存储配置采用 OpenDAL 的 `scheme + options` 模型。当前启用的 scheme 是 `fs`、`s3` 和 `cos`；测试覆盖本地文件系统写入。
+
+### Delivery target (`target_type = "parquet"`)
+
+```json
+{
+  "scheme": "fs",
+  "options": {
+    "root": "/var/lib/ingest4x/parquet"
+  }
+}
+```
+
+支持的 `config_json` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `scheme` | string | 是 | OpenDAL service scheme，当前支持 `fs`、`s3` 或 `cos` |
+| `options` | object | 是 | OpenDAL service options，例如 `fs` 使用 `{"root": "/var/lib/ingest4x/parquet"}` |
+
+S3/COS 示例使用 OpenDAL option 名称：
+
+```json
+{
+  "scheme": "s3",
+  "options": {
+    "bucket": "ingest4x",
+    "region": "ap-shanghai",
+    "endpoint": "https://s3.example.com",
+    "access_key_id": "...",
+    "secret_access_key": "..."
+  }
+}
+```
+
+```json
+{
+  "scheme": "cos",
+  "options": {
+    "bucket": "ingest4x-1250000000",
+    "region": "ap-shanghai",
+    "secret_id": "...",
+    "secret_key": "..."
+  }
+}
+```
+
+### Event sink `destination_json`
+
+```json
+{
+  "path_prefix": "events",
+  "columns": [
+    {
+      "name": "appid",
+      "path": "appid",
+      "type": "string"
+    },
+    {
+      "name": "xwhat",
+      "path": "xwhat",
+      "type": "string"
+    },
+    {
+      "name": "installid",
+      "path": "xcontext.installid",
+      "type": "string",
+      "nullable": true
+    }
+  ],
+  "include_event_json": true
+}
+```
+
+支持的 `destination_json` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path_prefix` | string | 是 | OpenDAL operator root 下的相对路径前缀；文件最终以 `.parquet` 提交 |
+| `columns` | array | 否 | 有序 Parquet 投影列；每列通过 `path` 从 emit 出来的 JSON event 取值 |
+| `include_event_json` | boolean | 否 | 默认 `true`；追加完整 emit event 到 `event_json` 字符串列 |
+
+支持的 column 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | 输出 Parquet 列名 |
+| `path` | string | 是 | emit JSON event 中的点分路径，或用 `$` 表示整个 event |
+| `type` | string | 是 | 物理 Parquet 类型：`string`、`number`、`integer`、`boolean` 或 `json` |
+| `nullable` | boolean | 否 | 默认 `false`；必填值缺失或为 null 时 sink 写入失败 |
+
+`rules` 仍然是事件契约。Parquet `columns` 只描述当前 sink 的物理投影与列顺序。如果省略 `columns`，sink 仍会把完整 emit event 写入 `event_json` 列。只有 sink 写入达到自身 commit 点后，WAL checkpoint 才会前进。
+
 ## stdout
 
 用途：在开发与调试场景下输出到标准输出。

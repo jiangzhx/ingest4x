@@ -51,6 +51,11 @@ struct SinkReplayState {
     last_checkpoint_flush: Instant,
 }
 
+struct ReplayEntryDeliveries {
+    entry: WalEntry,
+    deliveries_by_sink: HashMap<String, Vec<Value>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct WalCheckpoint {
     #[serde(default = "checkpoint_version")]
@@ -153,16 +158,59 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
     let entries = read_entries_after_limit(context.dir, replay_start, Some(REPLAY_BATCH_SIZE))
         .map_err(ReplayIssue::wal_read_failed)?;
     let mut expected_lsn = replay_start.map(|position| position.lsn + 1);
+    let mut replay_batch = Vec::new();
     let mut replayed = 0;
 
     for entry in entries {
         let expected = expected_lsn.get_or_insert(entry.position.lsn);
         if entry.position.lsn != *expected {
+            replay_batch_to_sinks(
+                &context,
+                &checkpoint_policy,
+                &mut sink_states,
+                &replay_batch,
+            )
+            .await?;
             return Err(ReplayIssue::wal_lsn_gap(*expected, entry.position.lsn).into());
         }
         let deliveries = match process_record(&context, &entry.record).await {
             Ok(deliveries) => deliveries,
             Err(issue) if issue.action() == ReplayAction::QuarantineRecord => {
+                replay_batch_to_sinks(
+                    &context,
+                    &checkpoint_policy,
+                    &mut sink_states,
+                    &replay_batch,
+                )
+                .await?;
+                replay_batch.clear();
+                quarantine_replay_issue(&mut sink_states, &entry, &issue);
+                expected_lsn = Some(entry.position.lsn + 1);
+                replayed += 1;
+                continue;
+            }
+            Err(issue) => {
+                replay_batch_to_sinks(
+                    &context,
+                    &checkpoint_policy,
+                    &mut sink_states,
+                    &replay_batch,
+                )
+                .await?;
+                return Err(issue.into());
+            }
+        };
+        let deliveries_by_sink = match group_deliveries_by_sink(&context, deliveries) {
+            Ok(deliveries_by_sink) => deliveries_by_sink,
+            Err(issue) if issue.action() == ReplayAction::QuarantineRecord => {
+                replay_batch_to_sinks(
+                    &context,
+                    &checkpoint_policy,
+                    &mut sink_states,
+                    &replay_batch,
+                )
+                .await?;
+                replay_batch.clear();
                 quarantine_replay_issue(&mut sink_states, &entry, &issue);
                 expected_lsn = Some(entry.position.lsn + 1);
                 replayed += 1;
@@ -170,25 +218,21 @@ pub async fn replay_once(context: WalReplayContext<'_>) -> Result<usize> {
             }
             Err(issue) => return Err(issue.into()),
         };
-        match replay_entry_to_sinks(
-            &context,
-            &checkpoint_policy,
-            &mut sink_states,
-            &entry,
-            deliveries,
-        )
-        .await
-        {
-            Ok(()) => {}
-            Err(issue) if issue.action() == ReplayAction::QuarantineRecord => {
-                quarantine_replay_issue(&mut sink_states, &entry, &issue);
-            }
-            Err(issue) => return Err(issue.into()),
-        }
         expected_lsn = Some(entry.position.lsn + 1);
         replayed += 1;
+        replay_batch.push(ReplayEntryDeliveries {
+            entry,
+            deliveries_by_sink,
+        });
     }
 
+    replay_batch_to_sinks(
+        &context,
+        &checkpoint_policy,
+        &mut sink_states,
+        &replay_batch,
+    )
+    .await?;
     flush_pending_checkpoints(context.dir, &mut sink_states)
         .map_err(ReplayIssue::checkpoint_write_failed)?;
     cleanup_covered_segments(context.dir, &sink_states)
@@ -399,15 +443,11 @@ async fn process_record(
     Ok(output.deliveries)
 }
 
-async fn replay_entry_to_sinks(
+fn group_deliveries_by_sink(
     context: &WalReplayContext<'_>,
-    checkpoint_policy: &CheckpointFlushPolicy,
-    sink_states: &mut HashMap<String, SinkReplayState>,
-    entry: &WalEntry,
     deliveries: Vec<crate::rhai_ctx::ProcessorDelivery>,
-) -> std::result::Result<(), ReplayIssue> {
-    let mut deliveries_by_sink: HashMap<String, Vec<crate::rhai_ctx::ProcessorDelivery>> =
-        HashMap::new();
+) -> std::result::Result<HashMap<String, Vec<Value>>, ReplayIssue> {
+    let mut deliveries_by_sink: HashMap<String, Vec<Value>> = HashMap::new();
     for delivery in deliveries {
         if delivery.target.trim().is_empty() {
             return Err(ReplayIssue::empty_sink_target());
@@ -416,45 +456,74 @@ async fn replay_entry_to_sinks(
             deliveries_by_sink
                 .entry(delivery.target.clone())
                 .or_default()
-                .push(delivery);
+                .push(delivery.event);
         } else {
             return Err(ReplayIssue::unknown_sink_target(delivery.target));
         }
     }
+    Ok(deliveries_by_sink)
+}
 
+async fn replay_batch_to_sinks(
+    context: &WalReplayContext<'_>,
+    checkpoint_policy: &CheckpointFlushPolicy,
+    sink_states: &mut HashMap<String, SinkReplayState>,
+    batch: &[ReplayEntryDeliveries],
+) -> std::result::Result<(), ReplayIssue> {
+    if batch.is_empty() {
+        return Ok(());
+    }
     let sink_names = sink_states.keys().cloned().collect::<Vec<_>>();
     for sink_name in sink_names {
         let Some(state) = sink_states.get_mut(&sink_name) else {
             continue;
         };
-        if state.blocked || checkpoint_covers_entry(state.checkpoint, entry) {
+        if state.blocked {
             continue;
         }
 
-        if let Some(sink_deliveries) = deliveries_by_sink.get(&sink_name) {
-            for delivery in sink_deliveries {
-                if let Err(error) = context.event_sinks.send_delivery(delivery).await {
-                    let issue =
-                        ReplayIssue::sink_send_failed(sink_name.clone(), entry.position.lsn, error);
-                    state.blocked = true;
-                    state.failure = Some(issue.to_string());
-                    warn!(
-                        sink = sink_name.as_str(),
-                        lsn = entry.position.lsn,
-                        code = issue.code(),
-                        action = issue.action().as_str(),
-                        error = %issue,
-                        "wal replay sink delivery failed; sink checkpoint will not advance"
-                    );
-                    break;
+        let mut sink_events = Vec::new();
+        let mut first_delivery_lsn = None;
+        for item in batch {
+            if checkpoint_covers_entry(state.checkpoint, &item.entry) {
+                continue;
+            }
+            if let Some(events) = item.deliveries_by_sink.get(&sink_name) {
+                if !events.is_empty() {
+                    first_delivery_lsn.get_or_insert(item.entry.position.lsn);
+                    sink_events.extend(events.iter().cloned());
                 }
             }
-            if state.blocked {
+        }
+
+        if !sink_events.is_empty() {
+            if let Err(error) = context
+                .event_sinks
+                .send_events_to_sink(&sink_name, &sink_events)
+                .await
+            {
+                let failed_lsn = first_delivery_lsn.unwrap_or(batch[0].entry.position.lsn);
+                let issue = ReplayIssue::sink_send_failed(sink_name.clone(), failed_lsn, error);
+                state.blocked = true;
+                state.failure = Some(issue.to_string());
+                warn!(
+                    sink = sink_name.as_str(),
+                    lsn = failed_lsn,
+                    code = issue.code(),
+                    action = issue.action().as_str(),
+                    error = %issue,
+                    "wal replay sink delivery failed; sink checkpoint will not advance"
+                );
                 continue;
             }
         }
 
-        mark_sink_checkpoint_pending(state, entry);
+        for item in batch {
+            if checkpoint_covers_entry(state.checkpoint, &item.entry) {
+                continue;
+            }
+            mark_sink_checkpoint_pending(state, &item.entry);
+        }
         if should_flush_checkpoint(
             checkpoint_policy,
             state.pending_records,
