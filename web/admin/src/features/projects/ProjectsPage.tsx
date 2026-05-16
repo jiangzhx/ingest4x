@@ -8,14 +8,6 @@ import {
 } from "../processors/hooks";
 import { getErrorMessage as getProcessorErrorMessage } from "../processors/utils";
 import {
-  useAssignProjectRuleSetMutation,
-  useDeleteProjectRuleSetAssignmentMutation,
-  useProjectRuleSetAssignmentsQuery,
-  useRuleSetsQuery,
-} from "../rules/hooks";
-import { ProjectRuleSetsPanel } from "../rules/ProjectRuleSetsPanel";
-import { getErrorMessage as getRuleErrorMessage } from "../rules/utils";
-import {
   useCreateProjectMutation,
   useDeleteProjectMutation,
   useProjectsQuery,
@@ -36,11 +28,9 @@ export function ProjectsPage() {
   const createProjectMutation = useCreateProjectMutation();
   const updateProjectMutation = useUpdateProjectMutation();
   const deleteProjectMutation = useDeleteProjectMutation();
-  const ruleSetsQuery = useRuleSetsQuery();
   const processorScriptsQuery = useProcessorScriptsQuery();
   const processorBindingsQuery = useProjectProcessorsQuery();
   const assignProcessorMutation = useAssignProjectProcessorMutation();
-  const ruleSets = ruleSetsQuery.data ?? [];
   const processorScripts = processorScriptsQuery.data ?? [];
   const processorBindings = processorBindingsQuery.data ?? [];
   const hasLoadedProjects = projectsQuery.data !== undefined;
@@ -50,16 +40,11 @@ export function ProjectsPage() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
-  const [updatingRuleSetId, setUpdatingRuleSetId] = useState<number | null>(null);
   const [updatingProcessorProjectId, setUpdatingProcessorProjectId] =
     useState<number | null>(null);
   const projects = projectsQuery.data ?? [];
   const editingProjectId =
     isFormOpen && modalMode === "edit" ? editingProject?.id ?? null : null;
-  const assignmentsQuery = useProjectRuleSetAssignmentsQuery(editingProjectId);
-  const assignRuleSetMutation = useAssignProjectRuleSetMutation(editingProjectId);
-  const deleteAssignmentMutation =
-    useDeleteProjectRuleSetAssignmentMutation(editingProjectId);
   const editingProcessorBinding =
     editingProjectId === null
       ? null
@@ -152,33 +137,6 @@ export function ProjectsPage() {
     }
   };
 
-  const handleAssignRuleSet = async (ruleSetId: number) => {
-    setUpdatingRuleSetId(ruleSetId);
-    try {
-      await assignRuleSetMutation.mutateAsync({
-        rule_set_id: ruleSetId,
-        enabled: true,
-      });
-      message.success("Rule set assigned");
-    } catch (error) {
-      message.error(getRuleErrorMessage(error, "Failed to assign rule set, please try again later."));
-    } finally {
-      setUpdatingRuleSetId(null);
-    }
-  };
-
-  const handleUnassignRuleSet = async (ruleSetId: number) => {
-    setUpdatingRuleSetId(ruleSetId);
-    try {
-      await deleteAssignmentMutation.mutateAsync(ruleSetId);
-      message.success("Rule set unassigned");
-    } catch (error) {
-      message.error(getRuleErrorMessage(error, "Failed to unassign rule set, please try again later."));
-    } finally {
-      setUpdatingRuleSetId(null);
-    }
-  };
-
   const handleAssignProcessor = async (processorScriptId: number) => {
     if (editingProjectId === null) {
       return;
@@ -228,13 +186,11 @@ export function ProjectsPage() {
             disabled={isDeletePending}
             onClick={() => {
               void projectsQuery.refetch();
-              void ruleSetsQuery.refetch();
               void processorScriptsQuery.refetch();
               void processorBindingsQuery.refetch();
             }}
             loading={
               projectsQuery.isFetching ||
-              ruleSetsQuery.isFetching ||
               processorScriptsQuery.isFetching ||
               processorBindingsQuery.isFetching
             }
@@ -343,18 +299,6 @@ export function ProjectsPage() {
             }
             updating={updatingProcessorProjectId === editingProjectId}
             onAssign={handleAssignProcessor}
-          />
-        }
-        ruleSetsSection={
-          <ProjectRuleSetsPanel
-            ruleSets={ruleSets}
-            projectName={editingProject?.name}
-            projectId={editingProjectId}
-            assignments={assignmentsQuery.data ?? []}
-            loading={assignmentsQuery.isFetching || ruleSetsQuery.isFetching}
-            updatingRuleSetId={updatingRuleSetId}
-            onAssign={handleAssignRuleSet}
-            onUnassign={handleUnassignRuleSet}
           />
         }
         onCancel={handleCloseModal}

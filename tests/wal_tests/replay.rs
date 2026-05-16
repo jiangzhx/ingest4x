@@ -12,7 +12,7 @@ use ingest4x::repositories::{
     CreateDeliveryTargetInput, CreateEventSinkInput, CreateProcessorScriptInput,
     CreateProcessorScriptModuleInput, CreateProjectInput, DeliveryTarget, DeliveryTargetType,
     EventSinkRepository, ProcessorRepository, ProcessorScriptStatus, ProjectRepository,
-    RuleRepository, RuntimeEventSink,
+    RuntimeEventSink,
 };
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
@@ -309,7 +309,6 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![
         kafka_runtime_sink(
             "kafka_original",
@@ -365,7 +364,6 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -507,7 +505,6 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
         "stdout",
         AutoOffsetReset::Earliest,
@@ -565,7 +562,6 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings {
                 flush_interval: "1h".to_string(),
@@ -608,7 +604,6 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
         "stdout",
         AutoOffsetReset::Earliest,
@@ -654,7 +649,6 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -690,7 +684,6 @@ async fn wal_replay_advances_pipeline_checkpoint_for_unemitted_registered_sink()
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![
         stdout_runtime_sink("sink_a", AutoOffsetReset::Earliest),
         stdout_runtime_sink("sink_b", AutoOffsetReset::Earliest),
@@ -735,7 +728,6 @@ async fn wal_replay_advances_pipeline_checkpoint_for_unemitted_registered_sink()
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -773,7 +765,6 @@ async fn wal_pipeline_checkpoint_matches_writer_recovery() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let sink_id = "sink.special name/1";
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
         sink_id,
@@ -820,7 +811,6 @@ async fn wal_pipeline_checkpoint_matches_writer_recovery() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -865,7 +855,6 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
         "stdout",
         AutoOffsetReset::Latest,
@@ -910,7 +899,6 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -944,7 +932,6 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
         "stdout",
         AutoOffsetReset::Latest,
@@ -991,7 +978,6 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -1025,7 +1011,6 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
         "stdout",
         AutoOffsetReset::Earliest,
@@ -1072,7 +1057,6 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -1122,7 +1106,6 @@ async fn wal_replay_sends_records_to_blackhole_and_advances_checkpoint() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![blackhole_runtime_sink(
         "blackhole",
         json!({}),
@@ -1168,7 +1151,6 @@ async fn wal_replay_sends_records_to_blackhole_and_advances_checkpoint() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -1204,7 +1186,6 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![RuntimeEventSink {
         sink_id: "parquet_events".to_string(),
         name: "parquet events".to_string(),
@@ -1298,7 +1279,6 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -1380,7 +1360,6 @@ async fn wal_replay_writes_parquet_files_under_sink_id_directory() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let target = DeliveryTarget {
         id: 1,
         target_id: "local_parquet".to_string(),
@@ -1448,7 +1427,6 @@ async fn wal_replay_writes_parquet_files_under_sink_id_directory() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -1502,7 +1480,6 @@ async fn wal_replay_flushes_replay_window_at_replay_record_threshold() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![RuntimeEventSink {
         sink_id: "parquet_events".to_string(),
         name: "parquet events".to_string(),
@@ -1576,7 +1553,6 @@ async fn wal_replay_flushes_replay_window_at_replay_record_threshold() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings {
                 flush_interval: "1h".to_string(),
@@ -1622,7 +1598,6 @@ async fn wal_replay_uses_event_sink_batch_override_before_global_default() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![RuntimeEventSink {
         sink_id: "parquet_events".to_string(),
         name: "parquet events".to_string(),
@@ -1699,7 +1674,6 @@ async fn wal_replay_uses_event_sink_batch_override_before_global_default() {
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings {
                 flush_interval: "1h".to_string(),
@@ -1749,7 +1723,6 @@ async fn wal_replay_waits_for_sink_batch_timeout_before_small_parquet_flush() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![RuntimeEventSink {
         sink_id: "parquet_events".to_string(),
         name: "parquet events".to_string(),
@@ -1813,7 +1786,6 @@ async fn wal_replay_waits_for_sink_batch_timeout_before_small_parquet_flush() {
                 dir: &wal_dir,
                 event_sinks: &event_sinks,
                 project_registry: &project_registry,
-                rule_repository: &rule_repository,
                 processor: &processor,
                 checkpoint: CheckpointSettings::default(),
                 replay: replay_settings.clone(),
@@ -1844,7 +1816,6 @@ async fn wal_replay_waits_for_sink_batch_timeout_before_small_parquet_flush() {
                 dir: &wal_dir,
                 event_sinks: &event_sinks,
                 project_registry: &project_registry,
-                rule_repository: &rule_repository,
                 processor: &processor,
                 checkpoint: CheckpointSettings::default(),
                 replay: replay_settings,
@@ -1892,7 +1863,6 @@ async fn wal_replay_blocks_failed_blackhole_sink_without_advancing_checkpoint() 
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![blackhole_runtime_sink(
         "blackhole",
         json!({ "mode": "fail" }),
@@ -1938,7 +1908,6 @@ async fn wal_replay_blocks_failed_blackhole_sink_without_advancing_checkpoint() 
         dir: &wal_dir,
         event_sinks: &event_sinks,
         project_registry: &project_registry,
-        rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
         replay: Default::default(),
@@ -1971,7 +1940,6 @@ async fn wal_replay_retries_committed_sink_when_another_sink_blocks_pipeline_che
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![
         kafka_runtime_sink(
             "a_kafka_valid",
@@ -2026,7 +1994,6 @@ async fn wal_replay_retries_committed_sink_when_another_sink_blocks_pipeline_che
             dir: &wal_dir,
             event_sinks: &event_sinks,
             project_registry: &project_registry,
-            rule_repository: &rule_repository,
             processor: &processor,
             checkpoint: CheckpointSettings::default(),
             replay: Default::default(),
@@ -2069,7 +2036,6 @@ async fn wal_replay_rejects_tampered_checkpoint() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![kafka_runtime_sink(
         "kafka_valid",
         &kafka.bootstrap_servers,
@@ -2115,7 +2081,6 @@ async fn wal_replay_rejects_tampered_checkpoint() {
         dir: &wal_dir,
         event_sinks: &event_sinks,
         project_registry: &project_registry,
-        rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
         replay: Default::default(),
@@ -2137,7 +2102,6 @@ async fn wal_replay_rejects_tampered_checkpoint() {
         dir: &wal_dir,
         event_sinks: &event_sinks,
         project_registry: &project_registry,
-        rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
         replay: Default::default(),
@@ -2249,7 +2213,6 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![kafka_runtime_sink(
         "kafka_valid",
         &kafka.bootstrap_servers,
@@ -2295,7 +2258,6 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         dir: &wal_dir,
         event_sinks: &event_sinks,
         project_registry: &project_registry,
-        rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
         replay: Default::default(),
@@ -2307,7 +2269,6 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
         dir: &wal_dir,
         event_sinks: &event_sinks,
         project_registry: &project_registry,
-        rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings::default(),
         replay: Default::default(),
@@ -2337,7 +2298,6 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
     let project_registry = ProjectRegistryState::load(project_repository)
         .await
         .expect("project registry should load");
-    let rule_repository = RuleRepository::new(db);
     let event_sinks = init_event_sinks_from_runtime_sinks(vec![stdout_runtime_sink(
         "stdout",
         AutoOffsetReset::Earliest,
@@ -2392,7 +2352,6 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
         dir: &wal_dir,
         event_sinks: &event_sinks,
         project_registry: &project_registry,
-        rule_repository: &rule_repository,
         processor: &processor,
         checkpoint: CheckpointSettings {
             flush_interval: "1h".to_string(),

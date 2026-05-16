@@ -1,4 +1,3 @@
-use crate::repositories::RuleRepositoryError;
 use anyhow::Error as AnyhowError;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
@@ -130,10 +129,10 @@ impl ReplayIssue {
     }
 
     pub(crate) fn unknown_project_id(project_id: i32, _xwhat: Option<String>) -> Self {
-        Self::EventPayload {
+        Self::Project {
             code: "replay_unknown_project",
             message: format!("wal record references unknown project `{project_id}`"),
-            xwhat: _xwhat,
+            project_id,
         }
     }
 
@@ -168,36 +167,6 @@ impl ReplayIssue {
                 format_anyhow_chain(&error)
             ),
             sink,
-        }
-    }
-
-    pub(crate) fn from_rule_repository(project_id: i32, error: RuleRepositoryError) -> Self {
-        match error {
-            RuleRepositoryError::ProjectNotFound { id } => Self::Project {
-                code: "replay_project_not_found",
-                message: format!("project `{id}` not found while compiling rules"),
-                project_id: id,
-            },
-            RuleRepositoryError::InvalidRuleContent { message } => Self::Project {
-                code: "replay_rules_invalid",
-                message,
-                project_id,
-            },
-            RuleRepositoryError::DuplicateRuntimeRule { xwhat } => Self::Project {
-                code: "replay_rules_duplicate_runtime_rule",
-                message: format!("multiple enabled rules matched xwhat `{xwhat}`"),
-                project_id,
-            },
-            RuleRepositoryError::Database(error) => Self::Project {
-                code: "replay_control_plane_unavailable",
-                message: error.to_string(),
-                project_id,
-            },
-            other => Self::Project {
-                code: "replay_rules_invalid",
-                message: other.to_string(),
-                project_id,
-            },
         }
     }
 
@@ -274,27 +243,6 @@ fn format_anyhow_chain(error: &AnyhowError) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ReplayAction, ReplayIssue};
-    use crate::repositories::RuleRepositoryError;
-    use sea_orm::DbErr;
-
-    #[test]
-    fn rule_repository_errors_map_to_project_issue_actions() {
-        let invalid_rules = ReplayIssue::from_rule_repository(
-            42,
-            RuleRepositoryError::InvalidRuleContent {
-                message: "bad yaml".to_string(),
-            },
-        );
-        assert_eq!(invalid_rules.code(), "replay_rules_invalid");
-        assert_eq!(invalid_rules.action(), ReplayAction::QuarantineRecord);
-
-        let database_error = ReplayIssue::from_rule_repository(
-            42,
-            RuleRepositoryError::Database(DbErr::Custom("db down".to_string())),
-        );
-        assert_eq!(database_error.code(), "replay_control_plane_unavailable");
-        assert_eq!(database_error.action(), ReplayAction::StopReplay);
-    }
 
     #[test]
     fn sink_send_failed_preserves_anyhow_error_chain() {

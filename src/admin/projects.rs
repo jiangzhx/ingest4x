@@ -1,8 +1,8 @@
 use crate::ingest::processor::ProcessorRegistryState as ProcessorRuntimeState;
 use crate::repositories::{
-    generate_ingest_token, CreateProjectInput, CreateProjectRuleSetInput, ProcessorRepository,
-    Project, ProjectAuthMode, ProjectRepository, ProjectRepositoryError, RuleRepository,
-    UpdateProjectIngestSettingsInput, UpdateProjectInput,
+    generate_ingest_token, CreateProjectInput, ProcessorRepository, Project, ProjectAuthMode,
+    ProjectRepository, ProjectRepositoryError, UpdateProjectIngestSettingsInput,
+    UpdateProjectInput,
 };
 use crate::services::ProjectRegistryState;
 use actix_web::web::{self, Data, Json, Path, ServiceConfig};
@@ -130,7 +130,6 @@ async fn get_project(project_id: Path<i32>, repository: Data<ProjectRepository>)
 )]
 async fn create_project(
     repository: Data<ProjectRepository>,
-    rule_repository: Data<RuleRepository>,
     processor_repository: Data<ProcessorRepository>,
     registry: Data<ProjectRegistryState>,
     processor: Data<ProcessorRuntimeState>,
@@ -156,7 +155,6 @@ async fn create_project(
     {
         Ok(project) => {
             let project_id = project.id;
-            assign_default_rule_set_to_project(&rule_repository, project_id).await;
             if let Err(error) = processor_repository
                 .assign_default_processor(project_id)
                 .await
@@ -174,24 +172,6 @@ async fn create_project(
             )
         }
         Err(error) => map_repository_error(error),
-    }
-}
-
-async fn assign_default_rule_set_to_project(rule_repository: &RuleRepository, project_id: i32) {
-    let Ok(rule_sets) = rule_repository.list_rule_sets().await else {
-        return;
-    };
-
-    if let Some(rule_set) = rule_sets.into_iter().find(|rule_set| rule_set.enabled) {
-        let _ = rule_repository
-            .assign_rule_set_to_project(
-                project_id,
-                CreateProjectRuleSetInput {
-                    rule_set_id: rule_set.id,
-                    enabled: true,
-                },
-            )
-            .await;
     }
 }
 

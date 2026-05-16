@@ -15,12 +15,12 @@ const menuItems = [
     label: <Link to="/projects">Projects</Link>,
   },
   {
-    key: "/rules",
-    label: <Link to="/rules">Rules</Link>,
+    key: "/delivery-targets",
+    label: <Link to="/delivery-targets">Delivery Targets</Link>,
   },
   {
-    key: "/sinks",
-    label: <Link to="/sinks">Sink Management</Link>,
+    key: "/event-sinks",
+    label: <Link to="/event-sinks">Event Sinks</Link>,
   },
   {
     key: "/processors",

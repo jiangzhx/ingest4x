@@ -8,17 +8,17 @@ export function HomePage() {
         Admin Console
       </Typography.Title>
       <Typography.Paragraph style={{ marginBottom: 0 }}>
-        Manage projects, rules, event sink delivery, and Rhai processors.
+        Manage projects, delivery targets, event sinks, and Rhai processors.
       </Typography.Paragraph>
       <Space>
         <Button type="primary">
           <Link to="/projects">Projects</Link>
         </Button>
         <Button>
-          <Link to="/rules">Rules</Link>
+          <Link to="/delivery-targets">Delivery Targets</Link>
         </Button>
         <Button>
-          <Link to="/sinks">Sink Management</Link>
+          <Link to="/event-sinks">Event Sinks</Link>
         </Button>
         <Button>
           <Link to="/processors">Processor Management</Link>

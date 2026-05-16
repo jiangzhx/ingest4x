@@ -271,6 +271,18 @@ async fn build_app_state_seeds_local_kafka_delivery_target_without_toml_sinks() 
     assert_eq!(loadtest_blackhole["name"], "Loadtest Blackhole");
     assert_eq!(loadtest_blackhole["target_type"], "blackhole");
     assert_eq!(loadtest_blackhole["enabled"], true);
+    let local_parquet = targets
+        .as_array()
+        .expect("targets should be an array")
+        .iter()
+        .find(|target| target["target_id"] == "local_parquet")
+        .expect("local parquet delivery target should be seeded");
+
+    assert_eq!(local_parquet["name"], "Local Parquet");
+    assert_eq!(local_parquet["target_type"], "parquet");
+    assert_eq!(local_parquet["enabled"], true);
+    assert_eq!(local_parquet["config_json"]["scheme"], "fs");
+    assert_eq!(local_parquet["config_json"]["options"]["root"], "data");
 
     let response = test::call_service(
         &app,
@@ -293,7 +305,34 @@ async fn build_app_state_seeds_local_kafka_delivery_target_without_toml_sinks() 
                 .expect("sink_id should be a string")
         })
         .collect::<Vec<_>>();
-    assert_eq!(sink_ids, vec!["events", "events_error", "loadtest_events"]);
+    assert_eq!(
+        sink_ids,
+        vec![
+            "events",
+            "events_error",
+            "parquet_events",
+            "loadtest_events"
+        ]
+    );
+    let parquet_events = sinks
+        .as_array()
+        .expect("sinks should be an array")
+        .iter()
+        .find(|sink| sink["sink_id"] == "parquet_events")
+        .expect("parquet events sink should be seeded");
+    assert_eq!(parquet_events["destination_json"]["path_prefix"], "events");
+    assert_eq!(
+        parquet_events["destination_json"]["batch"]["max_events"],
+        1000
+    );
+    assert_eq!(
+        parquet_events["destination_json"]["batch"]["max_bytes"],
+        64 * 1024 * 1024
+    );
+    assert_eq!(
+        parquet_events["destination_json"]["batch"]["timeout"],
+        "60s"
+    );
 }
 
 #[actix_rt::test]
@@ -343,22 +382,24 @@ async fn build_app_state_seeds_default_test_app_with_rule_set_assignment() {
     .await;
     assert_eq!(loadtest_project.status(), StatusCode::OK);
 
-    let assignments = test::call_service(
+    let bindings = test::call_service(
         &app,
         test::TestRequest::get()
-            .uri("/api/admin/projects/1/rule-sets")
+            .uri("/api/admin/project-processors")
             .insert_header((ADMIN_PASSWORD_HEADER, "ingest4x"))
             .to_request(),
     )
     .await;
-    assert_eq!(assignments.status(), StatusCode::OK);
+    assert_eq!(bindings.status(), StatusCode::OK);
 
-    let assignments: serde_json::Value = test::read_body_json(assignments).await;
+    let bindings: serde_json::Value = test::read_body_json(bindings).await;
     assert_eq!(
-        assignments
+        bindings
             .as_array()
-            .expect("assignments should be an array")
-            .len(),
+            .expect("bindings should be an array")
+            .iter()
+            .filter(|binding| binding["project_id"] == 1)
+            .count(),
         1
     );
 }

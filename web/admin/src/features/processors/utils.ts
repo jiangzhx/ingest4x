@@ -17,10 +17,11 @@ const timeFormatter = new Intl.DateTimeFormat("zh-CN", {
 });
 
 export const DEFAULT_PROCESSOR_SOURCE = `fn process(event, request) {
-    let validation = validate(event);
-    if validation["ok"] {
+    try {
+        event.required("appid").string().min(1);
+        event.required("xwhat").string().min(1);
         emit(SINK_EVENTS, event);
-    } else {
+    } catch (_) {
         emit(SINK_EVENTS_ERROR, event);
     }
 }`;

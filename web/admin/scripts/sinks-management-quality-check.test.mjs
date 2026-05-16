@@ -61,8 +61,16 @@ const shellSource = readFileSync(
   new URL("../src/layouts/AdminShell.tsx", import.meta.url),
   "utf8",
 );
-const sinksPageSource = readFileSync(
-  new URL("../src/features/sinks/SinksPage.tsx", import.meta.url),
+const deliveryTargetsPageSource = readFileSync(
+  new URL("../src/features/sinks/DeliveryTargetsPage.tsx", import.meta.url),
+  "utf8",
+);
+const eventSinksPageSource = readFileSync(
+  new URL("../src/features/sinks/EventSinksPage.tsx", import.meta.url),
+  "utf8",
+);
+const homePageSource = readFileSync(
+  new URL("../src/pages/HomePage.tsx", import.meta.url),
   "utf8",
 );
 const targetFormSource = readFileSync(
@@ -74,23 +82,34 @@ const sinkFormSource = readFileSync(
   "utf8",
 );
 
-test("admin shell and router expose the sink management page", () => {
-  assert.match(routerSource, /path: "\/sinks"/);
-  assert.match(routerSource, /component: SinksPage/);
-  assert.match(shellSource, /key: "\/sinks"/);
-  assert.match(shellSource, /Sink Management/);
+test("admin shell and router expose separate delivery target and event sink pages", () => {
+  assert.match(routerSource, /path: "\/delivery-targets"/);
+  assert.match(routerSource, /component: DeliveryTargetsPage/);
+  assert.match(routerSource, /path: "\/event-sinks"/);
+  assert.match(routerSource, /component: EventSinksPage/);
+  assert.match(shellSource, /key: "\/delivery-targets"/);
+  assert.match(shellSource, /Delivery Targets/);
+  assert.match(shellSource, /key: "\/event-sinks"/);
+  assert.match(shellSource, /Event Sinks/);
+  assert.match(homePageSource, /Link to="\/delivery-targets"/);
+  assert.match(homePageSource, /Link to="\/event-sinks"/);
 });
 
-test("sinks page manages delivery targets and event sinks together", () => {
-  assert.match(sinksPageSource, /useSinkTypesQuery\(\)/);
-  assert.match(sinksPageSource, /useDeliveryTargetsQuery\(sinkTypes\)/);
-  assert.match(sinksPageSource, /useEventSinksQuery\(\)/);
-  assert.match(sinksPageSource, /<DeliveryTargetsTable/);
-  assert.match(sinksPageSource, /<DeliveryTargetsTable[\s\S]*sinkTypes=\{sinkTypes\}/);
-  assert.match(sinksPageSource, /<EventSinksTable/);
-  assert.match(sinksPageSource, /<EventSinksTable[\s\S]*sinkTypes=\{sinkTypes\}/);
-  assert.match(sinksPageSource, /createDeliveryTargetMutation/);
-  assert.match(sinksPageSource, /createEventSinkMutation/);
+test("delivery target and event sink pages are split by responsibility", () => {
+  assert.match(deliveryTargetsPageSource, /useSinkTypesQuery\(\)/);
+  assert.match(deliveryTargetsPageSource, /useDeliveryTargetsQuery\(sinkTypes\)/);
+  assert.match(deliveryTargetsPageSource, /<DeliveryTargetsTable/);
+  assert.doesNotMatch(deliveryTargetsPageSource, /<EventSinksTable/);
+  assert.match(deliveryTargetsPageSource, /createDeliveryTargetMutation/);
+  assert.doesNotMatch(deliveryTargetsPageSource, /createEventSinkMutation/);
+
+  assert.match(eventSinksPageSource, /useSinkTypesQuery\(\)/);
+  assert.match(eventSinksPageSource, /useDeliveryTargetsQuery\(sinkTypes\)/);
+  assert.match(eventSinksPageSource, /useEventSinksQuery\(\)/);
+  assert.match(eventSinksPageSource, /<EventSinksTable/);
+  assert.doesNotMatch(eventSinksPageSource, /<DeliveryTargetsTable/);
+  assert.match(eventSinksPageSource, /createEventSinkMutation/);
+  assert.doesNotMatch(eventSinksPageSource, /createDeliveryTargetMutation/);
 });
 
 test("sink forms only expose json configuration controls", () => {

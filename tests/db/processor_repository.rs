@@ -4,11 +4,9 @@ use ingest4x::repositories::{
     CreateDeliveryTargetInput, CreateEventSinkInput, CreateProcessorScriptInput,
     CreateProcessorScriptModuleInput, CreateProjectInput, DeliveryTargetType, EventSinkRepository,
     ProcessorRepository, ProcessorRepositoryError, ProcessorScriptStatus, ProjectRepository,
-    RuleRepository, UpdateProcessorScriptInput, UpdateProcessorScriptModuleInput,
-    UpdateProcessorScriptStatusInput, ValidateProcessorScriptInput,
-    ValidateProcessorScriptModuleInput,
+    UpdateProcessorScriptInput, UpdateProcessorScriptModuleInput, UpdateProcessorScriptStatusInput,
+    ValidateProcessorScriptInput, ValidateProcessorScriptModuleInput,
 };
-use ingest4x::rules::Rules;
 use ingest4x::settings::AutoOffsetReset;
 use serde_json::json;
 use std::path::Path;
@@ -122,7 +120,6 @@ fn mark(event) {
                 "xwhat": "custom_event",
                 "xcontext": {}
             }),
-            Rules::default(),
             ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
         )
         .expect("processor should run");
@@ -146,12 +143,11 @@ async fn seed_creates_minimal_default_processor_script() {
         .await
         .expect("sqlite database should initialize");
     let projects = ProjectRepository::new(db.clone());
-    let rules = RuleRepository::new(db.clone());
     let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
     create_default_sinks(&sinks).await;
 
-    seed::run(&projects, &rules, &sinks, &processors)
+    seed::run(&projects, &sinks, &processors)
         .await
         .expect("seed should run");
 
@@ -163,7 +159,8 @@ async fn seed_creates_minimal_default_processor_script() {
     assert_eq!(runtime.script_key, "default");
     assert_eq!(runtime.entry_module, "main");
     assert_eq!(runtime.modules.len(), 1);
-    assert!(runtime.entry_source.contains("validate(event)"));
+    assert!(runtime.entry_source.contains("event.required(\"xwhat\")"));
+    assert!(runtime.entry_source.contains("try {"));
     assert!(runtime.entry_source.contains("emit(SINK_EVENTS, event)"));
     assert!(runtime
         .entry_source
@@ -183,6 +180,12 @@ async fn seed_creates_minimal_default_processor_script() {
     assert!(loadtest_runtime
         .entry_source
         .contains("emit(SINK_LOADTEST_EVENTS, event)"));
+    assert!(loadtest_runtime
+        .entry_source
+        .contains("loadtest_validation_code_from_error(err)"));
+    assert!(!loadtest_runtime
+        .entry_source
+        .contains("loadtest_validation_code\"] = `${err}`"));
 }
 
 #[tokio::test]
@@ -191,7 +194,6 @@ async fn seed_keeps_disabled_loadtest_project_without_duplicate_token_error() {
         .await
         .expect("sqlite database should initialize");
     let projects = ProjectRepository::new(db.clone());
-    let rules = RuleRepository::new(db.clone());
     let sinks = EventSinkRepository::new(db.clone());
     let processors = ProcessorRepository::new(db);
 
@@ -204,7 +206,7 @@ async fn seed_keeps_disabled_loadtest_project_without_duplicate_token_error() {
         .await
         .expect("disabled loadtest project should be created");
 
-    seed::run(&projects, &rules, &sinks, &processors)
+    seed::run(&projects, &sinks, &processors)
         .await
         .expect("seed should tolerate disabled loadtest project");
 
@@ -453,7 +455,6 @@ async fn processor_runtime_resolves_sink_target_constants() {
                 "xwhat": "constant_event",
                 "xcontext": {}
             }),
-            Rules::default(),
             ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
         )
         .expect("processor should run");

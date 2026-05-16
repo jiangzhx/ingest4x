@@ -12,7 +12,5 @@ mod processor_repository;
 mod project_registry;
 #[path = "db/project_repository.rs"]
 mod project_repository;
-#[path = "db/rule_repository.rs"]
-mod rule_repository;
 #[path = "db/service_node_repository.rs"]
 mod service_node_repository;

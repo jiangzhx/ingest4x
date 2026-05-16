@@ -487,7 +487,7 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
         .contains("xcontext.installid"));
     assert_eq!(
         emitted["xcontext"]["process_info"]["error_code"],
-        json!("rules_required_field_missing")
+        emitted["xcontext"]["process_info"]["reason"]
     );
     emitted["xcontext"]
         .as_object_mut()
@@ -500,13 +500,18 @@ async fn post_ingest_sends_invalid_payload_to_error_topic() {
 async fn post_ingest_replays_wal_through_rhai_processor_before_kafka_sink() {
     let script = r#"
 fn process(event, ctx) {
-    let validation = validate(event);
-    if !validation["ok"] {
+    try {
+        event.required("appid").string().min(1);
+        event.required("xwhat").string().min(1);
+        event.required("xcontext").object();
+        event.required("xcontext.installid").string().min(1);
+        event.required("xcontext.os").string().min(1);
+    } catch (_) {
         emit(SINK_EVENTS_ERROR, event);
-    } else {
-        event["xcontext"]["processor_marker"] = "rhai";
-        emit(SINK_EVENTS, event);
+        return;
     }
+    event["xcontext"]["processor_marker"] = "rhai";
+    emit(SINK_EVENTS, event);
 }
 "#;
     let (app, testservice) = create_app_with_processor_script(script).await;

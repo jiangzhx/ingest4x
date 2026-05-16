@@ -31,7 +31,6 @@ fn register_public_routes(cfg: &mut ServiceConfig, state: AppState) {
     cfg.service(web::scope("/").route("", web::get().to(index)))
         .service(
             web::resource("/ingest/{project_key}")
-                .app_data(state.rule_repository.clone())
                 .app_data(state.event_sinks.clone())
                 .app_data(state.project_registry.clone())
                 .app_data(state.processor.clone())
@@ -43,7 +42,6 @@ fn register_public_routes(cfg: &mut ServiceConfig, state: AppState) {
 fn register_management_app_data(cfg: &mut ServiceConfig, state: &AppState) {
     cfg.app_data(Data::new(state.settings.clone()))
         .app_data(state.project_repository.clone())
-        .app_data(state.rule_repository.clone())
         .app_data(state.event_sink_repository.clone())
         .app_data(state.processor_repository.clone())
         .app_data(state.service_node_repository.clone())

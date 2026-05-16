@@ -1,7 +1,6 @@
 use crate::rhai_ctx::{
     enter_processor_context, push_sink_target_constants, register_api, ProcessorDelivery,
 };
-use crate::rules::Rules;
 use crate::settings::default_processor_max_operations;
 use anyhow::{anyhow, Result};
 use futures::lock::Mutex as AsyncMutex;
@@ -34,7 +33,6 @@ pub trait ProcessorRuntime: Send + Sync {
         &self,
         project_id: i32,
         event: Value,
-        rules: Rules,
         request: ProcessorRequestContext,
     ) -> Result<ProcessorOutput>;
 }
@@ -65,17 +63,11 @@ impl ProcessorState {
     pub fn process(
         &self,
         event: Value,
-        rules: Rules,
         request: ProcessorRequestContext,
     ) -> Result<ProcessorOutput> {
-        let event_name = event
-            .get("xwhat")
-            .and_then(Value::as_str)
-            .unwrap_or("default")
-            .to_string();
         let input = to_dynamic(event).map_err(|err| anyhow!(err.to_string()))?;
         let mut scope = Scope::new();
-        let processor_context = enter_processor_context(rules, event_name);
+        let processor_context = enter_processor_context();
         let _: Dynamic = self
             .engine
             .call_fn(&mut scope, &self.ast, "process", (input, request))
@@ -89,10 +81,9 @@ impl ProcessorRuntime for ProcessorState {
         &self,
         _project_id: i32,
         event: Value,
-        rules: Rules,
         request: ProcessorRequestContext,
     ) -> Result<ProcessorOutput> {
-        self.process(event, rules, request)
+        self.process(event, request)
     }
 }
 
@@ -166,12 +157,11 @@ impl ProcessorRuntime for ProcessorRegistryState {
         &self,
         project_id: i32,
         event: Value,
-        rules: Rules,
         request: ProcessorRequestContext,
     ) -> Result<ProcessorOutput> {
         self.current_router()
             .processor_for_project(project_id)
-            .process(event, rules, request)
+            .process(event, request)
     }
 }
 
@@ -276,7 +266,6 @@ fn parse_processor_output(deliveries: Vec<ProcessorDelivery>) -> Result<Processo
 mod tests {
     use super::{compile_script, ProcessorState};
     use crate::ingest::processor::ProcessorRequestContext;
-    use crate::rules::Rules;
     use serde_json::json;
 
     #[test]
@@ -323,7 +312,6 @@ fn process(event, request) {
                 "xwhat": "custom_event",
                 "xcontext": {}
             }),
-            Rules::default(),
             ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
         ) {
             Ok(_) => panic!("drop helper should not be available"),
@@ -352,7 +340,6 @@ fn main(event, request) {
                 "xwhat": "custom_event",
                 "xcontext": {}
             }),
-            Rules::default(),
             ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
         ) {
             Ok(_) => panic!("main entrypoint should not be called"),
@@ -387,7 +374,6 @@ fn process(event, request) {
                     "xwhat": "custom_event",
                     "xcontext": {}
                 }),
-                Rules::default(),
                 ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
             )
             .expect("processor should run");
@@ -422,11 +408,72 @@ fn process(event, request) {
                     "xwhat": "custom_event",
                     "xcontext": {}
                 }),
-                Rules::default(),
                 ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
             )
             .expect("processor without emit should be a normal drop");
 
         assert!(output.deliveries.is_empty());
+    }
+
+    #[test]
+    fn processor_supports_event_validation_helpers_inline() {
+        let processor = ProcessorState::new(
+            r#"
+fn process(event, request) {
+    let xwhat = event.required("xwhat").string().min(1);
+    let os = event.required("xcontext.os").string().ignore_case().enum(["ios", "android"]);
+
+    if os.eq("ios") {
+        event.any(["xcontext.idfa", "xcontext.caid"]).required();
+    }
+
+    if xwhat.eq("install") {
+        event.required("xcontext.installid").string().min(1);
+    }
+
+    emit(SINK_EVENTS, event);
+}
+"#
+            .to_string(),
+            10_000,
+        )
+        .expect("processor should compile");
+
+        let output = processor
+            .process(
+                json!({
+                    "appid": "APPID",
+                    "xwhat": "install",
+                    "xcontext": {
+                        "os": "ios",
+                        "idfa": "idfa-1",
+                        "installid": "iid-1"
+                    }
+                }),
+                ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+            )
+            .expect("processor should accept inline validation helpers");
+
+        assert_eq!(output.deliveries.len(), 1);
+        assert_eq!(output.deliveries[0].target, "events");
+
+        let error = match processor.process(
+            json!({
+                "appid": "APPID",
+                "xwhat": "install",
+                "xcontext": {
+                    "os": "ios",
+                    "installid": "iid-1"
+                }
+            }),
+            ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+        ) {
+            Ok(_) => panic!("missing ios identifier should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .to_string()
+            .contains("at least one field is required: xcontext.idfa, xcontext.caid"));
     }
 }

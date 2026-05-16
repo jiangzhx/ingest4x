@@ -7,7 +7,6 @@ pub mod logging;
 pub mod repositories;
 pub mod rhai_ctx;
 pub mod routes;
-pub mod rules;
 pub mod server;
 pub mod services;
 pub mod settings;

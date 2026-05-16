@@ -11,9 +11,9 @@ import { hasAdminPassword } from "../features/auth/storage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { ProcessorsPage } from "../features/processors/ProcessorsPage";
 import { ProjectsPage } from "../features/projects/ProjectsPage";
-import { RulesPage } from "../features/rules/RulesPage";
 import { ServiceNodesPage } from "../features/service-nodes/ServiceNodesPage";
-import { SinksPage } from "../features/sinks/SinksPage";
+import { DeliveryTargetsPage } from "../features/sinks/DeliveryTargetsPage";
+import { EventSinksPage } from "../features/sinks/EventSinksPage";
 import { HomePage } from "../pages/HomePage";
 
 const rootRoute = createRootRoute({
@@ -51,16 +51,22 @@ const projectsRoute = createRoute({
   component: ProjectsPage,
 });
 
-const rulesRoute = createRoute({
+const deliveryTargetsRoute = createRoute({
   getParentRoute: () => shellRoute,
-  path: "/rules",
-  component: RulesPage,
+  path: "/delivery-targets",
+  component: DeliveryTargetsPage,
 });
 
-const sinksRoute = createRoute({
+const eventSinksRoute = createRoute({
+  getParentRoute: () => shellRoute,
+  path: "/event-sinks",
+  component: EventSinksPage,
+});
+
+const legacySinksRoute = createRoute({
   getParentRoute: () => shellRoute,
   path: "/sinks",
-  component: SinksPage,
+  component: () => <Navigate to="/delivery-targets" replace />,
 });
 
 const processorsRoute = createRoute({
@@ -86,8 +92,9 @@ const routeTree = rootRoute.addChildren([
   shellRoute.addChildren([
     indexRoute,
     projectsRoute,
-    rulesRoute,
-    sinksRoute,
+    deliveryTargetsRoute,
+    eventSinksRoute,
+    legacySinksRoute,
     processorsRoute,
     serviceNodesRoute,
   ]),

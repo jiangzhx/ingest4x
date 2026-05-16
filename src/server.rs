@@ -2,7 +2,7 @@ use crate::db::{init_database, seed};
 use crate::ingest::processor::{ProcessorRegistryState, ProcessorState};
 use crate::repositories::{
     CreateProjectInput, EventSinkRepository, ProcessorRepository, ProjectRepository,
-    RegisterServiceNodeInput, RuleRepository, ServiceNodeRepository, ServiceNodeStatus,
+    RegisterServiceNodeInput, ServiceNodeRepository, ServiceNodeStatus,
 };
 use crate::routes;
 use crate::services::{spawn_project_registry_refresh_loop, ProjectRegistryState};
@@ -55,7 +55,6 @@ pub struct AppState {
     pub(crate) settings: Arc<Settings>,
     pub(crate) event_sinks: Data<EventSinkState>,
     pub(crate) project_repository: Data<ProjectRepository>,
-    pub(crate) rule_repository: Data<RuleRepository>,
     pub(crate) event_sink_repository: Data<EventSinkRepository>,
     pub(crate) processor_repository: Data<ProcessorRepository>,
     pub(crate) service_node_repository: Data<ServiceNodeRepository>,
@@ -131,7 +130,6 @@ pub async fn start(settings: Arc<Settings>) -> std::io::Result<()> {
 pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppState> {
     let (
         project_repository,
-        rule_repository,
         event_sink_repository,
         processor_repository,
         service_node_repository,
@@ -143,7 +141,6 @@ pub async fn build_app_state(settings: Arc<Settings>) -> std::io::Result<AppStat
     build_app_state_from_parts(
         settings,
         project_repository,
-        rule_repository,
         event_sink_repository,
         processor_repository,
         service_node_repository,
@@ -159,7 +156,6 @@ pub async fn build_app_state_with_processor(
 ) -> std::io::Result<AppState> {
     let (
         project_repository,
-        rule_repository,
         event_sink_repository,
         processor_repository,
         service_node_repository,
@@ -168,7 +164,6 @@ pub async fn build_app_state_with_processor(
     build_app_state_from_parts(
         settings,
         project_repository,
-        rule_repository,
         event_sink_repository,
         processor_repository,
         service_node_repository,
@@ -181,7 +176,6 @@ pub async fn build_app_state_with_processor(
 async fn build_app_state_from_parts(
     settings: Arc<Settings>,
     project_repository: Data<ProjectRepository>,
-    rule_repository: Data<RuleRepository>,
     event_sink_repository: Data<EventSinkRepository>,
     processor_repository: Data<ProcessorRepository>,
     service_node_repository: Data<ServiceNodeRepository>,
@@ -206,7 +200,6 @@ async fn build_app_state_from_parts(
         settings,
         event_sinks,
         project_repository,
-        rule_repository,
         event_sink_repository,
         processor_repository,
         service_node_repository,
@@ -333,7 +326,6 @@ pub async fn replay_wal_once(state: &AppState) -> anyhow::Result<usize> {
         dir: std::path::Path::new(&state.settings.wal.dir),
         event_sinks: &state.event_sinks,
         project_registry: &state.project_registry,
-        rule_repository: &state.rule_repository,
         processor: state.processor.get_ref(),
         checkpoint: state.settings.wal.checkpoint.clone(),
         replay: state.settings.wal.replay.clone(),
@@ -353,7 +345,6 @@ async fn replay_wal_once_with_state(
             dir: std::path::Path::new(&state.settings.wal.dir),
             event_sinks: &state.event_sinks,
             project_registry: &state.project_registry,
-            rule_repository: &state.rule_repository,
             processor: state.processor.get_ref(),
             checkpoint: state.settings.wal.checkpoint.clone(),
             replay: state.settings.wal.replay.clone(),
@@ -579,7 +570,6 @@ async fn init_repository_state(
     settings: Arc<Settings>,
 ) -> std::io::Result<(
     Data<ProjectRepository>,
-    Data<RuleRepository>,
     Data<EventSinkRepository>,
     Data<ProcessorRepository>,
     Data<ServiceNodeRepository>,
@@ -599,17 +589,10 @@ async fn init_repository_state(
         import_mock_projects(&repository, &default_mock_projects()).await?;
     }
 
-    let rule_repository = RuleRepository::new(db.clone());
     let event_sink_repository = EventSinkRepository::new(db.clone());
     let processor_repository = ProcessorRepository::new(db.clone());
     let service_node_repository = ServiceNodeRepository::new(db);
-    seed::run(
-        &repository,
-        &rule_repository,
-        &event_sink_repository,
-        &processor_repository,
-    )
-    .await?;
+    seed::run(&repository, &event_sink_repository, &processor_repository).await?;
     let project_registry = Data::new(
         ProjectRegistryState::load(repository.clone())
             .await
@@ -618,7 +601,6 @@ async fn init_repository_state(
 
     Ok((
         Data::new(repository),
-        Data::new(rule_repository),
         Data::new(event_sink_repository),
         Data::new(processor_repository),
         Data::new(service_node_repository),

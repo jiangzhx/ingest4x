@@ -4,7 +4,6 @@ use actix_web::{test, App, HttpResponse};
 use ingest4x::ingest::processor::{
     ProcessorRegistryState, ProcessorRequestContext, ProcessorRuntime,
 };
-use ingest4x::rules::Rules;
 use ingest4x::server;
 use ingest4x::settings::Settings;
 use serde_json::{json, Value};
@@ -423,7 +422,6 @@ async fn probe_processor(path: Path<i32>, processor: Data<ProcessorRegistryState
             "xwhat": "probe",
             "xcontext": {}
         }),
-        Rules::default(),
         ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
     ) {
         Ok(output) => HttpResponse::Ok().json(json!({

@@ -32,10 +32,7 @@ async fn migrator_creates_current_sqlite_schema() {
         "processor_script_modules",
         "processor_scripts",
         "project_processors",
-        "project_rule_sets",
         "projects",
-        "rule_sets",
-        "rules",
         "seaql_migrations",
         "service_nodes",
     ] {

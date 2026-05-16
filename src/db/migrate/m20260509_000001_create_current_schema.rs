@@ -23,9 +23,6 @@ impl MigrationTrait for Migration {
             ProcessorScripts::Table.to_string(),
             EventSinks::Table.to_string(),
             DeliveryTargets::Table.to_string(),
-            ProjectRuleSets::Table.to_string(),
-            Rules::Table.to_string(),
-            RuleSets::Table.to_string(),
             AppMeta::Table.to_string(),
             Projects::Table.to_string(),
         ] {
@@ -85,134 +82,6 @@ async fn create_core_tables(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
                 .to_owned(),
         )
         .await?;
-
-    manager
-        .create_table(
-            Table::create()
-                .table(RuleSets::Table)
-                .if_not_exists()
-                .col(
-                    ColumnDef::new(RuleSets::Id)
-                        .integer()
-                        .not_null()
-                        .auto_increment()
-                        .primary_key(),
-                )
-                .col(
-                    ColumnDef::new(RuleSets::Name)
-                        .string()
-                        .not_null()
-                        .unique_key(),
-                )
-                .col(ColumnDef::new(RuleSets::Description).string())
-                .col(ColumnDef::new(RuleSets::Enabled).boolean().not_null())
-                .col(ColumnDef::new(RuleSets::WildcardRuleId).integer())
-                .col(ColumnDef::new(RuleSets::CreatedAt).big_integer().not_null())
-                .col(ColumnDef::new(RuleSets::UpdatedAt).big_integer().not_null())
-                .to_owned(),
-        )
-        .await?;
-
-    manager
-        .create_table(
-            Table::create()
-                .table(Rules::Table)
-                .if_not_exists()
-                .col(
-                    ColumnDef::new(Rules::Id)
-                        .integer()
-                        .not_null()
-                        .auto_increment()
-                        .primary_key(),
-                )
-                .col(ColumnDef::new(Rules::RuleSetId).integer().not_null())
-                .col(ColumnDef::new(Rules::ParentId).integer())
-                .col(ColumnDef::new(Rules::Name).string().not_null())
-                .col(ColumnDef::new(Rules::Xwhat).string())
-                .col(ColumnDef::new(Rules::Content).text().not_null())
-                .col(ColumnDef::new(Rules::Enabled).boolean().not_null())
-                .col(ColumnDef::new(Rules::CreatedAt).big_integer().not_null())
-                .col(ColumnDef::new(Rules::UpdatedAt).big_integer().not_null())
-                .foreign_key(
-                    ForeignKey::create()
-                        .name("fk_rules_rule_set_id")
-                        .from(Rules::Table, Rules::RuleSetId)
-                        .to(RuleSets::Table, RuleSets::Id)
-                        .on_delete(ForeignKeyAction::Cascade),
-                )
-                .foreign_key(
-                    ForeignKey::create()
-                        .name("fk_rules_parent_id")
-                        .from(Rules::Table, Rules::ParentId)
-                        .to(Rules::Table, Rules::Id)
-                        .on_delete(ForeignKeyAction::Cascade),
-                )
-                .to_owned(),
-        )
-        .await?;
-
-    manager
-        .create_table(
-            Table::create()
-                .table(ProjectRuleSets::Table)
-                .if_not_exists()
-                .col(
-                    ColumnDef::new(ProjectRuleSets::Id)
-                        .integer()
-                        .not_null()
-                        .auto_increment()
-                        .primary_key(),
-                )
-                .col(
-                    ColumnDef::new(ProjectRuleSets::ProjectId)
-                        .integer()
-                        .not_null(),
-                )
-                .col(
-                    ColumnDef::new(ProjectRuleSets::RuleSetId)
-                        .integer()
-                        .not_null(),
-                )
-                .col(
-                    ColumnDef::new(ProjectRuleSets::Enabled)
-                        .boolean()
-                        .not_null(),
-                )
-                .col(
-                    ColumnDef::new(ProjectRuleSets::CreatedAt)
-                        .big_integer()
-                        .not_null(),
-                )
-                .col(
-                    ColumnDef::new(ProjectRuleSets::UpdatedAt)
-                        .big_integer()
-                        .not_null(),
-                )
-                .foreign_key(
-                    ForeignKey::create()
-                        .name("fk_project_rule_sets_project_id")
-                        .from(ProjectRuleSets::Table, ProjectRuleSets::ProjectId)
-                        .to(Projects::Table, Projects::Id)
-                        .on_delete(ForeignKeyAction::Cascade),
-                )
-                .foreign_key(
-                    ForeignKey::create()
-                        .name("fk_project_rule_sets_rule_set_id")
-                        .from(ProjectRuleSets::Table, ProjectRuleSets::RuleSetId)
-                        .to(RuleSets::Table, RuleSets::Id)
-                        .on_delete(ForeignKeyAction::Cascade),
-                )
-                .index(
-                    Index::create()
-                        .name("idx_project_rule_sets_unique_project_rule_set")
-                        .col(ProjectRuleSets::ProjectId)
-                        .col(ProjectRuleSets::RuleSetId)
-                        .unique(),
-                )
-                .to_owned(),
-        )
-        .await?;
-
     Ok(())
 }
 
@@ -500,31 +369,7 @@ async fn create_processor_tables(manager: &SchemaManager<'_>) -> Result<(), DbEr
     Ok(())
 }
 
-async fn create_sqlite_indexes(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    for sql in [
-        r#"
-CREATE UNIQUE INDEX IF NOT EXISTS rules_unique_rule_set_xwhat
-ON rules(rule_set_id, xwhat)
-WHERE xwhat IS NOT NULL
-"#,
-        r#"
-CREATE UNIQUE INDEX IF NOT EXISTS rules_unique_rule_set_root_name
-ON rules(rule_set_id, name)
-WHERE parent_id IS NULL
-"#,
-        r#"
-CREATE UNIQUE INDEX IF NOT EXISTS rules_unique_rule_set_child_name
-ON rules(rule_set_id, parent_id, name)
-WHERE parent_id IS NOT NULL
-"#,
-        r#"
-CREATE UNIQUE INDEX IF NOT EXISTS project_rule_sets_unique_project
-ON project_rule_sets(project_id)
-"#,
-    ] {
-        execute_backend_sql(manager, DbBackend::Sqlite, sql).await?;
-    }
-
+async fn create_sqlite_indexes(_manager: &SchemaManager<'_>) -> Result<(), DbErr> {
     Ok(())
 }
 
@@ -583,43 +428,6 @@ enum AppMeta {
     Table,
     Key,
     Value,
-}
-
-#[derive(DeriveIden)]
-enum RuleSets {
-    Table,
-    Id,
-    Name,
-    Description,
-    Enabled,
-    WildcardRuleId,
-    CreatedAt,
-    UpdatedAt,
-}
-
-#[derive(DeriveIden)]
-enum Rules {
-    Table,
-    Id,
-    RuleSetId,
-    ParentId,
-    Name,
-    Xwhat,
-    Content,
-    Enabled,
-    CreatedAt,
-    UpdatedAt,
-}
-
-#[derive(DeriveIden)]
-enum ProjectRuleSets {
-    Table,
-    Id,
-    ProjectId,
-    RuleSetId,
-    Enabled,
-    CreatedAt,
-    UpdatedAt,
 }
 
 #[derive(DeriveIden)]

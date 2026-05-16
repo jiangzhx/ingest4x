@@ -1,14 +1,15 @@
-use crate::rules::Rules;
 use crate::utils::get_host_ip;
+use event_validation::register_event_api;
 use rhai::packages::Package;
 use rhai::serde::from_dynamic;
-use rhai::{def_package, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Scope};
+use rhai::{def_package, Dynamic, Engine, EvalAltResult, ImmutableString, Scope};
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use tracing::warn;
 
+mod event_validation;
 pub(crate) mod lint;
 
 // Host-side APIs exposed to Rhai processor scripts.
@@ -17,7 +18,6 @@ def_package! {
         module.set_native_fn("epoch_ms", epoch_ms);
         module.set_native_fn("host_ip", host_ip);
         module.set_native_fn("ingest4x_version", ingest4x_version);
-        module.set_native_fn("validate", validate);
         module.set_native_fn("emit", emit);
     } |> |engine| {
         register_request_api(engine);
@@ -36,8 +36,6 @@ pub struct ProcessorRequestContext {
 
 #[derive(Clone)]
 struct ProcessorContext {
-    rules: Rules,
-    event_name: String,
     deliveries: Rc<RefCell<Vec<ProcessorDelivery>>>,
 }
 
@@ -147,6 +145,7 @@ impl ProcessorRequestContext {
 pub(crate) fn register_api(engine: &mut Engine) {
     engine.register_type_with_name::<SinkTarget>("SinkTarget");
     ProcessorApiPackage::new().register_into_engine(engine);
+    register_event_api(engine);
 }
 
 pub(crate) fn push_sink_target_constants(scope: &mut Scope, sink_targets: &[String]) {
@@ -176,11 +175,9 @@ pub(crate) fn sink_target_constant_name(sink_target: &str) -> String {
     constant
 }
 
-pub(crate) fn enter_processor_context(rules: Rules, event_name: String) -> ProcessorContextGuard {
+pub(crate) fn enter_processor_context() -> ProcessorContextGuard {
     let deliveries = Rc::new(RefCell::new(Vec::new()));
     let context = ProcessorContext {
-        rules,
-        event_name,
         deliveries: Rc::clone(&deliveries),
     };
     let previous = PROCESSOR_CONTEXT.with(|current| current.replace(Some(context)));
@@ -216,38 +213,6 @@ fn host_ip() -> Result<ImmutableString, Box<EvalAltResult>> {
 
 fn ingest4x_version() -> Result<ImmutableString, Box<EvalAltResult>> {
     Ok(env!("CARGO_PKG_VERSION").into())
-}
-
-fn validate(event: Dynamic) -> Result<Map, Box<EvalAltResult>> {
-    let value: Value = from_dynamic(&event)
-        .map_err(|err| EvalAltResult::ErrorRuntime(err.to_string().into(), rhai::Position::NONE))?;
-    let result =
-        PROCESSOR_CONTEXT.with(|context| -> std::result::Result<_, Box<EvalAltResult>> {
-            let context = context.borrow();
-            let context = context.as_ref().ok_or_else(|| {
-                EvalAltResult::ErrorRuntime(
-                    "validate(event) called outside processor validation context".into(),
-                    rhai::Position::NONE,
-                )
-            })?;
-            Ok(context.rules.validate(&context.event_name, &value))
-        })?;
-    let mut output = Map::new();
-    match result {
-        Ok(()) => {
-            output.insert("ok".into(), true.into());
-        }
-        Err(err) => {
-            output.insert("ok".into(), false.into());
-            output.insert("code".into(), err.code().into());
-            output.insert("error".into(), err.message().into());
-            output.insert("message".into(), err.message().into());
-            if let Some(path) = err.path() {
-                output.insert("path".into(), path.into());
-            }
-        }
-    }
-    Ok(output)
 }
 
 fn emit(target: SinkTarget, event: Dynamic) -> Result<(), Box<EvalAltResult>> {

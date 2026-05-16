@@ -9,9 +9,7 @@ use ingest4x::db::init_sqlite_database;
 use ingest4x::ingest::ingest;
 use ingest4x::ingest::processor::ProcessorState;
 use ingest4x::repositories::{
-    CreateProjectInput, CreateProjectRuleSetInput, CreateRuleInput, CreateRuleSetInput,
-    ProjectAuthMode, ProjectRepository, RuleRepository, UpdateProjectIngestSettingsInput,
-    UpdateRuleSetInput,
+    CreateProjectInput, ProjectAuthMode, ProjectRepository, UpdateProjectIngestSettingsInput,
 };
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
@@ -32,8 +30,42 @@ use tempfile::{tempdir, TempDir};
 
 pub const TEST_PROCESSOR_SCRIPT: &str = r#"
 fn process(event, request) {
-    let validation = validate(event);
-    if !validation["ok"] {
+    try {
+        event.required("appid").string().min(1);
+        event.required("xwhat").string().min(1);
+        event.required("xcontext").object();
+        event.required("xcontext.installid").string().min(1);
+        event.required("xcontext.os").string().min(1);
+
+        if !event.contains("xwhen") || event["xwhen"] == () {
+            event["xwhen"] = request.received_at_ms();
+        }
+        if event.contains("xcontext") && event["xcontext"] != () {
+            let xcontext = event["xcontext"];
+            if xcontext.contains("os") && xcontext["os"] != () {
+                xcontext["os"] = xcontext["os"].to_lower();
+                if !xcontext.contains("platform") || xcontext["platform"] == () {
+                    xcontext["platform"] = xcontext["os"];
+                }
+            }
+            if xcontext.contains("currencytype") && xcontext["currencytype"] != () {
+                xcontext["currencytype"] = xcontext["currencytype"].to_upper();
+            }
+            if !xcontext.contains("ip") || xcontext["ip"] == () {
+                let ip = request.ip();
+                if ip != () {
+                    xcontext["ip"] = ip;
+                }
+            }
+            xcontext["process_info"] = #{
+                receive_time: request.received_at_ms(),
+                ingest4x_version: ingest4x_version()
+            };
+            event["xcontext"] = xcontext;
+        }
+
+        emit(SINK_EVENTS, event);
+    } catch (err) {
         if !event.contains("xcontext") || event["xcontext"] == () {
             event["xcontext"] = #{};
         }
@@ -41,42 +73,12 @@ fn process(event, request) {
         xcontext["process_info"] = #{
             receive_time: request.received_at_ms(),
             ingest4x_version: ingest4x_version(),
-            reason: validation["error"],
-            error_code: validation["code"]
+            reason: `${err}`,
+            error_code: `${err}`
         };
         event["xcontext"] = xcontext;
         emit(SINK_EVENTS_ERROR, event);
-        return;
     }
-
-    if !event.contains("xwhen") || event["xwhen"] == () {
-        event["xwhen"] = request.received_at_ms();
-    }
-    if event.contains("xcontext") && event["xcontext"] != () {
-        let xcontext = event["xcontext"];
-        if xcontext.contains("os") && xcontext["os"] != () {
-            xcontext["os"] = xcontext["os"].to_lower();
-            if !xcontext.contains("platform") || xcontext["platform"] == () {
-                xcontext["platform"] = xcontext["os"];
-            }
-        }
-        if xcontext.contains("currencytype") && xcontext["currencytype"] != () {
-            xcontext["currencytype"] = xcontext["currencytype"].to_upper();
-        }
-        if !xcontext.contains("ip") || xcontext["ip"] == () {
-            let ip = request.ip();
-            if ip != () {
-                xcontext["ip"] = ip;
-            }
-        }
-        xcontext["process_info"] = #{
-            receive_time: request.received_at_ms(),
-            ingest4x_version: ingest4x_version()
-        };
-        event["xcontext"] = xcontext;
-    }
-
-    emit(SINK_EVENTS, event);
 }
 "#;
 
@@ -99,7 +101,6 @@ pub struct TestService {
     wal_dir: TempDir,
     event_sinks: Data<ingest4x::sinks::EventSinkState>,
     project_registry: Data<ProjectRegistryState>,
-    rule_repository: Data<RuleRepository>,
     processor: Data<ProcessorState>,
     checkpoint: CheckpointSettings,
     replay: ReplaySettings,
@@ -200,9 +201,8 @@ async fn create_app_with_project_event_settings_and_processor(
         .create_topic(ERROR_TOPIC, 1, 1)
         .expect("create kafka mock error topic");
     let event_sinks = init_kafka_event_sinks(bootstrap_servers.as_str(), TOPIC, ERROR_TOPIC);
-    let (project_registry, rule_repository) = create_project_state(project).await;
+    let project_registry = create_project_state(project).await;
     let project_registry = Data::new(project_registry);
-    let rule_repository = Data::new(rule_repository);
     let processor = match processor_script {
         Some(script) => ProcessorState::new(script.to_string(), 10_000)
             .expect("test processor should initialize"),
@@ -219,7 +219,6 @@ async fn create_app_with_project_event_settings_and_processor(
     let mut app = App::new().app_data(event_sinks.clone());
     app = app
         .app_data(project_registry.clone())
-        .app_data(rule_repository.clone())
         .app_data(processor.clone())
         .app_data(wal)
         .route("/ingest/{project_key}", web::post().to(ingest))
@@ -235,7 +234,6 @@ async fn create_app_with_project_event_settings_and_processor(
             wal_dir,
             event_sinks,
             project_registry,
-            rule_repository,
             processor,
             checkpoint,
             replay,
@@ -248,7 +246,6 @@ pub async fn replay_once(testservice: &TestService) -> anyhow::Result<usize> {
         dir: testservice.wal_dir.path(),
         event_sinks: &testservice.event_sinks,
         project_registry: &testservice.project_registry,
-        rule_repository: &testservice.rule_repository,
         processor: testservice.processor.get_ref(),
         checkpoint: testservice.checkpoint.clone(),
         replay: testservice.replay.clone(),
@@ -272,14 +269,11 @@ fn test_wal_settings(dir: &Path) -> WalSettings {
     }
 }
 
-async fn create_project_state(
-    project: HashMap<String, String>,
-) -> (ProjectRegistryState, RuleRepository) {
+async fn create_project_state(project: HashMap<String, String>) -> ProjectRegistryState {
     let db = init_sqlite_database("sqlite::memory:")
         .await
         .expect("sqlite database should initialize");
     let repository = ProjectRepository::new(db.clone());
-    let rule_repository = RuleRepository::new(db.clone());
 
     if !project.is_empty() {
         let project_settings = project;
@@ -293,7 +287,7 @@ async fn create_project_state(
         let auth_mode = project_settings
             .get("auth_mode")
             .map(|strategy| ProjectAuthMode::from_storage(strategy));
-        let project = repository
+        let _project = repository
             .create_project_with_ingest_settings(
                 CreateProjectInput {
                     name: project_settings
@@ -311,70 +305,9 @@ async fn create_project_state(
             )
             .await
             .expect("mock project should be created");
-
-        let rule_set = rule_repository
-            .create_rule_set(CreateRuleSetInput {
-                name: "Test ingest rules".to_string(),
-                description: None,
-                enabled: true,
-            })
-            .await
-            .expect("test rule set should be created");
-        let default_rule = rule_repository
-            .create_rule(CreateRuleInput {
-                rule_set_id: rule_set.id,
-                parent_id: None,
-                name: "Default".to_string(),
-                xwhat: None,
-                content: r#"
-fields:
-  appid:
-    required: true
-    type: string
-  xwhat:
-    required: true
-    type: string
-  xcontext:
-    required: true
-    type: object
-  xcontext.installid:
-    required: true
-    type: string
-  xcontext.os:
-    required: true
-    type: string
-"#
-                .to_string(),
-                enabled: true,
-            })
-            .await
-            .expect("test default rule should be created");
-        rule_repository
-            .update_rule_set(
-                rule_set.id,
-                UpdateRuleSetInput {
-                    name: None,
-                    description: None,
-                    enabled: None,
-                    wildcard_rule_id: Some(Some(default_rule.id)),
-                },
-            )
-            .await
-            .expect("test default rule should be selected as wildcard");
-        rule_repository
-            .assign_rule_set_to_project(
-                project.id,
-                CreateProjectRuleSetInput {
-                    rule_set_id: rule_set.id,
-                    enabled: true,
-                },
-            )
-            .await
-            .expect("test rule set should be assigned");
     }
 
-    let registry = ProjectRegistryState::load(repository)
+    ProjectRegistryState::load(repository)
         .await
-        .expect("project registry should load");
-    (registry, rule_repository)
+        .expect("project registry should load")
 }
