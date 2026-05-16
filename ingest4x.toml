@@ -15,17 +15,27 @@ url = "sqlite://db/ingest4x.db?mode=rwc"
 refresh_interval_secs = 3
 
 [wal]
+# WAL 文件目录。ingest 请求先写入这里，之后再由 replay 投递到 sink。
 dir = "./wal"
+# 写入 WAL 时的 group commit 时间上限；到时间会 flush 当前待刷盘记录。
 flush_max_interval = "10ms"
+# 写入 WAL 时的 group commit 条数上限；达到条数会 flush 当前待刷盘记录。
 flush_max_records = 1000
+# false 表示请求成功前等待 WAL fsync/flush；true 只适合本地压测或可丢数据场景。
 no_sync = false
+# 单个 WAL segment 文件的最大字节数；超过后滚动到新 segment。
 wal_segment_max_bytes = 134217728
 
 [wal.checkpoint]
+# checkpoint 文件刷盘的最长间隔。checkpoint 记录已经成功完成 replay 的 WAL 位置。
 flush_interval = "1s"
+# checkpoint 文件刷盘前最多累计多少条成功 replay 的 WAL record。
 flush_records = 1000
+# checkpoint 文件刷盘前最多累计多少成功 replay 的 WAL 字节数。
 flush_bytes = 67108864
 
 [wal.replay]
+# 单个 replay window 最多读取并投递多少条 WAL record；也限制单次 sink send_batch 的记录数。
 max_records = 1000
+# 单个 replay window 最多读取并投递多少 WAL 字节；也限制单次 sink send_batch 的字节窗口。
 max_bytes = 67108864
