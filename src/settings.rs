@@ -69,20 +69,27 @@ pub struct WalSettings {
     pub dir: String,
     #[serde(default)]
     pub node_id: Option<String>,
-    #[serde(default = "default_wal_flush_max_interval")]
-    pub flush_max_interval: String,
-    #[serde(default = "default_wal_flush_max_records")]
-    pub flush_max_records: usize,
     #[serde(default)]
-    pub no_sync: bool,
-    #[serde(default = "default_wal_segment_max_bytes")]
-    pub wal_segment_max_bytes: u64,
-    #[serde(default)]
-    pub min_free_bytes: u64,
+    pub write: WalWriteSettings,
     #[serde(default)]
     pub checkpoint: CheckpointSettings,
     #[serde(default)]
     pub replay: ReplaySettings,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct WalWriteSettings {
+    #[serde(default = "default_wal_write_flush_interval")]
+    pub flush_interval: String,
+    #[serde(default = "default_wal_write_flush_records")]
+    pub flush_records: usize,
+    #[serde(default)]
+    pub no_sync: bool,
+    #[serde(default = "default_wal_write_segment_max_bytes")]
+    pub segment_max_bytes: u64,
+    #[serde(default)]
+    pub min_free_bytes: u64,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -103,6 +110,18 @@ pub struct ReplaySettings {
     pub max_records: usize,
     #[serde(default = "default_replay_max_bytes")]
     pub max_bytes: u64,
+}
+
+impl Default for WalWriteSettings {
+    fn default() -> Self {
+        Self {
+            flush_interval: default_wal_write_flush_interval(),
+            flush_records: default_wal_write_flush_records(),
+            no_sync: false,
+            segment_max_bytes: default_wal_write_segment_max_bytes(),
+            min_free_bytes: 0,
+        }
+    }
 }
 
 impl Default for CheckpointSettings {
@@ -128,15 +147,15 @@ pub const fn default_database_refresh_interval_secs() -> u64 {
     3
 }
 
-pub const fn default_wal_segment_max_bytes() -> u64 {
+pub const fn default_wal_write_segment_max_bytes() -> u64 {
     128 * 1024 * 1024
 }
 
-pub fn default_wal_flush_max_interval() -> String {
+pub fn default_wal_write_flush_interval() -> String {
     "10ms".to_string()
 }
 
-pub const fn default_wal_flush_max_records() -> usize {
+pub const fn default_wal_write_flush_records() -> usize {
     1000
 }
 

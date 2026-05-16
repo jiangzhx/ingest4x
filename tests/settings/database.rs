@@ -54,19 +54,27 @@ fn settings_leaves_database_none_when_section_missing() {
 }
 
 #[test]
-fn settings_reads_wal_flush_group_commit_fields() {
+fn settings_reads_wal_write_fields() {
     let settings = load_settings(
         r#"
 [wal]
 dir = "./wal"
-flush_max_interval = "10ms"
-flush_max_records = 1000
+
+[wal.write]
+flush_interval = "10ms"
+flush_records = 1000
+no_sync = true
+segment_max_bytes = 268435456
+min_free_bytes = 4096
 "#,
     );
 
     let wal = settings.wal;
-    assert_eq!(wal.flush_max_interval, "10ms");
-    assert_eq!(wal.flush_max_records, 1000);
+    assert_eq!(wal.write.flush_interval, "10ms");
+    assert_eq!(wal.write.flush_records, 1000);
+    assert!(wal.write.no_sync);
+    assert_eq!(wal.write.segment_max_bytes, 256 * 1024 * 1024);
+    assert_eq!(wal.write.min_free_bytes, 4096);
 }
 
 #[test]

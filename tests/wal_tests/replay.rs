@@ -16,7 +16,9 @@ use ingest4x::repositories::{
 };
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
-use ingest4x::settings::{AutoOffsetReset, CheckpointSettings, ReplaySettings, Settings};
+use ingest4x::settings::{
+    AutoOffsetReset, CheckpointSettings, ReplaySettings, Settings, WalWriteSettings,
+};
 use ingest4x::sinks::init_event_sinks_from_runtime_sinks;
 use ingest4x::wal::replay::{initialize_replay_checkpoint, replay_once, WalReplayContext};
 use ingest4x::wal::{new_record, read_entries_after_limit, WalRecord, WalWriter};
@@ -331,11 +333,13 @@ async fn wal_replay_uses_processor_declared_sink_targets() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -517,11 +521,13 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -616,11 +622,13 @@ async fn wal_replay_advances_checkpoint_when_processor_emits_no_delivery() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -695,11 +703,13 @@ async fn wal_replay_advances_pipeline_checkpoint_for_unemitted_registered_sink()
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -778,11 +788,13 @@ async fn wal_pipeline_checkpoint_matches_writer_recovery() {
     let settings = ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     };
@@ -866,11 +878,13 @@ async fn wal_replay_latest_offset_reset_skips_existing_wal_for_new_sink() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -943,11 +957,13 @@ async fn wal_replay_latest_offset_reset_initialized_before_append_reads_future_w
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1023,11 +1039,13 @@ async fn wal_replay_quarantines_unknown_sink_target_and_advances_checkpoint() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1118,11 +1136,13 @@ async fn wal_replay_sends_records_to_blackhole_and_advances_checkpoint() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1234,11 +1254,13 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1386,11 +1408,13 @@ async fn wal_replay_flushes_sink_batch_at_checkpoint_record_threshold() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1477,11 +1501,13 @@ async fn wal_replay_blocks_failed_blackhole_sink_without_advancing_checkpoint() 
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1562,11 +1588,13 @@ async fn wal_replay_retries_committed_sink_when_another_sink_blocks_pipeline_che
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1650,11 +1678,13 @@ async fn wal_replay_rejects_tampered_checkpoint() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1731,7 +1761,9 @@ url = "{}"
 
 [wal]
 dir = "{}"
-wal_segment_max_bytes = 16
+
+[wal.write]
+segment_max_bytes = 16
 "#,
             db_url,
             wal_dir.display(),
@@ -1826,11 +1858,13 @@ async fn wal_replay_rejects_checkpoint_for_different_node_id() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })
@@ -1910,11 +1944,13 @@ async fn wal_replay_stops_on_lsn_gap_without_checkpointing_later_record() {
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     })

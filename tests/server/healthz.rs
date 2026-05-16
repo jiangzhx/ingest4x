@@ -29,7 +29,9 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
-flush_max_records = 1
+
+[wal.write]
+flush_records = 1
 
 "#,
             wal_dir.display()
@@ -117,7 +119,9 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
-flush_max_records = 1
+
+[wal.write]
+flush_records = 1
 
 "#,
             wal_dir.display()
@@ -223,7 +227,9 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
-flush_max_records = 1
+
+[wal.write]
+flush_records = 1
 
 "#,
             wal_dir.display()
@@ -315,7 +321,9 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
-flush_max_records = 1
+
+[wal.write]
+flush_records = 1
 
 "#,
             wal_dir.display()
@@ -403,6 +411,8 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
+
+[wal.write]
 min_free_bytes = 9223372036854775807
 
 "#,

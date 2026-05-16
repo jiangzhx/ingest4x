@@ -131,8 +131,8 @@ struct WalWriterInner {
     _lock_file: File,
     node_id: String,
     segment_max_bytes: u64,
-    flush_max_interval: Duration,
-    flush_max_records: usize,
+    flush_interval: Duration,
+    flush_records: usize,
     no_sync: bool,
     min_free_bytes: u64,
     state: Mutex<WalWriterState>,
@@ -174,25 +174,25 @@ impl WalWriter {
         let next_lsn = recover_next_lsn(&dir, checkpoint.as_ref())?;
         ensure_segment_file(&dir, segment_id, &node_id, next_lsn)?;
         let offset = repair_segment_tail(&segment_path(&dir, segment_id))?;
-        ensure_wal_disk_space(&dir, settings.min_free_bytes, 0)?;
-        let flush_max_interval =
-            humantime::parse_duration(&settings.flush_max_interval).map_err(|error| {
+        ensure_wal_disk_space(&dir, settings.write.min_free_bytes, 0)?;
+        let flush_interval =
+            humantime::parse_duration(&settings.write.flush_interval).map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    format!("invalid flush_max_interval: {error}"),
+                    format!("invalid wal.write.flush_interval: {error}"),
                 )
             })?;
-        let flush_max_interval = flush_max_interval.max(Duration::from_millis(1));
+        let flush_interval = flush_interval.max(Duration::from_millis(1));
 
         let inner = Arc::new(WalWriterInner {
             dir,
             _lock_file: lock_file,
             node_id,
-            segment_max_bytes: settings.wal_segment_max_bytes.max(SEGMENT_HEADER_LEN + 1),
-            flush_max_interval,
-            flush_max_records: settings.flush_max_records.max(1),
-            no_sync: settings.no_sync,
-            min_free_bytes: settings.min_free_bytes,
+            segment_max_bytes: settings.write.segment_max_bytes.max(SEGMENT_HEADER_LEN + 1),
+            flush_interval,
+            flush_records: settings.write.flush_records.max(1),
+            no_sync: settings.write.no_sync,
+            min_free_bytes: settings.write.min_free_bytes,
             state: Mutex::new(WalWriterState {
                 segment_id,
                 offset,
@@ -291,7 +291,7 @@ impl WalWriterInner {
         state.next_lsn += 1;
         state.buffered.push(BufferedWalRecord { record, response });
 
-        if state.buffered.len() >= self.flush_max_records {
+        if state.buffered.len() >= self.flush_records {
             self.flush_buffer_locked(&mut state)?;
         }
 
@@ -474,11 +474,10 @@ fn spawn_flush_loop(inner: Weak<WalWriterInner>) {
     thread::Builder::new()
         .name("ingest4x-wal-flush".to_string())
         .spawn(move || loop {
-            let Some(flush_max_interval) = inner.upgrade().map(|inner| inner.flush_max_interval)
-            else {
+            let Some(flush_interval) = inner.upgrade().map(|inner| inner.flush_interval) else {
                 break;
             };
-            thread::sleep(flush_max_interval);
+            thread::sleep(flush_interval);
             let Some(inner) = inner.upgrade() else {
                 break;
             };

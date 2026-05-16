@@ -4,7 +4,7 @@ use actix_web::{test, App};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ingest4x::server;
-use ingest4x::settings::{Settings, WalSettings};
+use ingest4x::settings::{Settings, WalSettings, WalWriteSettings};
 use ingest4x::wal::{
     new_record, read_all_records, read_entries_after_limit, WalPosition, WalWriter,
 };
@@ -141,7 +141,9 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
-flush_max_records = 1
+
+[wal.write]
+flush_records = 1
 
 "#,
             wal_dir.display()
@@ -489,7 +491,7 @@ dir = "{}"
 }
 
 #[actix_rt::test]
-async fn no_sync_buffers_until_flush_max_records_is_reached() {
+async fn no_sync_buffers_until_flush_records_is_reached() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let config_path = temp.path().join("wal-config.toml");
@@ -505,9 +507,11 @@ bind_address = "127.0.0.1:18090"
 
 [wal]
 dir = "{}"
+
+[wal.write]
 no_sync = true
-flush_max_interval = "1h"
-flush_max_records = 2
+flush_interval = "1h"
+flush_records = 2
 
 "#,
             wal_dir.display()
@@ -914,7 +918,7 @@ async fn wal_writer_rejects_startup_when_min_free_bytes_cannot_be_met() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
-    settings.min_free_bytes = u64::MAX;
+    settings.write.min_free_bytes = u64::MAX;
 
     let error =
         WalWriter::new(&settings).expect_err("startup should fail when WAL min free cannot be met");
@@ -979,7 +983,7 @@ async fn wal_segment_creation_removes_stale_tmp_before_rename() {
     fs::write(&stale_tmp, b"stale tmp").expect("write stale tmp");
 
     let mut settings = wal_settings(&wal_dir);
-    settings.wal_segment_max_bytes = 16;
+    settings.write.segment_max_bytes = 16;
     let writer = WalWriter::new(&settings).expect("wal writer");
     writer.append(&test_record("first")).expect("append first");
     writer
@@ -1070,9 +1074,9 @@ async fn durable_append_waits_for_interval_flush_when_record_threshold_not_reach
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
-    settings.no_sync = false;
-    settings.flush_max_interval = "100ms".to_string();
-    settings.flush_max_records = 100_000;
+    settings.write.no_sync = false;
+    settings.write.flush_interval = "100ms".to_string();
+    settings.write.flush_records = 100_000;
 
     let writer = Arc::new(WalWriter::new(&settings).expect("wal writer"));
     let (tx, rx) = mpsc::channel();
@@ -1103,9 +1107,9 @@ async fn durable_append_async_does_not_block_runtime_while_waiting_for_flush_int
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
-    settings.no_sync = false;
-    settings.flush_max_interval = "100ms".to_string();
-    settings.flush_max_records = 100_000;
+    settings.write.no_sync = false;
+    settings.write.flush_interval = "100ms".to_string();
+    settings.write.flush_records = 100_000;
 
     let writer = WalWriter::new(&settings).expect("wal writer");
     let append = tokio::spawn({
@@ -1136,9 +1140,9 @@ async fn durable_append_flushes_when_record_threshold_is_reached() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
-    settings.no_sync = false;
-    settings.flush_max_interval = "1h".to_string();
-    settings.flush_max_records = 2;
+    settings.write.no_sync = false;
+    settings.write.flush_interval = "1h".to_string();
+    settings.write.flush_records = 2;
 
     let writer = Arc::new(WalWriter::new(&settings).expect("wal writer"));
     let (first_tx, first_rx) = mpsc::channel();
@@ -1174,9 +1178,9 @@ async fn durable_append_waiters_fail_when_group_flush_fails() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
-    settings.no_sync = false;
-    settings.flush_max_interval = "1h".to_string();
-    settings.flush_max_records = 2;
+    settings.write.no_sync = false;
+    settings.write.flush_interval = "1h".to_string();
+    settings.write.flush_records = 2;
 
     let writer = Arc::new(WalWriter::new(&settings).expect("wal writer"));
     ingest4x::wal::fail_after_test_writes(1);
@@ -1214,9 +1218,9 @@ async fn no_sync_flush_failure_rolls_back_written_batch() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
-    settings.no_sync = true;
-    settings.flush_max_records = 2;
-    settings.flush_max_interval = "1h".to_string();
+    settings.write.no_sync = true;
+    settings.write.flush_records = 2;
+    settings.write.flush_interval = "1h".to_string();
 
     let writer = WalWriter::new(&settings).expect("wal writer");
     ingest4x::wal::fail_after_test_writes(1);
@@ -1245,10 +1249,10 @@ async fn no_sync_flush_failure_removes_segments_created_by_batch() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let mut settings = wal_settings(&wal_dir);
-    settings.no_sync = true;
-    settings.flush_max_records = 3;
-    settings.flush_max_interval = "1h".to_string();
-    settings.wal_segment_max_bytes = 16;
+    settings.write.no_sync = true;
+    settings.write.flush_records = 3;
+    settings.write.flush_interval = "1h".to_string();
+    settings.write.segment_max_bytes = 16;
 
     let writer = WalWriter::new(&settings).expect("wal writer");
     ingest4x::wal::fail_after_test_writes(2);
@@ -1282,11 +1286,13 @@ fn wal_settings(wal_dir: &Path) -> WalSettings {
     WalSettings {
         dir: wal_dir.display().to_string(),
         node_id: None,
-        flush_max_interval: "1s".to_string(),
-        flush_max_records: 100_000,
-        no_sync: false,
-        wal_segment_max_bytes: 128 * 1024 * 1024,
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
         checkpoint: Default::default(),
         replay: Default::default(),
     }

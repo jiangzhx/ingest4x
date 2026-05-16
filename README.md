@@ -291,10 +291,12 @@ refresh_interval_secs = 3
 
 [wal]
 dir = "./wal"
-flush_max_interval = "10ms"
-flush_max_records = 1000
+
+[wal.write]
+flush_interval = "10ms"
+flush_records = 1000
 no_sync = false
-wal_segment_max_bytes = 134217728
+segment_max_bytes = 134217728
 
 [wal.checkpoint]
 flush_interval = "1s"
@@ -313,7 +315,7 @@ Key settings:
 | `database.url` | SQLite or MySQL connection string |
 | `database.refresh_interval_secs` | refresh interval for projects/sinks/processors |
 | `wal.dir` | WAL data directory |
-| `wal.no_sync` | `false` means reliable append with fsync-style durability; `true` is a performance-first weaker durability mode |
+| `wal.write.no_sync` | `false` means reliable append with fsync-style durability; `true` is a performance-first weaker durability mode |
 
 `ingest4x.example.toml` contains a full MySQL + local Kafka sample.
 

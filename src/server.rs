@@ -421,7 +421,7 @@ mod tests {
     use crate::repositories::ServiceNodeStatus;
     use crate::settings::{
         CheckpointSettings, IngestSettings, LoggingSettings, ManagementSettings, Settings,
-        WalSettings,
+        WalSettings, WalWriteSettings,
     };
     use std::sync::Arc;
     use std::time::Duration;
@@ -452,11 +452,13 @@ mod tests {
             wal: WalSettings {
                 dir: temp.path().join("wal").display().to_string(),
                 node_id: Some("node-from-wal".to_string()),
-                flush_max_interval: "10ms".to_string(),
-                flush_max_records: 1000,
-                no_sync: false,
-                wal_segment_max_bytes: 1024 * 1024,
-                min_free_bytes: 0,
+                write: WalWriteSettings {
+                    flush_interval: "10ms".to_string(),
+                    flush_records: 1000,
+                    no_sync: false,
+                    segment_max_bytes: 1024 * 1024,
+                    min_free_bytes: 0,
+                },
                 checkpoint: CheckpointSettings::default(),
                 replay: Default::default(),
             },
@@ -499,11 +501,13 @@ mod tests {
             wal: WalSettings {
                 dir: temp.path().join("wal").display().to_string(),
                 node_id: Some("node-cleaned-up".to_string()),
-                flush_max_interval: "10ms".to_string(),
-                flush_max_records: 1000,
-                no_sync: false,
-                wal_segment_max_bytes: 1024 * 1024,
-                min_free_bytes: 0,
+                write: WalWriteSettings {
+                    flush_interval: "10ms".to_string(),
+                    flush_records: 1000,
+                    no_sync: false,
+                    segment_max_bytes: 1024 * 1024,
+                    min_free_bytes: 0,
+                },
                 checkpoint: CheckpointSettings::default(),
                 replay: Default::default(),
             },

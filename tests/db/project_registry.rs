@@ -6,7 +6,8 @@ use ingest4x::repositories::{CreateProjectInput, ProjectRepository, UpdateProjec
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    CheckpointSettings, DatabaseSettings, IngestSettings, ManagementSettings, Settings, WalSettings,
+    CheckpointSettings, DatabaseSettings, IngestSettings, ManagementSettings, Settings,
+    WalSettings, WalWriteSettings,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -366,11 +367,13 @@ fn test_wal_settings(dir: &Path) -> WalSettings {
     WalSettings {
         dir: dir.join("wal").display().to_string(),
         node_id: None,
-        flush_max_interval: "1ms".to_string(),
-        flush_max_records: 1,
-        no_sync: false,
-        wal_segment_max_bytes: ingest4x::settings::default_wal_segment_max_bytes(),
-        min_free_bytes: 0,
+        write: WalWriteSettings {
+            flush_interval: "1ms".to_string(),
+            flush_records: 1,
+            no_sync: false,
+            segment_max_bytes: ingest4x::settings::default_wal_write_segment_max_bytes(),
+            min_free_bytes: 0,
+        },
         checkpoint: CheckpointSettings::default(),
         replay: Default::default(),
     }

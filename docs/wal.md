@@ -34,18 +34,18 @@ Key points:
 
 ## ACK semantics
 
-Default is `wal.no_sync = false`. In this mode, `/ingest` returns `200` only after WAL append is complete and the write path waits for segment `sync_data()` success.
+Default is `wal.write.no_sync = false`. In this mode, `/ingest` returns `200` only after WAL append is complete and the write path waits for segment `sync_data()` success.
 
 ```toml
-[wal]
+[wal.write]
 no_sync = false
-flush_max_interval = "10ms"
-flush_max_records = 1000
+flush_interval = "10ms"
+flush_records = 1000
 ```
 
-`flush_max_interval` and `flush_max_records` control group commit. Multiple requests may flush together in a short window, reducing sync frequency. With `no_sync = false`, each request waits for its own flush before success.
+`wal.write.flush_interval` and `wal.write.flush_records` control group commit. Multiple requests may flush together in a short window, reducing sync frequency. With `wal.write.no_sync = false`, each request waits for its own flush before success.
 
-If `wal.no_sync = true`, append returns after writing to memory buffer and flush happens later in background. This lowers latency, but if process crashes before flush, the most recent unflushed batch may be lost. This mode is not a strong durability ACK.
+If `wal.write.no_sync = true`, append returns after writing to memory buffer and flush happens later in background. This lowers latency, but if process crashes before flush, the most recent unflushed batch may be lost. This mode is not a strong durability ACK.
 
 ## WAL record
 
@@ -104,14 +104,14 @@ WAL starts at segment `1`. Each append allocates:
 - `segment`: current segment ID.
 - `offset`: starting offset of frame in segment.
 
-When the next frame would exceed `wal_segment_max_bytes`, writer creates a new segment. Default:
+When the next frame would exceed `wal.write.segment_max_bytes`, writer creates a new segment. Default:
 
 ```toml
-[wal]
-wal_segment_max_bytes = 134217728
+[wal.write]
+segment_max_bytes = 134217728
 ```
 
-Before append, available disk space is checked. If `min_free_bytes` is non-zero and post-write free space is below threshold, append fails and `/ingest` returns `503`.
+Before append, available disk space is checked. If `wal.write.min_free_bytes` is non-zero and post-write free space is below threshold, append fails and `/ingest` returns `503`.
 
 ## Replay
 
@@ -238,14 +238,16 @@ Common tuning:
 ```toml
 [wal]
 dir = "./wal"
-flush_max_interval = "10ms"
-flush_max_records = 1000
+
+[wal.write]
+flush_interval = "10ms"
+flush_records = 1000
 no_sync = false
-wal_segment_max_bytes = 134217728
+segment_max_bytes = 134217728
 min_free_bytes = 0
 ```
 
-```
+```toml
 [wal.checkpoint]
 flush_interval = "1s"
 flush_records = 1000
@@ -261,11 +263,11 @@ Meaning:
 | Config | Meaning |
 | --- | --- |
 | `wal.dir` | WAL data directory |
-| `wal.flush_max_interval` | Max interval before buffer flush |
-| `wal.flush_max_records` | Max records before forced flush |
-| `wal.no_sync` | Whether to skip waiting for sync on write |
-| `wal.wal_segment_max_bytes` | Max segment size |
-| `wal.min_free_bytes` | Minimum free space threshold, if non-zero |
+| `wal.write.flush_interval` | Max interval before writer buffer flush |
+| `wal.write.flush_records` | Max records before forced writer flush |
+| `wal.write.no_sync` | Whether to skip waiting for sync on write |
+| `wal.write.segment_max_bytes` | Max segment size |
+| `wal.write.min_free_bytes` | Minimum free space threshold, if non-zero |
 | `wal.checkpoint.flush_interval` | Max interval between checkpoint flushes |
 | `wal.checkpoint.flush_records` | Max successfully replayed records before checkpoint file flush |
 | `wal.checkpoint.flush_bytes` | Max successfully replayed WAL bytes before checkpoint file flush |
@@ -287,7 +289,7 @@ WAL guarantees durability after ingress and replay participation only; it is not
 | Symptom | First checks |
 | --- | --- |
 | `/ingest` returns `503` | WAL directory permissions, disk space, `wal.lock`, `wal_append_errors_total` |
-| `/healthz` shows `wal_ready=false` | `wal.min_free_bytes` and WAL free space |
+| `/healthz` shows `wal_ready=false` | `wal.write.min_free_bytes` and WAL free space |
 | Replay backlog | `wal_replay_lag_lsn`, sink connectivity, checkpoint file update time |
 | Sink does not consume history | Verify sink `auto_offset_reset` and checkpoint moved to tail |
 | Checkpoint file error | Verify `node_id` and checksum integrity |

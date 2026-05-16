@@ -43,7 +43,9 @@ url = "{}"
 
 [wal]
 dir = "{}"
-flush_max_records = 1
+
+[wal.write]
+flush_records = 1
 "#,
             sqlite_url(temp.path()),
             wal_dir.display(),
@@ -159,7 +161,9 @@ url = "{}"
 
 [wal]
 dir = "{}"
-flush_max_records = 1
+
+[wal.write]
+flush_records = 1
 "#,
             sqlite_url(temp.path()),
             wal_dir.display(),

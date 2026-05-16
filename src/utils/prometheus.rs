@@ -152,8 +152,9 @@ impl WalPrometheusMetrics {
 
     pub fn observe(&self, settings: &Settings, wal: &WalWriter, sink_names: &[String]) {
         self.enabled.set(1.0);
-        self.no_sync.set(bool_value(settings.wal.no_sync));
-        self.min_free_bytes.set(settings.wal.min_free_bytes as f64);
+        self.no_sync.set(bool_value(settings.wal.write.no_sync));
+        self.min_free_bytes
+            .set(settings.wal.write.min_free_bytes as f64);
 
         match wal.snapshot_for_sinks(sink_names) {
             Ok(snapshot) => {
