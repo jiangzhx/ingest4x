@@ -1320,6 +1320,7 @@ fn resolve_node_id(configured_node_id: Option<&str>, dir: &Path) -> io::Result<S
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
+        validate_node_id(node_id)?;
         let path = dir.join(NODE_ID_FILE);
         if path.exists() {
             let existing = fs::read_to_string(&path)?;
@@ -1343,6 +1344,7 @@ fn resolve_node_id(configured_node_id: Option<&str>, dir: &Path) -> io::Result<S
         let node_id = fs::read_to_string(&path)?;
         let node_id = node_id.trim();
         if !node_id.is_empty() {
+            validate_node_id(node_id)?;
             return Ok(node_id.to_string());
         }
     }
@@ -1350,6 +1352,20 @@ fn resolve_node_id(configured_node_id: Option<&str>, dir: &Path) -> io::Result<S
     let node_id = Uuid::new_v4().to_string();
     write_node_id_file(dir, &node_id)?;
     Ok(node_id)
+}
+
+fn validate_node_id(node_id: &str) -> io::Result<()> {
+    if node_id
+        .chars()
+        .all(|char| char.is_ascii_alphanumeric() || matches!(char, '_' | '-' | '.'))
+    {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "wal node_id can only contain [A-Za-z0-9_.-]",
+        ))
+    }
 }
 
 fn write_node_id_file(dir: &Path, node_id: &str) -> io::Result<()> {

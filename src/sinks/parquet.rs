@@ -1,13 +1,14 @@
 use crate::sinks::{
-    validate_required_string, EventSink, EventSinkProvider, SinkConfig, SinkTypeMetadata,
+    validate_required_string, EventSink, EventSinkBatch, EventSinkBatchMetadata,
+    EventSinkBuildContext, EventSinkProvider, SinkConfig, SinkTypeMetadata,
 };
 use anyhow::{Context, Result};
 use arrow_array::builder::{BooleanBuilder, Float64Builder, Int64Builder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use futures::future::BoxFuture;
-use opendal::services::{Cos, Fs, S3};
-use opendal::Operator;
+use opendal::services::{Cos, Fs, Memory, S3};
+use opendal::{ErrorKind as OpenDalErrorKind, Operator};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -93,37 +94,62 @@ impl SinkConfig for DestinationConfig {
 pub struct ParquetSink {
     operator: Operator,
     path_prefix: String,
+    sink_path_component: String,
     columns: Vec<ColumnConfig>,
     include_event_json: bool,
 }
 
 impl ParquetSink {
-    fn from_parts(target_config: TargetConfig, sink_config: DestinationConfig) -> Result<Self> {
+    fn from_parts(
+        target_config: TargetConfig,
+        sink_config: DestinationConfig,
+        sink_id: &str,
+    ) -> Result<Self> {
         let operator = match target_config.scheme.as_str() {
             "fs" => Operator::from_iter::<Fs>(target_config.options)?.finish(),
             "s3" => Operator::from_iter::<S3>(target_config.options)?.finish(),
             "cos" => Operator::from_iter::<Cos>(target_config.options)?.finish(),
+            "memory" => Operator::from_iter::<Memory>(target_config.options)?.finish(),
             scheme => anyhow::bail!("unsupported parquet storage scheme `{scheme}`"),
         };
 
         Ok(Self {
             operator,
             path_prefix: normalize_path_prefix(&sink_config.path_prefix),
+            sink_path_component: normalize_sink_path_component(sink_id),
             columns: sink_config.columns,
             include_event_json: sink_config.include_event_json,
         })
     }
 
-    async fn write_events(&self, events: &[Value]) -> Result<()> {
+    async fn write_events(
+        &self,
+        events: &[Value],
+        metadata: Option<EventSinkBatchMetadata>,
+    ) -> Result<()> {
         let parquet_bytes =
             encode_events_as_parquet(events, &self.columns, self.include_event_json)?;
-        let file_name = format!("{}.parquet", Uuid::new_v4());
-        let final_path = join_path(&self.path_prefix, &file_name);
-        let temp_path = join_path("_tmp", &final_path);
+        let file_name = parquet_file_name(metadata);
+        let final_dir = join_path(&self.path_prefix, &self.sink_path_component);
+        let final_path = join_path(&final_dir, &file_name);
 
-        ensure_parent_dir(&self.operator, &temp_path).await?;
         ensure_parent_dir(&self.operator, &final_path).await?;
 
+        if !self.operator.info().full_capability().rename {
+            write_final_if_absent(&self.operator, &final_path, parquet_bytes).await?;
+            return Ok(());
+        }
+
+        if self
+            .operator
+            .exists(&final_path)
+            .await
+            .with_context(|| format!("parquet final stat failed for `{final_path}`"))?
+        {
+            return Ok(());
+        }
+
+        let temp_path = format!("{final_path}.tmp");
         if let Err(error) = self.operator.write(&temp_path, parquet_bytes).await {
             let _ = self.operator.delete(&temp_path).await;
             return Err(error).context("parquet temp write failed");
@@ -142,11 +168,26 @@ impl EventSink for ParquetSink {
     type EventSinkConfig = DestinationConfig;
 
     fn from_config(target_config: TargetConfig, sink_config: DestinationConfig) -> Result<Self> {
-        Self::from_parts(target_config, sink_config)
+        Self::from_parts(target_config, sink_config, "unknown_sink")
+    }
+
+    fn from_config_with_context(
+        target_config: TargetConfig,
+        sink_config: DestinationConfig,
+        context: EventSinkBuildContext<'_>,
+    ) -> Result<Self> {
+        Self::from_parts(target_config, sink_config, context.sink_id)
     }
 
     fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move { self.write_events(events).await })
+        Box::pin(async move { self.write_events(events, None).await })
+    }
+
+    fn send_batch_with_metadata<'a>(
+        &'a self,
+        batch: EventSinkBatch<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move { self.write_events(batch.events, batch.metadata).await })
     }
 
     fn check_alive(&self) -> BoxFuture<'_, Result<()>> {
@@ -364,6 +405,42 @@ fn default_include_event_json() -> bool {
     true
 }
 
+async fn write_final_if_absent(operator: &Operator, path: &str, bytes: Vec<u8>) -> Result<()> {
+    let capability = operator.info().full_capability();
+    if capability.write_with_if_not_exists {
+        if let Err(error) = operator.write_with(path, bytes).if_not_exists(true).await {
+            if error.kind() == OpenDalErrorKind::ConditionNotMatch {
+                return Ok(());
+            }
+            return Err(error).with_context(|| format!("parquet final write failed for `{path}`"));
+        }
+        return Ok(());
+    }
+
+    if operator
+        .exists(path)
+        .await
+        .with_context(|| format!("parquet final stat failed for `{path}`"))?
+    {
+        return Ok(());
+    }
+    operator
+        .write(path, bytes)
+        .await
+        .with_context(|| format!("parquet final write failed for `{path}`"))
+        .map(|_| ())
+}
+
+fn parquet_file_name(metadata: Option<EventSinkBatchMetadata>) -> String {
+    match metadata {
+        Some(metadata) => format!(
+            "node-{}-lsn-{:016}-{:016}.parquet",
+            metadata.node_id, metadata.lsn_start, metadata.lsn_end
+        ),
+        None => format!("{}.parquet", Uuid::new_v4()),
+    }
+}
+
 async fn ensure_parent_dir(operator: &Operator, path: &str) -> Result<()> {
     if let Some((parent, _)) = path.rsplit_once('/') {
         if !parent.is_empty() {
@@ -378,6 +455,13 @@ async fn ensure_parent_dir(operator: &Operator, path: &str) -> Result<()> {
 
 fn normalize_path_prefix(value: &str) -> String {
     value.trim_matches('/').to_string()
+}
+
+fn normalize_sink_path_component(value: &str) -> String {
+    debug_assert!(value
+        .chars()
+        .all(|char| { char.is_ascii_alphanumeric() || matches!(char, '_' | '-' | '.') }));
+    value.to_string()
 }
 
 fn join_path(prefix: &str, file_name: &str) -> String {
@@ -510,5 +594,84 @@ mod tests {
         assert!(error
             .to_string()
             .contains("missing required parquet column `installid`"));
+    }
+
+    #[test]
+    fn normalize_sink_path_component_keeps_sink_id_in_one_path_segment() {
+        assert_eq!(
+            normalize_sink_path_component("sink.special-1"),
+            "sink.special-1"
+        );
+    }
+
+    #[test]
+    fn parquet_file_name_uses_node_id_and_lsn_range() {
+        assert_eq!(
+            parquet_file_name(Some(EventSinkBatchMetadata {
+                node_id: "node-a".to_string(),
+                lsn_start: 1,
+                lsn_end: 20,
+            })),
+            "node-node-a-lsn-0000000000000001-0000000000000020.parquet"
+        );
+    }
+
+    #[actix_rt::test]
+    async fn write_events_directly_writes_deterministic_final_file_once_when_rename_is_not_supported(
+    ) {
+        let sink = ParquetSink::from_parts(
+            TargetConfig {
+                scheme: "memory".to_string(),
+                options: BTreeMap::from([("root".to_string(), "/".to_string())]),
+            },
+            DestinationConfig {
+                path_prefix: "events".to_string(),
+                columns: vec![ColumnConfig {
+                    name: "installid".to_string(),
+                    path: "xcontext.installid".to_string(),
+                    data_type: ColumnType::String,
+                    nullable: false,
+                }],
+                include_event_json: true,
+            },
+            "parquet_events",
+        )
+        .expect("memory parquet sink should build");
+
+        assert!(!sink.operator.info().full_capability().rename);
+        let events = [json!({
+            "xcontext": {
+                "installid": "iid-memory"
+            }
+        })];
+        let metadata = EventSinkBatchMetadata {
+            node_id: "node-a".to_string(),
+            lsn_start: 1,
+            lsn_end: 2,
+        };
+
+        sink.write_events(&events, Some(metadata.clone()))
+            .await
+            .expect("memory parquet write should succeed without rename");
+        sink.write_events(&events, Some(metadata))
+            .await
+            .expect("existing memory parquet file should be treated as committed");
+
+        let entries = sink
+            .operator
+            .list("events/parquet_events/")
+            .await
+            .expect("list memory parquet directory");
+        let paths = entries
+            .into_iter()
+            .map(|entry| entry.path().to_string())
+            .filter(|path| path.ends_with(".parquet") || path.ends_with(".tmp"))
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths[0],
+            "events/parquet_events/node-node-a-lsn-0000000000000001-0000000000000002.parquet"
+        );
+        assert!(!paths[0].ends_with(".tmp"), "{paths:?}");
     }
 }

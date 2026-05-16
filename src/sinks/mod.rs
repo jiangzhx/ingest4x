@@ -30,6 +30,17 @@ pub trait EventSink: Send + Sync {
     where
         Self: Sized;
 
+    fn from_config_with_context(
+        target_config: Self::DeliveryTargetConfig,
+        sink_config: Self::EventSinkConfig,
+        _context: EventSinkBuildContext<'_>,
+    ) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        Self::from_config(target_config, sink_config)
+    }
+
     /// Writes the events to this sink and returns only after the sink-defined
     /// reliable commit point has been reached.
     ///
@@ -38,12 +49,42 @@ pub trait EventSink: Send + Sync {
     /// uncommitted downstream states.
     fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>>;
 
+    fn send_batch_with_metadata<'a>(
+        &'a self,
+        batch: EventSinkBatch<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        self.send_batch(batch.events)
+    }
+
     fn check_alive(&self) -> BoxFuture<'_, Result<()>>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EventSinkBatchMetadata {
+    pub node_id: String,
+    pub lsn_start: u64,
+    pub lsn_end: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct EventSinkBatch<'a> {
+    pub events: &'a [Value],
+    pub metadata: Option<EventSinkBatchMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventSinkBuildContext<'a> {
+    pub sink_id: &'a str,
 }
 
 pub trait EventSinkRuntime: Send + Sync {
     /// See [`EventSink::send_batch`] for the checkpoint and commit contract.
     fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>>;
+
+    fn send_batch_with_metadata<'a>(
+        &'a self,
+        batch: EventSinkBatch<'a>,
+    ) -> BoxFuture<'a, Result<()>>;
 
     fn check_alive(&self) -> BoxFuture<'_, Result<()>>;
 }
@@ -54,6 +95,13 @@ where
 {
     fn send_batch<'a>(&'a self, events: &'a [Value]) -> BoxFuture<'a, Result<()>> {
         EventSink::send_batch(self, events)
+    }
+
+    fn send_batch_with_metadata<'a>(
+        &'a self,
+        batch: EventSinkBatch<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        EventSink::send_batch_with_metadata(self, batch)
     }
 
     fn check_alive(&self) -> BoxFuture<'_, Result<()>> {
@@ -169,7 +217,13 @@ where
         let sink_config = <T::Sink as EventSink>::EventSinkConfig::parse(destination_json)
             .map_err(anyhow::Error::msg)?;
 
-        Ok(Box::new(T::Sink::from_config(target_config, sink_config)?))
+        Ok(Box::new(T::Sink::from_config_with_context(
+            target_config,
+            sink_config,
+            EventSinkBuildContext {
+                sink_id: sink.sink_id.as_str(),
+            },
+        )?))
     }
 }
 

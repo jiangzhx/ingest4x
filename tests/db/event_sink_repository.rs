@@ -135,6 +135,45 @@ async fn rejects_sink_destination_that_does_not_match_target_type() {
 }
 
 #[tokio::test]
+async fn rejects_event_sink_id_with_unsafe_characters() {
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let repo = EventSinkRepository::new(db);
+
+    let target = repo
+        .create_delivery_target(CreateDeliveryTargetInput {
+            target_id: "stdout_main".to_string(),
+            name: "Main stdout".to_string(),
+            target_type: DeliveryTargetType::stdout(),
+            config_json: json!({}),
+            enabled: true,
+        })
+        .await
+        .expect("delivery target should be created");
+
+    for sink_id in ["events/raw", "events raw", "events:raw", ""] {
+        let error = repo
+            .create_event_sink(CreateEventSinkInput {
+                sink_id: sink_id.to_string(),
+                name: "Main events".to_string(),
+                delivery_target_id: target.id,
+                destination_json: json!({}),
+                auto_offset_reset: AutoOffsetReset::Latest,
+                enabled: true,
+            })
+            .await
+            .expect_err("unsafe sink_id should be rejected");
+
+        assert!(matches!(
+            error,
+            EventSinkRepositoryError::InvalidConfig { ref message }
+                if message.contains("sink_id must match")
+        ));
+    }
+}
+
+#[tokio::test]
 async fn rejects_deleting_delivery_target_used_by_event_sink() {
     let db = init_sqlite_database("sqlite::memory:")
         .await

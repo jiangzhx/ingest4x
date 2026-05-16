@@ -8,6 +8,7 @@
 
 - `delivery target` 在管理台 `Delivery Target` 页面配置。
 - `event sink` 在管理台 `Event Sink` 页面配置。
+- `event sink` ID 必须匹配 `[A-Za-z0-9_.-]+`；同一个 ID 会用于 Rhai 常量和 Parquet 这类文件 sink 的路径。
 - 配置必须是合法 JSON 对象。
 - 后端严格解析器通常会拒绝未定义字段。
 
@@ -89,7 +90,7 @@
 
 用途：通过 OpenDAL-backed storage 将事件写成 Parquet 文件。
 
-存储配置采用 OpenDAL 的 `scheme + options` 模型。当前启用的 scheme 是 `fs`、`s3` 和 `cos`；测试覆盖本地文件系统写入。
+存储配置采用 OpenDAL 的 `scheme + options` 模型。当前生产可用的 scheme 是 `fs`、`s3` 和 `cos`；`memory` 仅用于轻量测试。
 
 ### Delivery target (`target_type = "parquet"`)
 
@@ -106,7 +107,7 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `scheme` | string | 是 | OpenDAL service scheme，当前支持 `fs`、`s3` 或 `cos` |
+| `scheme` | string | 是 | OpenDAL service scheme，生产使用当前支持 `fs`、`s3` 或 `cos` |
 | `options` | object | 是 | OpenDAL service options，例如 `fs` 使用 `{"root": "/var/lib/ingest4x/parquet"}` |
 
 S3/COS 示例使用 OpenDAL option 名称：
@@ -172,7 +173,7 @@ S3/COS 示例使用 OpenDAL option 名称：
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `path_prefix` | string | 是 | OpenDAL operator root 下的相对路径前缀；文件最终以 `.parquet` 提交 |
+| `path_prefix` | string | 是 | OpenDAL operator root 下的相对路径前缀；最终文件会以 `.parquet` 形式提交到 `<path_prefix>/<sink_id>/` 下 |
 | `batch` | object | 否 | 当前 sink 的批量覆盖配置；未配置的字段继承 `[wal.replay.sink_batch]` |
 | `columns` | array | 否 | 有序 Parquet 投影列；每列通过 `path` 从 emit 出来的 JSON event 取值 |
 | `include_event_json` | boolean | 否 | 默认 `true`；追加完整 emit event 到 `event_json` 字符串列 |
@@ -195,6 +196,21 @@ S3/COS 示例使用 OpenDAL option 名称：
 | `nullable` | boolean | 否 | 默认 `false`；必填值缺失或为 null 时 sink 写入失败 |
 
 `rules` 仍然是事件契约。Parquet `columns` 只描述当前 sink 的物理投影与列顺序。如果省略 `columns`，sink 仍会把完整 emit event 写入 `event_json` 列。`batch` 是通用 Event Sink 字段，不是 Delivery Target 字段，因此多个 sink 即使共享同一个存储 target，也可以使用不同批量大小和等待时间。未配置的 `batch` 字段继承 `[wal.replay.sink_batch]`；`"timeout": "0s"` 表示关闭等待。只有当前 replay window 内所有已 emit sink 的写入都达到各自 commit 点后，WAL pipeline checkpoint 才会前进。
+
+Parquet 路径会自动包含 `sink_id`。WAL replay 写入时，文件名由 WAL node 和当前 sink batch 的 LSN 范围确定。例如 `path_prefix = "events"`、sink 为 `parquet_events`、node 为 `node-a`，且当前 sink batch 覆盖 LSN 1..2 时，文件路径类似：
+
+```text
+events/parquet_events/node-node-a-lsn-0000000000000001-0000000000000002.parquet
+```
+
+提交行为取决于 OpenDAL 后端能力。支持 `rename` 的后端，例如本地 `fs`，会先在最终目录写 `<final>.tmp`，再 rename 为 `<final>`。不支持 `rename` 的后端，例如 S3/COS 这类对象存储，会直接写最终对象路径。如果确定性 final 文件已经存在，sink 会认为这是上次已提交但 checkpoint 尚未推进的重试，并返回成功。
+
+DuckDB 读取单个 sink：
+
+```sql
+SELECT *
+FROM read_parquet('/var/lib/ingest4x/parquet/events/parquet_events/**/*.parquet');
+```
 
 ## stdout
 

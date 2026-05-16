@@ -248,6 +248,7 @@ impl EventSinkRepository {
     ) -> EventSinkRepositoryResult<EventSink> {
         let txn = self.db.begin().await?;
         let result = async {
+            validate_event_sink_id(&input.sink_id)?;
             let target = find_delivery_target_by_id(&txn, input.delivery_target_id).await?;
             let target_type = DeliveryTargetType::parse(&target.target_type)?;
             let destination_json =
@@ -539,6 +540,19 @@ fn parse_auto_offset_reset(value: &str) -> EventSinkRepositoryResult<AutoOffsetR
             message: format!("unknown auto_offset_reset `{value}`"),
         }),
     }
+}
+
+fn validate_event_sink_id(sink_id: &str) -> EventSinkRepositoryResult<()> {
+    if !sink_id.is_empty()
+        && sink_id
+            .chars()
+            .all(|char| char.is_ascii_alphanumeric() || matches!(char, '_' | '-' | '.'))
+    {
+        return Ok(());
+    }
+    Err(EventSinkRepositoryError::InvalidConfig {
+        message: "sink_id must match [A-Za-z0-9_.-]+".to_string(),
+    })
 }
 
 impl DeliveryTargetType {

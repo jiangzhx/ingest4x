@@ -1,7 +1,10 @@
 use crate::repositories::{EventSinkRepository, RuntimeEventSink};
 use crate::rhai_ctx::ProcessorDelivery;
 use crate::settings::AutoOffsetReset;
-use crate::sinks::{build_sink, event_sink_batch_config, EventSinkBatchConfig, EventSinkRuntime};
+use crate::sinks::{
+    build_sink, event_sink_batch_config, EventSinkBatch, EventSinkBatchConfig,
+    EventSinkBatchMetadata, EventSinkRuntime,
+};
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
 use futures::lock::Mutex as AsyncMutex;
@@ -30,9 +33,16 @@ impl EventSinkState {
         router.send_delivery(delivery).await
     }
 
-    pub(crate) async fn send_events_to_sink(&self, target: &str, events: &[Value]) -> Result<()> {
+    pub(crate) async fn send_event_batch_to_sink(
+        &self,
+        target: &str,
+        events: &[Value],
+        metadata: EventSinkBatchMetadata,
+    ) -> Result<()> {
         let router = self.current_router();
-        router.send_events_to_sink(target, events).await
+        router
+            .send_event_batch_to_sink(target, events, metadata)
+            .await
     }
 
     pub fn sink_names(&self) -> Vec<String> {
@@ -207,6 +217,25 @@ impl EventRouter {
             .ok_or_else(|| anyhow!("unknown event sink target `{target}`"))?;
         sink.sink
             .send_batch(events)
+            .await
+            .with_context(|| format!("event sink `{target}` failed"))
+    }
+
+    async fn send_event_batch_to_sink(
+        &self,
+        target: &str,
+        events: &[Value],
+        metadata: EventSinkBatchMetadata,
+    ) -> Result<()> {
+        let sink = self
+            .sinks
+            .get(target)
+            .ok_or_else(|| anyhow!("unknown event sink target `{target}`"))?;
+        sink.sink
+            .send_batch_with_metadata(EventSinkBatch {
+                events,
+                metadata: Some(metadata),
+            })
             .await
             .with_context(|| format!("event sink `{target}` failed"))
     }

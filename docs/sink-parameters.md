@@ -8,6 +8,7 @@ All values are JSON objects, JSON comments are not supported. Both API and front
 
 - `delivery target` is configured in the admin `Delivery Target` page.
 - `event sink` is configured in the admin `Event Sink` page.
+- `event sink` IDs must match `[A-Za-z0-9_.-]+`; the same ID is used by Rhai constants and by file sinks such as Parquet.
 - Configuration must be valid JSON objects.
 - Unknown fields are typically rejected by backend strict parser/validator.
 
@@ -89,7 +90,7 @@ Supported `destination_json` fields:
 
 Purpose: write events as Parquet files through OpenDAL-backed storage.
 
-The storage config follows OpenDAL's `scheme + options` model. Current enabled schemes are `fs`, `s3`, and `cos`; tests cover local filesystem writes.
+The storage config follows OpenDAL's `scheme + options` model. Current enabled production schemes are `fs`, `s3`, and `cos`; `memory` is enabled for lightweight tests.
 
 ### Delivery target (`target_type = "parquet"`)
 
@@ -106,7 +107,7 @@ Supported `config_json` fields:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `scheme` | string | Yes | OpenDAL service scheme, currently `fs`, `s3`, or `cos` |
+| `scheme` | string | Yes | OpenDAL service scheme, currently `fs`, `s3`, or `cos` for production use |
 | `options` | object | Yes | OpenDAL service options, for example `{"root": "/var/lib/ingest4x/parquet"}` for `fs` |
 
 S3/COS examples use OpenDAL option names:
@@ -172,7 +173,7 @@ Supported `destination_json` fields:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `path_prefix` | string | Yes | Relative path prefix under the OpenDAL operator root; files are committed as `.parquet` files |
+| `path_prefix` | string | Yes | Relative path prefix under the OpenDAL operator root; final files are committed under `<path_prefix>/<sink_id>/` as `.parquet` files |
 | `batch` | object | No | Per-sink batch override. Missing fields inherit `[wal.replay.sink_batch]` |
 | `columns` | array | No | Ordered Parquet projection columns. Each column reads from the emitted JSON event by `path` |
 | `include_event_json` | boolean | No | Defaults to `true`; appends the full emitted event as an `event_json` string column |
@@ -195,6 +196,21 @@ Supported column fields:
 | `nullable` | boolean | No | Defaults to `false`; missing or null required values fail the sink write |
 
 `rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. `batch` is a common Event Sink field, not a Delivery Target field, so different sinks sharing the same storage target can use different batch sizes and wait times. Missing `batch` fields inherit `[wal.replay.sink_batch]`; `"timeout": "0s"` disables waiting. WAL pipeline checkpoint advances only after all emitted sink writes in the replay window reach their commit points.
+
+Parquet paths include `sink_id` automatically. During WAL replay, file names are deterministic by WAL node and sink batch LSN range. For example, `path_prefix = "events"`, sink `parquet_events`, node `node-a`, and a sink batch covering LSN 1..2 writes:
+
+```text
+events/parquet_events/node-node-a-lsn-0000000000000001-0000000000000002.parquet
+```
+
+Commit behavior depends on the OpenDAL backend capability. Backends that support `rename`, such as local `fs`, write `<final>.tmp` in the final directory and rename it to `<final>`. Backends without `rename`, such as S3/COS-style object storage, write the final object path directly. When the final deterministic file already exists, the sink treats it as a previously committed retry and returns success.
+
+DuckDB can read one sink with:
+
+```sql
+SELECT *
+FROM read_parquet('/var/lib/ingest4x/parquet/events/parquet_events/**/*.parquet');
+```
 
 ## stdout
 

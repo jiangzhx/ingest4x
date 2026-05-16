@@ -975,6 +975,19 @@ async fn wal_writer_persists_configured_node_id_and_rejects_conflict() {
 }
 
 #[actix_rt::test]
+async fn wal_writer_rejects_unsafe_configured_node_id() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let mut settings = wal_settings(&wal_dir);
+    settings.node_id = Some("node/a".to_string());
+
+    let error = WalWriter::new(&settings).expect_err("unsafe node id should fail");
+
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("[A-Za-z0-9_.-]"));
+}
+
+#[actix_rt::test]
 async fn wal_segment_creation_removes_stale_tmp_before_rename() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");

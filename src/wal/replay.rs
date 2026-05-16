@@ -2,7 +2,7 @@ use crate::ingest::processor::{ProcessorRequestContext, ProcessorRuntime};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
 use crate::settings::{AutoOffsetReset, CheckpointSettings, ReplaySettings};
-use crate::sinks::{EventSinkBatchConfig, EventSinkState};
+use crate::sinks::{EventSinkBatchConfig, EventSinkBatchMetadata, EventSinkState};
 use crate::wal::{
     error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
     read_entries_after_limit, read_wal_bounds, remove_segments_covered_by_checkpoint, WalBounds,
@@ -66,6 +66,7 @@ struct ReplayEntryDeliveries {
 }
 
 struct SinkDeliveryEvent {
+    node_id: String,
     lsn: u64,
     event: Value,
     bytes: u64,
@@ -568,6 +569,7 @@ async fn replay_batch_to_sinks(
             let sink_events = sink_events_by_name.entry(sink_name.clone()).or_default();
             for event in events {
                 sink_events.push(SinkDeliveryEvent {
+                    node_id: item.entry.record.node_id.clone(),
                     lsn: item.entry.position.lsn,
                     bytes: json_event_bytes(event),
                     event: event.clone(),
@@ -699,7 +701,9 @@ async fn send_sink_events_in_batches(
 ) -> std::result::Result<(), (u64, anyhow::Error)> {
     let mut batch = Vec::new();
     let mut batch_bytes = 0_u64;
+    let mut batch_node_id = None;
     let mut batch_first_lsn = None;
+    let mut batch_last_lsn = None;
 
     for delivery in events {
         let would_exceed_events = batch.len() >= policy.max_events;
@@ -707,20 +711,35 @@ async fn send_sink_events_in_batches(
             !batch.is_empty() && batch_bytes.saturating_add(delivery.bytes) > policy.max_bytes;
         if would_exceed_events || would_exceed_bytes {
             let failed_lsn = batch_first_lsn.expect("non-empty sink batch should have first lsn");
-            send_sink_batch(context, sink_name, &batch, failed_lsn).await?;
+            let metadata = EventSinkBatchMetadata {
+                node_id: batch_node_id
+                    .clone()
+                    .expect("non-empty sink batch should have node id"),
+                lsn_start: failed_lsn,
+                lsn_end: batch_last_lsn.expect("non-empty sink batch should have last lsn"),
+            };
+            send_sink_batch(context, sink_name, &batch, metadata).await?;
             batch.clear();
             batch_bytes = 0;
+            batch_node_id = None;
             batch_first_lsn = None;
         }
 
+        batch_node_id.get_or_insert_with(|| delivery.node_id.clone());
         batch_first_lsn.get_or_insert(delivery.lsn);
+        batch_last_lsn = Some(delivery.lsn);
         batch_bytes = batch_bytes.saturating_add(delivery.bytes);
         batch.push(delivery.event.clone());
     }
 
     if !batch.is_empty() {
         let failed_lsn = batch_first_lsn.expect("non-empty sink batch should have first lsn");
-        send_sink_batch(context, sink_name, &batch, failed_lsn).await?;
+        let metadata = EventSinkBatchMetadata {
+            node_id: events[0].node_id.clone(),
+            lsn_start: failed_lsn,
+            lsn_end: batch_last_lsn.expect("non-empty sink batch should have last lsn"),
+        };
+        send_sink_batch(context, sink_name, &batch, metadata).await?;
     }
 
     Ok(())
@@ -730,11 +749,12 @@ async fn send_sink_batch(
     context: &WalReplayContext<'_>,
     sink_name: &str,
     events: &[Value],
-    failed_lsn: u64,
+    metadata: EventSinkBatchMetadata,
 ) -> std::result::Result<(), (u64, anyhow::Error)> {
+    let failed_lsn = metadata.lsn_start;
     context
         .event_sinks
-        .send_events_to_sink(sink_name, events)
+        .send_event_batch_to_sink(sink_name, events, metadata)
         .await
         .map_err(|error| (failed_lsn, error))
 }

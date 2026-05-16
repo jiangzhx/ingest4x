@@ -4,8 +4,8 @@ logs/
 .worktrees/
 .codex/
 .idea/
-web/admin/node_modules/
-web/admin/dist/
+/web/admin/node_modules/
+/web/admin/dist/
 /db/
 docs/features
 docs/superpowers
@@ -14,3 +14,4 @@ docs/superpowers
 .graphify_*
 /graphify-out/
 /AGENTS.md
+/data

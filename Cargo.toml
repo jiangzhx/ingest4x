@@ -43,7 +43,7 @@ fs2 = "0.4.3"
 uuid = { version = "1.18.1", features = ["v4"] }
 arrow-array = "58.3.0"
 arrow-schema = "58.3.0"
-opendal = { version = "0.56.0", default-features = false, features = ["services-fs", "services-s3", "services-cos", "executors-tokio", "reqwest-rustls-tls"] }
+opendal = { version = "0.56.0", default-features = false, features = ["services-fs", "services-s3", "services-cos", "services-memory", "executors-tokio", "reqwest-rustls-tls"] }
 parquet = { version = "58.3.0", default-features = false, features = ["arrow", "snap"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["macros", "runtime-tokio", "sqlx-mysql", "sqlx-sqlite"] }
 sea-orm-migration = { version = "1.1.20", default-features = false, features = ["runtime-tokio", "sqlx-mysql", "sqlx-sqlite"] }

@@ -524,7 +524,7 @@ async fn wal_replay_flushes_checkpoint_after_quarantined_record_at_batch_end() {
     );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
-        node_id: None,
+        node_id: Some("node-a".to_string()),
         write: WalWriteSettings {
             flush_interval: "1s".to_string(),
             flush_records: 100_000,
@@ -1257,7 +1257,7 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
     );
     let writer = WalWriter::new(&ingest4x::settings::WalSettings {
         dir: wal_dir.display().to_string(),
-        node_id: None,
+        node_id: Some("node-a".to_string()),
         write: WalWriteSettings {
             flush_interval: "1s".to_string(),
             flush_records: 100_000,
@@ -1310,6 +1310,18 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
 
     let parquet_files = list_files_with_extension(&parquet_dir, "parquet");
     assert_eq!(parquet_files.len(), 1);
+    assert!(
+        parquet_files[0]
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "node-node-a-lsn-0000000000000001-0000000000000002.parquet"),
+        "expected deterministic lsn range parquet file name, got {:?}",
+        parquet_files[0]
+    );
+    assert!(
+        !parquet_dir.join("_tmp").exists(),
+        "fs parquet commit should use same-directory .tmp files instead of a separate _tmp tree"
+    );
     let parquet_bytes = fs::read(&parquet_files[0]).expect("read parquet file");
     assert!(parquet_bytes.starts_with(b"PAR1"));
     assert!(parquet_bytes.ends_with(b"PAR1"));
@@ -1346,6 +1358,128 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
         serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
             .expect("checkpoint json");
     assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
+}
+
+#[actix_rt::test]
+async fn wal_replay_writes_parquet_files_under_sink_id_directory() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let parquet_dir = temp.path().join("parquet");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            name: "APPID".to_string(),
+            enabled: true,
+            ingest_token: "igx_APPID".to_string(),
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let target = DeliveryTarget {
+        id: 1,
+        target_id: "local_parquet".to_string(),
+        name: "Local Parquet".to_string(),
+        target_type: DeliveryTargetType::parse("parquet")
+            .expect("parquet target type should be registered"),
+        config_json: json!({
+            "scheme": "fs",
+            "options": {
+                "root": parquet_dir
+            }
+        }),
+        enabled: true,
+        created_at: 0,
+        updated_at: 0,
+    };
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![
+        RuntimeEventSink {
+            sink_id: "parquet_events".to_string(),
+            name: "parquet events".to_string(),
+            destination_json: json!({
+                "path_prefix": "events",
+                "columns": [
+                    {
+                        "name": "installid",
+                        "path": "xcontext.installid",
+                        "type": "string"
+                    }
+                ]
+            }),
+            auto_offset_reset: AutoOffsetReset::Earliest,
+            target: target.clone(),
+        },
+        RuntimeEventSink {
+            sink_id: "parquet_archive".to_string(),
+            name: "parquet archive".to_string(),
+            destination_json: json!({
+                "path_prefix": "events",
+                "columns": [
+                    {
+                        "name": "installid",
+                        "path": "xcontext.installid",
+                        "type": "string"
+                    }
+                ]
+            }),
+            auto_offset_reset: AutoOffsetReset::Earliest,
+            target,
+        },
+    ])
+    .expect("event sinks should initialize");
+    let processor = processor_with_sinks(
+        r#"
+            fn process(event, request) {
+                emit(SINK_PARQUET_EVENTS, event);
+                emit(SINK_PARQUET_ARCHIVE, event);
+            }
+        "#,
+        &["parquet_events", "parquet_archive"],
+    );
+    append_parquet_test_records(&wal_dir, &["iid-parquet-sink-dir"]);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings::default(),
+            replay: Default::default(),
+        })
+        .await
+        .expect("parquet replay should succeed"),
+        1
+    );
+
+    let relative_files = list_files_with_extension(&parquet_dir, "parquet")
+        .into_iter()
+        .map(|path| {
+            path.strip_prefix(&parquet_dir)
+                .expect("parquet file under root")
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(relative_files.len(), 2);
+    assert!(
+        relative_files
+            .iter()
+            .any(|path| path.starts_with("events/parquet_events/")),
+        "expected parquet_events file under sink id directory, got {relative_files:?}"
+    );
+    assert!(
+        relative_files
+            .iter()
+            .any(|path| path.starts_with("events/parquet_archive/")),
+        "expected parquet_archive file under sink id directory, got {relative_files:?}"
+    );
 }
 
 #[actix_rt::test]
