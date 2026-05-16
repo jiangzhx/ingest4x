@@ -17,7 +17,8 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    AutoOffsetReset, CheckpointSettings, ReplaySettings, Settings, WalWriteSettings,
+    AutoOffsetReset, CheckpointSettings, ReplaySettings, ReplaySinkBatchSettings, Settings,
+    WalWriteSettings,
 };
 use ingest4x::sinks::init_event_sinks_from_runtime_sinks;
 use ingest4x::wal::replay::{initialize_replay_checkpoint, replay_once, WalReplayContext};
@@ -1345,7 +1346,7 @@ async fn wal_replay_batches_records_to_local_parquet_sink_and_advances_checkpoin
 }
 
 #[actix_rt::test]
-async fn wal_replay_flushes_sink_batch_at_checkpoint_record_threshold() {
+async fn wal_replay_flushes_replay_window_at_replay_record_threshold() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let parquet_dir = temp.path().join("parquet");
@@ -1448,6 +1449,130 @@ async fn wal_replay_flushes_sink_batch_at_checkpoint_record_threshold() {
             replay: ReplaySettings {
                 max_records: 1,
                 max_bytes: 64 * 1024 * 1024,
+                sink_batch: Default::default(),
+            },
+        })
+        .await
+        .expect("parquet replay should succeed"),
+        2
+    );
+
+    let parquet_files = list_files_with_extension(&parquet_dir, "parquet");
+    assert_eq!(parquet_files.len(), 2);
+    let checkpoint: Value =
+        serde_json::from_slice(&fs::read(wal_dir.join("checkpoint.json")).expect("checkpoint"))
+            .expect("checkpoint json");
+    assert_eq!(checkpoint["checkpoint_lsn"], json!(2));
+}
+
+#[actix_rt::test]
+async fn wal_replay_splits_sink_batches_by_sink_batch_event_limit() {
+    let temp = tempdir().expect("temp dir");
+    let wal_dir = temp.path().join("wal");
+    let parquet_dir = temp.path().join("parquet");
+    let db = init_sqlite_database("sqlite::memory:")
+        .await
+        .expect("sqlite database should initialize");
+    let project_repository = ProjectRepository::new(db.clone());
+    project_repository
+        .create_project(CreateProjectInput {
+            name: "APPID".to_string(),
+            enabled: true,
+            ingest_token: "igx_APPID".to_string(),
+        })
+        .await
+        .expect("project should be created");
+    let project_registry = ProjectRegistryState::load(project_repository)
+        .await
+        .expect("project registry should load");
+    let rule_repository = RuleRepository::new(db);
+    let event_sinks = init_event_sinks_from_runtime_sinks(vec![RuntimeEventSink {
+        sink_id: "parquet_events".to_string(),
+        name: "parquet events".to_string(),
+        destination_json: json!({
+            "path_prefix": "events",
+            "columns": [
+                {
+                    "name": "installid",
+                    "path": "xcontext.installid",
+                    "type": "string"
+                }
+            ]
+        }),
+        auto_offset_reset: AutoOffsetReset::Earliest,
+        target: DeliveryTarget {
+            id: 1,
+            target_id: "local_parquet".to_string(),
+            name: "Local Parquet".to_string(),
+            target_type: DeliveryTargetType::parse("parquet")
+                .expect("parquet target type should be registered"),
+            config_json: json!({
+                "scheme": "fs",
+                "options": {
+                    "root": parquet_dir
+                }
+            }),
+            enabled: true,
+            created_at: 0,
+            updated_at: 0,
+        },
+    }])
+    .expect("event sinks should initialize");
+    let processor = processor_with_sinks(
+        r#"
+            fn process(event, request) {
+                emit(SINK_PARQUET_EVENTS, event);
+            }
+        "#,
+        &["parquet_events"],
+    );
+    let writer = WalWriter::new(&ingest4x::settings::WalSettings {
+        dir: wal_dir.display().to_string(),
+        node_id: None,
+        write: WalWriteSettings {
+            flush_interval: "1s".to_string(),
+            flush_records: 100_000,
+            no_sync: false,
+            segment_max_bytes: 128 * 1024 * 1024,
+            min_free_bytes: 0,
+        },
+        checkpoint: Default::default(),
+        replay: Default::default(),
+    })
+    .expect("wal writer");
+    for installid in ["iid-sink-batch-1", "iid-sink-batch-2"] {
+        writer
+            .append(&test_wal_record(json!({
+                "appid": "APPID",
+                "xwhat": "custom_event",
+                "xcontext": {
+                    "installid": installid,
+                    "os": "ios"
+                }
+            })))
+            .expect("append record");
+    }
+    drop(writer);
+
+    assert_eq!(
+        replay_once(WalReplayContext {
+            dir: &wal_dir,
+            event_sinks: &event_sinks,
+            project_registry: &project_registry,
+            rule_repository: &rule_repository,
+            processor: &processor,
+            checkpoint: CheckpointSettings {
+                flush_interval: "1h".to_string(),
+                flush_records: 1000,
+                flush_bytes: 64 * 1024 * 1024,
+            },
+            replay: ReplaySettings {
+                max_records: 1000,
+                max_bytes: 64 * 1024 * 1024,
+                sink_batch: ReplaySinkBatchSettings {
+                    max_events: 1,
+                    max_bytes: 64 * 1024 * 1024,
+                },
             },
         })
         .await

@@ -117,7 +117,7 @@ segment_max_bytes = 134217728
 
 服务启动时会启动 WAL 重放循环。每次运行默认读取一批记录（默认 read limit 为 `1024`）。
 
-重放仍然逐条 WAL record 执行 rules 与 processor，因为 Rhai 当前每次接收一个 JSON event。processor 输出校验完成后，系统会在当前 replay window 内按 sink 暂存 delivery，每个 sink 最终收到一次 `send_batch` 调用。当达到 `wal.replay.max_records` 或 `wal.replay.max_bytes` 时，当前 replay window 会被 flush；因此这些配置会限制单次 sink `send_batch` 的大小，以及部分 sink 已成功后可能重复投递的窗口。
+重放仍然逐条 WAL record 执行 rules 与 processor，因为 Rhai 当前每次接收一个 JSON event。processor 输出校验完成后，系统会在当前 replay window 内按 sink 暂存 delivery。当达到 `wal.replay.max_records` 或 `wal.replay.max_bytes` 时，当前 replay window 会被 flush。在这个 replay window 内，每个 sink 的待投递 JSON events 会再按 `wal.replay.sink_batch.max_events` 与 `wal.replay.sink_batch.max_bytes` 切成一次或多次 `send_batch` 调用。
 
 逐条规划流程：
 
@@ -130,8 +130,9 @@ segment_max_bytes = 134217728
 投递流程：
 
 1. 按 sink target 聚合已规划的 delivery。
-2. 对当前 replay window 内该 sink 的待投递 JSON events 调用一次 `send_batch`。
-3. 只有所有已 emit sink 的 batch 都达到各自定义的 commit 点后，才推进 pipeline checkpoint。
+2. 按配置的 sink batch 限制切分每个 sink 的待投递 JSON events。
+3. 对当前 replay window 内该 sink 的一个或多个 chunk 调用 `send_batch`。
+4. 只有所有已 emit sink 的 batch 都达到各自定义的 commit 点后，才推进 pipeline checkpoint。
 
 每种 sink 自己定义 commit 完成标准。Kafka 可以把 broker delivery report 成功视为 commit；本地文件 sink 必须等最终文件提交完成；对象存储 sink 必须等 upload 完成或 multipart complete 成功。WAL replay 只观察 sink runtime 的结果：所有 sink 返回 `Ok` 才允许 pipeline checkpoint 前进；任意 `Err` 都会保持 checkpoint 滞后并等待重试。
 
@@ -256,6 +257,10 @@ flush_bytes = 67108864
 [wal.replay]
 max_records = 1000
 max_bytes = 67108864
+
+[wal.replay.sink_batch]
+max_events = 1000
+max_bytes = 67108864
 ```
 
 含义：
@@ -271,8 +276,10 @@ max_bytes = 67108864
 | `wal.checkpoint.flush_interval` | 两次 checkpoint flush 最大间隔 |
 | `wal.checkpoint.flush_records` | checkpoint 文件 flush 前最多累计的成功重放记录数 |
 | `wal.checkpoint.flush_bytes` | checkpoint 文件 flush 前最多累计的成功重放 WAL 字节数 |
-| `wal.replay.max_records` | 单个 replay window / sink batch 的最大 WAL 记录数 |
-| `wal.replay.max_bytes` | 单个 replay window / sink batch 的最大 WAL 字节数 |
+| `wal.replay.max_records` | 单个 replay window 的最大 WAL 记录数 |
+| `wal.replay.max_bytes` | 单个 replay window 的最大 WAL 字节数 |
+| `wal.replay.sink_batch.max_events` | replay window 内单次 sink `send_batch` 的最大 event 数 |
+| `wal.replay.sink_batch.max_bytes` | replay window 内单次 sink `send_batch` 的最大 JSON event 字节数 |
 
 ## 边界说明
 

@@ -110,6 +110,17 @@ pub struct ReplaySettings {
     pub max_records: usize,
     #[serde(default = "default_replay_max_bytes")]
     pub max_bytes: u64,
+    #[serde(default)]
+    pub sink_batch: ReplaySinkBatchSettings,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
+pub struct ReplaySinkBatchSettings {
+    #[serde(default = "default_replay_sink_batch_max_events")]
+    pub max_events: usize,
+    #[serde(default = "default_replay_sink_batch_max_bytes")]
+    pub max_bytes: u64,
 }
 
 impl Default for WalWriteSettings {
@@ -139,6 +150,16 @@ impl Default for ReplaySettings {
         Self {
             max_records: default_replay_max_records(),
             max_bytes: default_replay_max_bytes(),
+            sink_batch: ReplaySinkBatchSettings::default(),
+        }
+    }
+}
+
+impl Default for ReplaySinkBatchSettings {
+    fn default() -> Self {
+        Self {
+            max_events: default_replay_sink_batch_max_events(),
+            max_bytes: default_replay_sink_batch_max_bytes(),
         }
     }
 }
@@ -176,6 +197,14 @@ pub const fn default_replay_max_records() -> usize {
 }
 
 pub const fn default_replay_max_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+
+pub const fn default_replay_sink_batch_max_events() -> usize {
+    1000
+}
+
+pub const fn default_replay_sink_batch_max_bytes() -> u64 {
     64 * 1024 * 1024
 }
 

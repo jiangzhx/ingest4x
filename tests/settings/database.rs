@@ -115,6 +115,24 @@ max_bytes = 33554432
     assert_eq!(replay.max_bytes, 32 * 1024 * 1024);
 }
 
+#[test]
+fn settings_reads_replay_sink_batch_fields() {
+    let settings = load_settings(
+        r#"
+[wal]
+dir = "wal"
+
+[wal.replay.sink_batch]
+max_events = 2
+max_bytes = 4096
+"#,
+    );
+
+    let sink_batch = &settings.wal.replay.sink_batch;
+    assert_eq!(sink_batch.max_events, 2);
+    assert_eq!(sink_batch.max_bytes, 4096);
+}
+
 fn load_settings(database_section: &str) -> Settings {
     load_settings_with_management_section(&format!(
         r#"

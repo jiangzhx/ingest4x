@@ -46,6 +46,11 @@ struct ReplayWindowPolicy {
     max_bytes: u64,
 }
 
+struct SinkBatchPolicy {
+    max_events: usize,
+    max_bytes: u64,
+}
+
 struct ReplayCheckpointState {
     checkpoint: Option<WalPosition>,
     pending_checkpoint: Option<WalPosition>,
@@ -57,6 +62,12 @@ struct ReplayCheckpointState {
 struct ReplayEntryDeliveries {
     entry: WalEntry,
     deliveries_by_sink: HashMap<String, Vec<Value>>,
+}
+
+struct SinkDeliveryEvent {
+    lsn: u64,
+    event: Value,
+    bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,6 +387,13 @@ fn replay_window_policy(settings: &ReplaySettings) -> ReplayWindowPolicy {
     }
 }
 
+fn sink_batch_policy(settings: &ReplaySettings) -> SinkBatchPolicy {
+    SinkBatchPolicy {
+        max_events: settings.sink_batch.max_events.max(1),
+        max_bytes: settings.sink_batch.max_bytes.max(1),
+    }
+}
+
 fn should_flush_checkpoint(
     policy: &CheckpointFlushPolicy,
     records: usize,
@@ -479,8 +497,8 @@ async fn replay_batch_to_sinks(
     if batch.is_empty() {
         return Ok(());
     }
-    let mut sink_events_by_name: HashMap<String, Vec<Value>> = HashMap::new();
-    let mut first_delivery_lsn_by_name: HashMap<String, u64> = HashMap::new();
+    let sink_batch_policy = sink_batch_policy(&context.replay);
+    let mut sink_events_by_name: HashMap<String, Vec<SinkDeliveryEvent>> = HashMap::new();
     for item in batch {
         if checkpoint_covers_entry(checkpoint_state.checkpoint, &item.entry) {
             continue;
@@ -489,13 +507,14 @@ async fn replay_batch_to_sinks(
             if events.is_empty() {
                 continue;
             }
-            first_delivery_lsn_by_name
-                .entry(sink_name.clone())
-                .or_insert(item.entry.position.lsn);
-            sink_events_by_name
-                .entry(sink_name.clone())
-                .or_default()
-                .extend(events.iter().cloned());
+            let sink_events = sink_events_by_name.entry(sink_name.clone()).or_default();
+            for event in events {
+                sink_events.push(SinkDeliveryEvent {
+                    lsn: item.entry.position.lsn,
+                    bytes: json_event_bytes(event),
+                    event: event.clone(),
+                });
+            }
         }
     }
 
@@ -505,15 +524,9 @@ async fn replay_batch_to_sinks(
         let sink_events = sink_events_by_name
             .get(&sink_name)
             .expect("sink events should exist for sink name");
-        if let Err(error) = context
-            .event_sinks
-            .send_events_to_sink(&sink_name, sink_events)
-            .await
+        if let Err((failed_lsn, error)) =
+            send_sink_events_in_batches(context, &sink_name, sink_events, &sink_batch_policy).await
         {
-            let failed_lsn = first_delivery_lsn_by_name
-                .get(&sink_name)
-                .copied()
-                .unwrap_or(batch[0].entry.position.lsn);
             let issue = ReplayIssue::sink_send_failed(sink_name.clone(), failed_lsn, error);
             warn!(
                 sink = sink_name.as_str(),
@@ -546,6 +559,60 @@ async fn replay_batch_to_sinks(
     }
 
     Ok(())
+}
+
+async fn send_sink_events_in_batches(
+    context: &WalReplayContext<'_>,
+    sink_name: &str,
+    events: &[SinkDeliveryEvent],
+    policy: &SinkBatchPolicy,
+) -> std::result::Result<(), (u64, anyhow::Error)> {
+    let mut batch = Vec::new();
+    let mut batch_bytes = 0_u64;
+    let mut batch_first_lsn = None;
+
+    for delivery in events {
+        let would_exceed_events = batch.len() >= policy.max_events;
+        let would_exceed_bytes =
+            !batch.is_empty() && batch_bytes.saturating_add(delivery.bytes) > policy.max_bytes;
+        if would_exceed_events || would_exceed_bytes {
+            let failed_lsn = batch_first_lsn.expect("non-empty sink batch should have first lsn");
+            send_sink_batch(context, sink_name, &batch, failed_lsn).await?;
+            batch.clear();
+            batch_bytes = 0;
+            batch_first_lsn = None;
+        }
+
+        batch_first_lsn.get_or_insert(delivery.lsn);
+        batch_bytes = batch_bytes.saturating_add(delivery.bytes);
+        batch.push(delivery.event.clone());
+    }
+
+    if !batch.is_empty() {
+        let failed_lsn = batch_first_lsn.expect("non-empty sink batch should have first lsn");
+        send_sink_batch(context, sink_name, &batch, failed_lsn).await?;
+    }
+
+    Ok(())
+}
+
+async fn send_sink_batch(
+    context: &WalReplayContext<'_>,
+    sink_name: &str,
+    events: &[Value],
+    failed_lsn: u64,
+) -> std::result::Result<(), (u64, anyhow::Error)> {
+    context
+        .event_sinks
+        .send_events_to_sink(sink_name, events)
+        .await
+        .map_err(|error| (failed_lsn, error))
+}
+
+fn json_event_bytes(event: &Value) -> u64 {
+    serde_json::to_vec(event)
+        .map(|bytes| bytes.len() as u64)
+        .unwrap_or(0)
 }
 
 fn checkpoint_covers_entry(checkpoint: Option<WalPosition>, entry: &WalEntry) -> bool {

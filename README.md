@@ -302,6 +302,14 @@ segment_max_bytes = 134217728
 flush_interval = "1s"
 flush_records = 1000
 flush_bytes = 67108864
+
+[wal.replay]
+max_records = 1000
+max_bytes = 67108864
+
+[wal.replay.sink_batch]
+max_events = 1000
+max_bytes = 67108864
 ```
 
 Key settings:
@@ -316,6 +324,8 @@ Key settings:
 | `database.refresh_interval_secs` | refresh interval for projects/sinks/processors |
 | `wal.dir` | WAL data directory |
 | `wal.write.no_sync` | `false` means reliable append with fsync-style durability; `true` is a performance-first weaker durability mode |
+| `wal.replay.max_records` | max WAL records in one replay window |
+| `wal.replay.sink_batch.max_events` | max events in one sink `send_batch` call |
 
 `ingest4x.example.toml` contains a full MySQL + local Kafka sample.
 

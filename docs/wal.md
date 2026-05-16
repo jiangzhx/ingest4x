@@ -117,7 +117,7 @@ Before append, available disk space is checked. If `wal.write.min_free_bytes` is
 
 A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default read limit is `1024`).
 
-Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window and each sink receives one `send_batch` call for its pending events. The replay window is flushed when `wal.replay.max_records` or `wal.replay.max_bytes` is reached, so these settings bound a single sink `send_batch` call and the duplicate-delivery window after partial sink success.
+Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window. The replay window is flushed when `wal.replay.max_records` or `wal.replay.max_bytes` is reached. Inside that replay window, each sink's pending JSON events are split into one or more `send_batch` calls by `wal.replay.sink_batch.max_events` and `wal.replay.sink_batch.max_bytes`.
 
 Per-record planning flow:
 
@@ -130,8 +130,9 @@ Per-record planning flow:
 Delivery flow:
 
 1. Group planned deliveries by sink target.
-2. Call each sink once with the batched JSON events for the current replay window.
-3. Advance the pipeline checkpoint only after every emitted sink batch reaches its sink-defined commit point.
+2. Split each sink's pending JSON events by the configured sink batch limits.
+3. Call each sink with one or more `send_batch` chunks for the current replay window.
+4. Advance the pipeline checkpoint only after every emitted sink batch reaches its sink-defined commit point.
 
 Each sink defines its own commit point. Kafka can treat a successful broker delivery report as commit; local file sinks must wait for their final file commit; object storage sinks must wait for upload completion or multipart complete. WAL replay only observes the sink runtime result: all `Ok` results allow pipeline checkpoint progress; any `Err` keeps the checkpoint behind for retry.
 
@@ -256,6 +257,10 @@ flush_bytes = 67108864
 [wal.replay]
 max_records = 1000
 max_bytes = 67108864
+
+[wal.replay.sink_batch]
+max_events = 1000
+max_bytes = 67108864
 ```
 
 Meaning:
@@ -271,8 +276,10 @@ Meaning:
 | `wal.checkpoint.flush_interval` | Max interval between checkpoint flushes |
 | `wal.checkpoint.flush_records` | Max successfully replayed records before checkpoint file flush |
 | `wal.checkpoint.flush_bytes` | Max successfully replayed WAL bytes before checkpoint file flush |
-| `wal.replay.max_records` | Max WAL records in one replay window / sink batch |
-| `wal.replay.max_bytes` | Max WAL bytes in one replay window / sink batch |
+| `wal.replay.max_records` | Max WAL records in one replay window |
+| `wal.replay.max_bytes` | Max WAL bytes in one replay window |
+| `wal.replay.sink_batch.max_events` | Max events in one sink `send_batch` call inside a replay window |
+| `wal.replay.sink_batch.max_bytes` | Max JSON event bytes in one sink `send_batch` call inside a replay window |
 
 ## Boundary notes
 
