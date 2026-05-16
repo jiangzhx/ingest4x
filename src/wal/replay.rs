@@ -2,7 +2,7 @@ use crate::ingest::processor::{ProcessorRequestContext, ProcessorRuntime};
 use crate::repositories::RuleRepository;
 use crate::services::ProjectRegistryState;
 use crate::settings::{AutoOffsetReset, CheckpointSettings, ReplaySettings};
-use crate::sinks::EventSinkState;
+use crate::sinks::{EventSinkBatchConfig, EventSinkState};
 use crate::wal::{
     error::{ReplayAction, ReplayIssue, QUARANTINE_LOG_TARGET},
     read_entries_after_limit, read_wal_bounds, remove_segments_covered_by_checkpoint, WalBounds,
@@ -387,10 +387,19 @@ fn replay_window_policy(settings: &ReplaySettings) -> ReplayWindowPolicy {
     }
 }
 
-fn sink_batch_policy(settings: &ReplaySettings) -> SinkBatchPolicy {
+fn sink_batch_policy(
+    settings: &ReplaySettings,
+    override_config: Option<&EventSinkBatchConfig>,
+) -> SinkBatchPolicy {
     SinkBatchPolicy {
-        max_events: settings.sink_batch.max_events.max(1),
-        max_bytes: settings.sink_batch.max_bytes.max(1),
+        max_events: override_config
+            .and_then(|config| config.max_events)
+            .unwrap_or(settings.sink_batch.max_events)
+            .max(1),
+        max_bytes: override_config
+            .and_then(|config| config.max_bytes)
+            .unwrap_or(settings.sink_batch.max_bytes)
+            .max(1),
     }
 }
 
@@ -497,7 +506,6 @@ async fn replay_batch_to_sinks(
     if batch.is_empty() {
         return Ok(());
     }
-    let sink_batch_policy = sink_batch_policy(&context.replay);
     let mut sink_events_by_name: HashMap<String, Vec<SinkDeliveryEvent>> = HashMap::new();
     for item in batch {
         if checkpoint_covers_entry(checkpoint_state.checkpoint, &item.entry) {
@@ -524,6 +532,8 @@ async fn replay_batch_to_sinks(
         let sink_events = sink_events_by_name
             .get(&sink_name)
             .expect("sink events should exist for sink name");
+        let sink_batch_override = context.event_sinks.batch_config(&sink_name);
+        let sink_batch_policy = sink_batch_policy(&context.replay, sink_batch_override.as_ref());
         if let Err((failed_lsn, error)) =
             send_sink_events_in_batches(context, &sink_name, sink_events, &sink_batch_policy).await
         {

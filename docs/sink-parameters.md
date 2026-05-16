@@ -141,6 +141,10 @@ S3/COS examples use OpenDAL option names:
 ```json
 {
   "path_prefix": "events",
+  "batch": {
+    "max_events": 1000,
+    "max_bytes": 16777216
+  },
   "columns": [
     {
       "name": "appid",
@@ -168,8 +172,16 @@ Supported `destination_json` fields:
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `path_prefix` | string | Yes | Relative path prefix under the OpenDAL operator root; files are committed as `.parquet` files |
+| `batch` | object | No | Per-sink batch override. Missing fields inherit `[wal.replay.sink_batch]` |
 | `columns` | array | No | Ordered Parquet projection columns. Each column reads from the emitted JSON event by `path` |
 | `include_event_json` | boolean | No | Defaults to `true`; appends the full emitted event as an `event_json` string column |
+
+Supported `batch` fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `max_events` | integer | No | Max events in one `send_batch` call for this sink |
+| `max_bytes` | integer | No | Max JSON event bytes in one `send_batch` call for this sink |
 
 Supported column fields:
 
@@ -180,7 +192,7 @@ Supported column fields:
 | `type` | string | Yes | Physical Parquet type: `string`, `number`, `integer`, `boolean`, or `json` |
 | `nullable` | boolean | No | Defaults to `false`; missing or null required values fail the sink write |
 
-`rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. WAL pipeline checkpoint advances only after all emitted sink writes in the replay window reach their commit points.
+`rules` remains the event contract. Parquet `columns` only describe physical projection and column order for this sink. If `columns` is omitted, the sink still writes the full emitted event to the `event_json` column. `batch` is a common Event Sink field, not a Delivery Target field, so different sinks sharing the same storage target can use different batch sizes. WAL pipeline checkpoint advances only after all emitted sink writes in the replay window reach their commit points.
 
 ## stdout
 

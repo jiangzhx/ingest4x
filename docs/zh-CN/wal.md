@@ -278,8 +278,10 @@ max_bytes = 67108864
 | `wal.checkpoint.flush_bytes` | checkpoint 文件 flush 前最多累计的成功重放 WAL 字节数 |
 | `wal.replay.max_records` | 单个 replay window 的最大 WAL 记录数 |
 | `wal.replay.max_bytes` | 单个 replay window 的最大 WAL 字节数 |
-| `wal.replay.sink_batch.max_events` | replay window 内单次 sink `send_batch` 的最大 event 数 |
-| `wal.replay.sink_batch.max_bytes` | replay window 内单次 sink `send_batch` 的最大 JSON event 字节数 |
+| `wal.replay.sink_batch.max_events` | replay window 内单次 sink `send_batch` 的默认最大 event 数 |
+| `wal.replay.sink_batch.max_bytes` | replay window 内单次 sink `send_batch` 的默认最大 JSON event 字节数 |
+
+每个 Event Sink 都可以通过 `destination_json.batch` 覆盖全局 sink batch 默认值。`batch` 中未配置的字段会继承全局默认值。
 
 ## 边界说明
 

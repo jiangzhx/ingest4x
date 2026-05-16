@@ -278,8 +278,10 @@ Meaning:
 | `wal.checkpoint.flush_bytes` | Max successfully replayed WAL bytes before checkpoint file flush |
 | `wal.replay.max_records` | Max WAL records in one replay window |
 | `wal.replay.max_bytes` | Max WAL bytes in one replay window |
-| `wal.replay.sink_batch.max_events` | Max events in one sink `send_batch` call inside a replay window |
-| `wal.replay.sink_batch.max_bytes` | Max JSON event bytes in one sink `send_batch` call inside a replay window |
+| `wal.replay.sink_batch.max_events` | Default max events in one sink `send_batch` call inside a replay window |
+| `wal.replay.sink_batch.max_bytes` | Default max JSON event bytes in one sink `send_batch` call inside a replay window |
+
+Each Event Sink can override the global sink batch defaults with `destination_json.batch`. Missing `batch` fields inherit the global defaults.
 
 ## Boundary notes
 

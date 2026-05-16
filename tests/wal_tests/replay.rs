@@ -17,8 +17,7 @@ use ingest4x::repositories::{
 use ingest4x::server;
 use ingest4x::services::ProjectRegistryState;
 use ingest4x::settings::{
-    AutoOffsetReset, CheckpointSettings, ReplaySettings, ReplaySinkBatchSettings, Settings,
-    WalWriteSettings,
+    AutoOffsetReset, CheckpointSettings, ReplaySettings, Settings, WalWriteSettings,
 };
 use ingest4x::sinks::init_event_sinks_from_runtime_sinks;
 use ingest4x::wal::replay::{initialize_replay_checkpoint, replay_once, WalReplayContext};
@@ -1466,7 +1465,7 @@ async fn wal_replay_flushes_replay_window_at_replay_record_threshold() {
 }
 
 #[actix_rt::test]
-async fn wal_replay_splits_sink_batches_by_sink_batch_event_limit() {
+async fn wal_replay_uses_event_sink_batch_override_before_global_default() {
     let temp = tempdir().expect("temp dir");
     let wal_dir = temp.path().join("wal");
     let parquet_dir = temp.path().join("parquet");
@@ -1491,6 +1490,9 @@ async fn wal_replay_splits_sink_batches_by_sink_batch_event_limit() {
         name: "parquet events".to_string(),
         destination_json: json!({
             "path_prefix": "events",
+            "batch": {
+                "max_events": 1
+            },
             "columns": [
                 {
                     "name": "installid",
@@ -1569,8 +1571,8 @@ async fn wal_replay_splits_sink_batches_by_sink_batch_event_limit() {
             replay: ReplaySettings {
                 max_records: 1000,
                 max_bytes: 64 * 1024 * 1024,
-                sink_batch: ReplaySinkBatchSettings {
-                    max_events: 1,
+                sink_batch: ingest4x::settings::ReplaySinkBatchSettings {
+                    max_events: 1000,
                     max_bytes: 64 * 1024 * 1024,
                 },
             },

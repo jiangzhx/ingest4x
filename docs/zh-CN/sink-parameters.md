@@ -141,6 +141,10 @@ S3/COS 示例使用 OpenDAL option 名称：
 ```json
 {
   "path_prefix": "events",
+  "batch": {
+    "max_events": 1000,
+    "max_bytes": 16777216
+  },
   "columns": [
     {
       "name": "appid",
@@ -168,8 +172,16 @@ S3/COS 示例使用 OpenDAL option 名称：
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `path_prefix` | string | 是 | OpenDAL operator root 下的相对路径前缀；文件最终以 `.parquet` 提交 |
+| `batch` | object | 否 | 当前 sink 的批量覆盖配置；未配置的字段继承 `[wal.replay.sink_batch]` |
 | `columns` | array | 否 | 有序 Parquet 投影列；每列通过 `path` 从 emit 出来的 JSON event 取值 |
 | `include_event_json` | boolean | 否 | 默认 `true`；追加完整 emit event 到 `event_json` 字符串列 |
+
+支持的 `batch` 字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `max_events` | integer | 否 | 当前 sink 单次 `send_batch` 的最大 event 数 |
+| `max_bytes` | integer | 否 | 当前 sink 单次 `send_batch` 的最大 JSON event 字节数 |
 
 支持的 column 字段：
 
@@ -180,7 +192,7 @@ S3/COS 示例使用 OpenDAL option 名称：
 | `type` | string | 是 | 物理 Parquet 类型：`string`、`number`、`integer`、`boolean` 或 `json` |
 | `nullable` | boolean | 否 | 默认 `false`；必填值缺失或为 null 时 sink 写入失败 |
 
-`rules` 仍然是事件契约。Parquet `columns` 只描述当前 sink 的物理投影与列顺序。如果省略 `columns`，sink 仍会把完整 emit event 写入 `event_json` 列。只有当前 replay window 内所有已 emit sink 的写入都达到各自 commit 点后，WAL pipeline checkpoint 才会前进。
+`rules` 仍然是事件契约。Parquet `columns` 只描述当前 sink 的物理投影与列顺序。如果省略 `columns`，sink 仍会把完整 emit event 写入 `event_json` 列。`batch` 是通用 Event Sink 字段，不是 Delivery Target 字段，因此多个 sink 即使共享同一个存储 target，也可以使用不同批量大小。只有当前 replay window 内所有已 emit sink 的写入都达到各自 commit 点后，WAL pipeline checkpoint 才会前进。
 
 ## stdout
 

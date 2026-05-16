@@ -325,7 +325,7 @@ Key settings:
 | `wal.dir` | WAL data directory |
 | `wal.write.no_sync` | `false` means reliable append with fsync-style durability; `true` is a performance-first weaker durability mode |
 | `wal.replay.max_records` | max WAL records in one replay window |
-| `wal.replay.sink_batch.max_events` | max events in one sink `send_batch` call |
+| `wal.replay.sink_batch.max_events` | default max events in one sink `send_batch` call; Event Sink `destination_json.batch` can override |
 
 `ingest4x.example.toml` contains a full MySQL + local Kafka sample.
 

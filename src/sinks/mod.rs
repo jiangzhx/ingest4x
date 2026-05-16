@@ -105,6 +105,27 @@ pub struct EmptyConfig {}
 
 impl SinkConfig for EmptyConfig {}
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EventSinkBatchConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_events: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
+}
+
+impl EventSinkBatchConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.max_events == Some(0) {
+            return Err("batch.max_events must be greater than 0".to_string());
+        }
+        if self.max_bytes == Some(0) {
+            return Err("batch.max_bytes must be greater than 0".to_string());
+        }
+        Ok(())
+    }
+}
+
 trait ErasedEventSinkProvider: Send + Sync {
     fn sink_type(&self) -> SinkTypeMetadata;
 
@@ -128,19 +149,70 @@ where
     }
 
     fn normalize_event_sink_config(&self, config_json: Value) -> Result<String, String> {
-        EventSinkProvider::normalize_event_sink_config(self, config_json)
+        let (sink_config_json, batch_config) = split_event_sink_batch_config(config_json)?;
+        let normalized = EventSinkProvider::normalize_event_sink_config(self, sink_config_json)?;
+        append_event_sink_batch_config(normalized, batch_config)
     }
 
     fn build_sink(&self, sink: &RuntimeEventSink) -> Result<Box<dyn EventSinkRuntime>> {
         let target_config =
             <T::Sink as EventSink>::DeliveryTargetConfig::parse(sink.target.config_json.clone())
                 .map_err(anyhow::Error::msg)?;
-        let sink_config =
-            <T::Sink as EventSink>::EventSinkConfig::parse(sink.destination_json.clone())
-                .map_err(anyhow::Error::msg)?;
+        let (destination_json, _) = split_event_sink_batch_config(sink.destination_json.clone())
+            .map_err(anyhow::Error::msg)?;
+        let sink_config = <T::Sink as EventSink>::EventSinkConfig::parse(destination_json)
+            .map_err(anyhow::Error::msg)?;
 
         Ok(Box::new(T::Sink::from_config(target_config, sink_config)?))
     }
+}
+
+pub fn event_sink_batch_config(
+    destination_json: &Value,
+) -> Result<Option<EventSinkBatchConfig>, String> {
+    let Some(batch_json) = destination_json.get("batch") else {
+        return Ok(None);
+    };
+    let batch_config = serde_json::from_value::<EventSinkBatchConfig>(batch_json.clone())
+        .map_err(|error| error.to_string())?;
+    batch_config.validate()?;
+    Ok(Some(batch_config))
+}
+
+fn split_event_sink_batch_config(
+    config_json: Value,
+) -> Result<(Value, Option<EventSinkBatchConfig>), String> {
+    let Value::Object(mut object) = config_json else {
+        return Ok((config_json, None));
+    };
+    let batch_json = object.remove("batch");
+    let batch_config = match batch_json {
+        Some(batch_json) => {
+            let batch_config = serde_json::from_value::<EventSinkBatchConfig>(batch_json)
+                .map_err(|error| error.to_string())?;
+            batch_config.validate()?;
+            Some(batch_config)
+        }
+        None => None,
+    };
+    Ok((Value::Object(object), batch_config))
+}
+
+fn append_event_sink_batch_config(
+    normalized: String,
+    batch_config: Option<EventSinkBatchConfig>,
+) -> Result<String, String> {
+    let Some(batch_config) = batch_config else {
+        return Ok(normalized);
+    };
+    let mut normalized_json =
+        serde_json::from_str::<Value>(&normalized).map_err(|error| error.to_string())?;
+    let Value::Object(object) = &mut normalized_json else {
+        return Err("event sink config must normalize to a JSON object".to_string());
+    };
+    let batch_json = serde_json::to_value(batch_config).map_err(|error| error.to_string())?;
+    object.insert("batch".to_string(), batch_json);
+    serde_json::to_string(&normalized_json).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -266,6 +338,45 @@ mod tests {
                 "unknown": true
             }))
             .is_err());
+    }
+
+    #[test]
+    fn event_sink_config_accepts_common_batch_override() {
+        let provider = provider_for("parquet").expect("parquet provider should be registered");
+
+        let normalized = provider
+            .normalize_event_sink_config(json!({
+                "path_prefix": "events",
+                "batch": {
+                    "max_events": 2
+                },
+                "columns": [
+                    {
+                        "name": "installid",
+                        "path": "xcontext.installid",
+                        "type": "string"
+                    }
+                ]
+            }))
+            .expect("destination should normalize with batch override");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&normalized).expect("normalized json"),
+            json!({
+                "path_prefix": "events",
+                "columns": [
+                    {
+                        "name": "installid",
+                        "path": "xcontext.installid",
+                        "type": "string",
+                        "nullable": false
+                    }
+                ],
+                "include_event_json": true,
+                "batch": {
+                    "max_events": 2
+                }
+            })
+        );
     }
 }
 

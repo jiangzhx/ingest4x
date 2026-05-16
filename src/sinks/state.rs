@@ -1,7 +1,7 @@
 use crate::repositories::{EventSinkRepository, RuntimeEventSink};
 use crate::rhai_ctx::ProcessorDelivery;
 use crate::settings::AutoOffsetReset;
-use crate::sinks::{build_sink, EventSinkRuntime};
+use crate::sinks::{build_sink, event_sink_batch_config, EventSinkBatchConfig, EventSinkRuntime};
 use actix_web::web::Data;
 use anyhow::{anyhow, Context, Result};
 use futures::lock::Mutex as AsyncMutex;
@@ -45,6 +45,10 @@ impl EventSinkState {
 
     pub fn auto_offset_reset(&self, name: &str) -> Option<AutoOffsetReset> {
         self.current_router().auto_offset_reset(name)
+    }
+
+    pub(crate) fn batch_config(&self, name: &str) -> Option<EventSinkBatchConfig> {
+        self.current_router().batch_config(name)
     }
 
     pub async fn check_alive(&self) -> Result<()> {
@@ -134,6 +138,7 @@ struct EventRouter {
 struct EventSinkEntry {
     sink: Box<dyn EventSinkRuntime>,
     auto_offset_reset: AutoOffsetReset,
+    batch_config: Option<EventSinkBatchConfig>,
 }
 
 impl EventRouter {
@@ -141,10 +146,13 @@ impl EventRouter {
         let mut sinks = HashMap::new();
 
         for runtime_sink in runtime_sinks {
+            let batch_config = event_sink_batch_config(&runtime_sink.destination_json)
+                .map_err(anyhow::Error::msg)?;
             sinks.insert(
                 runtime_sink.sink_id.clone(),
                 EventSinkEntry {
                     auto_offset_reset: runtime_sink.auto_offset_reset,
+                    batch_config,
                     sink: build_sink(&runtime_sink)?,
                 },
             );
@@ -215,6 +223,12 @@ impl EventRouter {
 
     fn auto_offset_reset(&self, name: &str) -> Option<AutoOffsetReset> {
         self.sinks.get(name).map(|entry| entry.auto_offset_reset)
+    }
+
+    fn batch_config(&self, name: &str) -> Option<EventSinkBatchConfig> {
+        self.sinks
+            .get(name)
+            .and_then(|entry| entry.batch_config.clone())
     }
 
     async fn check_alive(&self) -> Result<()> {
