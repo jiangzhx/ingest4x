@@ -4,7 +4,7 @@
 >
 > This project is currently at `0.0.1` and is not yet recommended for direct production use. Future releases may change WAL file format and compatibility behavior. Check release notes and migration guidance before upgrading.
 
-Each application usually builds its own event-ingest chain: Nginx/OpenResty first, then something like Flume/Logstash/Filebeat into Kafka or files, then Flink/Spark/custom jobs, while management, monitoring, retry, and rule configuration are spread across systems. `ingest4x` is designed to make these pieces an integrated service.
+Many systems split event ingest, durable buffering, field validation, processing logic, downstream delivery, and the related management surface across multiple components. `ingest4x` is a general-purpose event-ingest service that brings these responsibilities into one runtime: receive events, append them to WAL, process them with Rhai, and deliver them to configured sinks.
 
 It mainly addresses four concerns:
 
