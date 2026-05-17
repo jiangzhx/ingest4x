@@ -8,9 +8,8 @@ This file maps important repository directories and configuration boundaries.
 | --- | --- |
 | `src/ingest` | `/ingest` ingress, payload parsing, token auth, and WAL append |
 | `src/wal` | WAL write/read, segmenting, checkpoint, and replay |
-| `src/rules` | Rule types, loader, Rhai validation DSL |
-| `src/rhai_ctx` | Host API exposed to Rhai processors/rules |
-| `src/repositories` | SeaORM-backed repositories for projects, rules, processors, sinks, and service nodes |
+| `src/rhai_ctx` | Host API exposed to Rhai processors, including `emit(...)`, request context, and validation helpers on `event` |
+| `src/repositories` | SeaORM-backed repositories for projects, processors, sinks, and service nodes |
 | `src/entities` | SeaORM entity definitions |
 | `src/services` | Runtime service state shared across repositories |
 | `src/admin` | Admin APIs, OpenAPI, and admin routes |
@@ -27,13 +26,14 @@ This file maps important repository directories and configuration boundaries.
 | `web/admin` | React admin source code |
 | `web/admin/dist` | Built admin static assets served by the binary |
 
-## Tests and rule samples
+## Tests
 
 | Path | Purpose |
 | --- | --- |
-| `tests/jlt/core` | Default JLT rule cases |
 | `tests/ingest` | `/ingest`, compatibility, and seed-related tests |
 | `tests/wal_tests` | WAL append, replay, checkpoint, and failure-handling tests |
+| `tests/admin` | Admin API and static asset tests |
+| `tests/db` | Repository, migration, and runtime snapshot tests |
 | `e2e/load` | k6 + `blackhole` sink HTTP e2e load test suite |
 
 ## Configuration
@@ -50,7 +50,7 @@ This file maps important repository directories and configuration boundaries.
 | `docs/index.md` | GitHub Pages documentation home |
 | `docs/wal.md` | WAL, checkpoint, and replay |
 | `docs/event-processing/index.md` | Event processing overview |
-| `docs/event-processing/event-validation.md` | Validation rule DSL |
+| `docs/event-processing/event-validation.md` | Validation helper DSL used inside `process(...)` |
 | `docs/event-processing/event-transformation.md` | Transformation and delivery |
 | `docs/admin-api.md` | Admin console and API |
 | `docs/release-versioning.md` | Release and release process |

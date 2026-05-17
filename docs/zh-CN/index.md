@@ -20,8 +20,8 @@
 业务事件
   -> /ingest/{project_key}
   -> WAL
-  -> 校验
-  -> 转换与投递
+  -> Rhai processor
+  -> sink 投递
   -> Event Sink
 ```
 

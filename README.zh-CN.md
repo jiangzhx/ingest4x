@@ -9,9 +9,9 @@
 它主要解决四类问题：
 
 - 接入稳定性：在入口层处理鉴权、校验和持久化，减少下游抖动对接入成功率的直接影响。
-- 可治理性：每个项目可自定义规则、变换逻辑和投递目标。
-- 送达可靠性：事件先持久写入本地 WAL，再由后台重放 worker 投递，失败会重试，每个事件 sink 维护自己的进度。
-- 可观测性：管理界面可配置项目、规则、处理脚本和 sink，指标覆盖 ingest、WAL、重放和投递。
+- 可治理性：每个项目可自定义处理脚本逻辑和投递目标。
+- 送达可靠性：事件先持久写入本地 WAL，再由后台重放 worker 投递，失败会重试，重放通过单个 pipeline checkpoint 推进。
+- 可观测性：管理界面可配置项目、处理脚本和 sink，指标覆盖 ingest、WAL、重放和投递。
 
 因此 `/ingest/{project_key}` 返回成功仅表示事件已被接入系统接收。是否字段合法、是否需要补充字段、以及最终送达哪里，取决于项目配置。
 
@@ -23,11 +23,12 @@
 | --- | --- | --- | --- |
 | [`blackhole`](docs/zh-CN/sink-parameters.md#blackhole) | 丢弃事件，适用于生产/客户压测、容量验证与下游故障注入。 | 不需要 `delivery target`；`event sink` 支持 `mode` 与 `delay_ms`。 | 已支持 |
 | [`kafka`](docs/zh-CN/sink-parameters.md#kafka) | 投递到 Kafka topic，适用于流处理与数据平台链路。 | `delivery target` 需要 `bootstrap_servers`；`event sink` 需要 `topic`。 | 已支持 |
-| [`stdout`](docs/zh-CN/sink-parameters.md#stdout) | 输出到标准输出，适合本地开发、规则调试或种子验证。 | 无额外配置。 | 已支持 |
+| [`parquet`](docs/zh-CN/sink-parameters.md#parquet) | 将 emit 后的事件写成 Parquet 文件，适用于离线分析、归档和对象存储链路。 | `delivery target` 需要 `scheme` 与 OpenDAL `options`；`event sink` 支持 `path_prefix`、可选 `batch`、`columns` 和 `include_event_json`。 | 已支持 |
+| [`stdout`](docs/zh-CN/sink-parameters.md#stdout) | 输出到标准输出，适合本地开发、processor 调试或种子验证。 | 无额外配置。 | 已支持 |
 
 - 接口接入：`POST /ingest/{project_key}`、`GET /ingest/{project_key}?appid=...&xwhat=...`
 - 项目访问：`auth_mode = token | public`，可选配置项目 IP allowlist。
-- WAL：本地分段写入、checkpoint、按-sink 重放与失败重试。详见 [WAL 文档](docs/zh-CN/wal.md)。
+- WAL：本地分段写入、pipeline checkpoint、重放与失败重试。详见 [WAL 文档](docs/zh-CN/wal.md)。
 - Processor：Rhai `process(event, request)`，在脚本内部通过 `event` 上的校验 helper 做字段校验，再通过 `emit(target, event)` 产出投递计划。
 - Sink：运行时配置来自数据库，默认支持的 sink 类型见上方。
 - 管理能力：管理后台、OpenAPI、Swagger UI、Prometheus 指标、节点注册与心跳。
@@ -60,20 +61,20 @@
 |                                                                                |
 | +------------+                                                                 |
 | | WAL replay |                                                                 |
-+------------+                                                                 |
-        |                                                                       |
-        v                                                                       |
-| +--------------------+                                                         |
-| | Load project rules |                                                         |
-| +--------------------+                                                         |
-        |                                                                       |
-        v                                                                       |
+| +------------+                                                                 |
+|        |                                                                       |
+|        v                                                                       |
+| +------------------------+                                                     |
+| | Load project processor |                                                     |
+| +------------------------+                                                     |
+|        |                                                                       |
+|        v                                                                       |
 | +-------------------------------------+                                        |
 | | Run Rhai processor                  |                                        |
 | | event.required(...), emit(target,event) |                                    |
 | +-------------------------------------+                                        |
-        |                                                                       |
-        v                                                                       |
+|        |                                                                       |
+|        v                                                                       |
 | +----------------------+                                                       |
 | | Processor deliveries |                                                       |
 | +----------------------+                                                       |
@@ -83,9 +84,9 @@
 +--------------------------------------------------------------------------------+
 | Sink delivery                                                                  |
 |                                                                                |
-| +-------------+    +---------------------+                                     |
-| | Event sinks | -> | Checkpoint per sink |                                     |
-| +-------------+    +---------------------+                                     |
+| +-------------+    +--------------------------------+                          |
+| | Event sinks | -> | Sink-defined commit + checkpoint |                        |
+| +-------------+    +--------------------------------+                          |
 +--------------------------------------------------------------------------------+
 ```
 
@@ -94,10 +95,10 @@
 ### 1. 运行核心测试
 
 ```bash
-cargo test --test ingest ingest_jlt_cases_match_rules
+cargo test --test ingest
 ```
 
-该命令在内存 SQLite 中初始化默认 seed，并基于 `tests/jlt/core/*.jlt` 验证默认规则。
+该命令会运行当前的 ingest 集成测试，覆盖默认 seed、WAL 重放和 Rhai processor 执行路径。
 
 完整本地校验：
 

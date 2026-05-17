@@ -39,14 +39,15 @@ OpenAPI 与 Swagger UI 为公开可访问；受保护业务接口在 `/api/admin
 | --- | --- |
 | 登录 | `POST /api/admin/auth/login` |
 | 项目 | `/api/admin/projects` |
-| 规则集 | `/api/admin/rule-sets` |
-| 项目绑定规则集 | `/api/admin/projects/{project_id}/rule-sets` |
 | Processor 脚本 | `/api/admin/processor-scripts` |
+| 项目 Processor 列表 | `/api/admin/project-processors` |
 | 项目绑定 Processor | `/api/admin/projects/{project_id}/processor` |
 | Sink 类型 | `/api/admin/sink-types` |
 | Delivery Target | `/api/admin/delivery-targets` |
 | Event Sink | `/api/admin/event-sinks` |
 | 服务节点 | `/api/admin/service-nodes` |
+
+当前 `/api/admin/projects` 已经直接承载 `project_key`、`auth_mode`、`allowed_ips` 和 `ingest_token` 等接入设置；管理端不存在独立的 rule-set 资源。
 
 Sink 的配置细节见 [Sink 参数说明](sink-parameters.md)，包括 `delivery target` 与 `event sink` 的完整字段列表。
 

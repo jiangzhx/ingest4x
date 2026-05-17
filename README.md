@@ -9,9 +9,9 @@ Each application usually builds its own event-ingest chain: Nginx/OpenResty firs
 It mainly addresses four concerns:
 
 - Ingest resilience: auth, validation, and durable persistence are handled at ingress, so downstream instability does not directly reduce ingress success.
-- Manageability: each project can define its own validation rules, transformation logic, and delivery targets.
-- Delivery reliability: events are persisted to local WAL first, then replayed by background workers; failures are retried and each event sink tracks its own progress.
-- Observability: admin UI manages projects, rules, processors, and sinks, with metrics covering ingest, WAL, replay, and delivery.
+- Manageability: each project can define its own processor logic and delivery targets.
+- Delivery reliability: events are persisted to local WAL first, then replayed by background workers; failures are retried and replay advances through one pipeline checkpoint.
+- Observability: admin UI manages projects, processors, and sinks, with metrics covering ingest, WAL, replay, and delivery.
 
 Thus a successful `/ingest/{project_key}` response means the event is accepted into ingest pipeline. Whether a single event is valid, needs extra fields, and where it is delivered is determined by project configuration.
 
@@ -23,11 +23,12 @@ Thus a successful `/ingest/{project_key}` response means the event is accepted i
 | --- | --- | --- | --- |
 | [`blackhole`](docs/sink-parameters.md#blackhole) | Discard events, suitable for production/customer load testing, capacity validation, and downstream fault simulation. | No `delivery target`; `event sink` supports `mode` and `delay_ms`. | Supported |
 | [`kafka`](docs/sink-parameters.md#kafka) | Deliver to Kafka topics, suitable for streaming jobs and data platform pipelines. | `delivery target`: `bootstrap_servers`; `event sink`: `topic`. | Supported |
-| [`stdout`](docs/sink-parameters.md#stdout) | Print to stdout for local dev, rule debugging, or seed verification. | No extra config. | Supported |
+| [`parquet`](docs/sink-parameters.md#parquet) | Write emitted events as Parquet files to local or object storage, suitable for offline analytics and archival pipelines. | `delivery target`: `scheme` + OpenDAL `options`; `event sink`: `path_prefix`, optional `batch`, `columns`, and `include_event_json`. | Supported |
+| [`stdout`](docs/sink-parameters.md#stdout) | Print to stdout for local dev, processor debugging, or seed verification. | No extra config. | Supported |
 
 - Ingress: `POST /ingest/{project_key}`, `GET /ingest/{project_key}?appid=...&xwhat=...`.
 - Project access: `auth_mode = token | public`, with optional project IP allowlist.
-- WAL: local segmented write, checkpoint, per-sink replay, and failure retry. See [WAL](docs/wal.md).
+- WAL: local segmented write, pipeline checkpoint, replay, and failure retry. See [WAL](docs/wal.md).
 - Processor: Rhai `process(event, request)` with inline validation helpers on `event`, plus `emit(target, event)`.
 - Sinks: runtime config from DB, default supported sinks listed above.
 - Admin: admin console, OpenAPI, Swagger UI, Prometheus metrics, service node registration and heartbeat.
@@ -63,9 +64,9 @@ Thus a successful `/ingest/{project_key}` response means the event is accepted i
 | +------------+                                                                 |
 |        |                                                                       |
 |        v                                                                       |
-| +--------------------+                                                         |
-| | Load project rules |                                                         |
-| +--------------------+                                                         |
+| +------------------------+                                                     |
+| | Load project processor |                                                     |
+| +------------------------+                                                     |
 |        |                                                                       |
 |        v                                                                       |
 | +-------------------------------------+                                        |
@@ -83,9 +84,9 @@ Thus a successful `/ingest/{project_key}` response means the event is accepted i
 +--------------------------------------------------------------------------------+
 | Sink delivery                                                                  |
 |                                                                                |
-| +-------------+    +---------------------+                                     |
-| | Event sinks | -> | Checkpoint per sink |                                     |
-| +-------------+    +---------------------+                                     |
+| +-------------+    +--------------------------------+                          |
+| | Event sinks | -> | Sink-defined commit + checkpoint |                        |
+| +-------------+    +--------------------------------+                          |
 +--------------------------------------------------------------------------------+
 ```
 
@@ -94,10 +95,10 @@ Thus a successful `/ingest/{project_key}` response means the event is accepted i
 ### 1. Run core tests
 
 ```bash
-cargo test --test ingest ingest_jlt_cases_match_rules
+cargo test --test ingest
 ```
 
-This initializes default seed in in-memory SQLite and validates default rules with `tests/jlt/core/*.jlt`.
+This runs the ingest integration suite against the current project setup, including default seed, WAL replay, and Rhai processor execution.
 
 For full local verification:
 

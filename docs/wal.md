@@ -1,6 +1,6 @@
 # WAL
 
-WAL is ingest4x’s persistent ingress layer. After `/ingest` receives an event, it does not run rules, processor, or downstream sink delivery in the request thread. It first writes the raw event to local WAL, then background replay reads records and performs business processing and sink delivery.
+WAL is ingest4x’s persistent ingress layer. After `/ingest` receives an event, it does not run the Rhai processor or downstream sink delivery in the request thread. It first writes the raw event to local WAL, then background replay reads records and performs business processing and sink delivery.
 
 This decouples ingress ACK from downstream delivery. If Kafka/stdout/processor are temporarily failing, `/ingest` can still return success as long as the event is durably written to WAL; replay later retries or quarantines bad records.
 
@@ -17,7 +17,7 @@ client
 background replay
   -> read WAL after pipeline checkpoint
   -> parse original body
-  -> load project rules
+  -> resolve current project processor
   -> run Rhai processor
   -> emit deliveries
   -> batch deliveries by sink and wait for sink-defined commit
@@ -117,15 +117,14 @@ Before append, available disk space is checked. If `wal.write.min_free_bytes` is
 
 A WAL replay loop starts on service boot. Each run reads up to one batch of entries (default read limit is `1024`).
 
-Replay still runs rules and processor per WAL record, because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window. The replay window is flushed when `wal.replay.max_records` or `wal.replay.max_bytes` is reached. If the replay window is small and `wal.replay.sink_batch.timeout` is non-zero, replay can wait before flushing so later WAL records can join the same sink batch. Inside that replay window, each sink's pending JSON events are split into one or more `send_batch` calls by `wal.replay.sink_batch.max_events` and `wal.replay.sink_batch.max_bytes`.
+Replay runs the current project processor for each WAL record because Rhai receives one JSON event at a time. After processor output is validated, deliveries are buffered by sink for the current replay window. The replay window is flushed when `wal.replay.max_records` or `wal.replay.max_bytes` is reached. If the replay window is small and `wal.replay.sink_batch.timeout` is non-zero, replay can wait before flushing so later WAL records can join the same sink batch. Inside that replay window, each sink's pending JSON events are split into one or more `send_batch` calls by `wal.replay.sink_batch.max_events` and `wal.replay.sink_batch.max_bytes`.
 
 Per-record planning flow:
 
 1. Parse `body` as JSON.
 2. Verify `project_id` still exists in in-memory registry.
-3. Compile and load current project rules.
-4. Invoke Rhai processor: `process(event, request)`.
-5. Validate processor `emit` sink target exists.
+3. Resolve the current project processor and invoke `process(event, request)`.
+4. Validate processor `emit` sink target exists.
 
 Delivery flow:
 
@@ -136,7 +135,7 @@ Delivery flow:
 
 Each sink defines its own commit point. Kafka can treat a successful broker delivery report as commit; local file sinks must wait for their final file commit; object storage sinks must wait for upload completion or multipart complete. WAL replay only observes the sink runtime result: all `Ok` results allow pipeline checkpoint progress; any `Err` keeps the checkpoint behind for retry.
 
-Replay uses current DB rules/processor/sink configuration, not the configuration at time of append. So records appended before config changes are processed under new config.
+Replay uses current DB project/processor/sink configuration, not the configuration at time of append. So records appended before config changes are processed under new config.
 
 The processor/sink boundary uses JSON events as the common in-memory format. Columnar sinks such as Parquet convert the batched JSON events into Arrow arrays internally during encoding; Kafka/stdout can continue to use JSON without an Arrow round trip.
 
@@ -170,7 +169,7 @@ When no checkpoint exists, active sink `auto_offset_reset` settings define the p
 
 Default seed uses `latest` for `events`, `events_error`, and `loadtest_events` sinks.
 
-If the existing checkpoint is behind current WAL floor, old segments were likely cleaned up and reset follows the same pipeline `auto_offset_reset` merge rule.
+If the existing checkpoint is behind current WAL floor, old segments were likely cleaned up and reset follows the same pipeline `auto_offset_reset` merge behavior.
 
 ## Retention and cleanup
 

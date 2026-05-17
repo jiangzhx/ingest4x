@@ -39,14 +39,15 @@ OpenAPI and Swagger UI are publicly accessible; protected business APIs under `/
 | --- | --- |
 | Login | `POST /api/admin/auth/login` |
 | Projects | `/api/admin/projects` |
-| Rule sets | `/api/admin/rule-sets` |
-| Project rule binding | `/api/admin/projects/{project_id}/rule-sets` |
 | Processor scripts | `/api/admin/processor-scripts` |
+| Project processor list | `/api/admin/project-processors` |
 | Project processor binding | `/api/admin/projects/{project_id}/processor` |
 | Sink types | `/api/admin/sink-types` |
 | Delivery targets | `/api/admin/delivery-targets` |
 | Event sinks | `/api/admin/event-sinks` |
 | Service nodes | `/api/admin/service-nodes` |
+
+`/api/admin/projects` already carries ingest-facing settings such as `project_key`, `auth_mode`, `allowed_ips`, and `ingest_token`; there is no separate rule-set management surface in the current admin API.
 
 Sink details are defined in [Sink parameters](sink-parameters.md), including full field lists for both `delivery target` and `event sink`.
 

@@ -20,8 +20,8 @@
 business event
   -> /ingest/{project_key}
   -> WAL
-  -> validation
-  -> transform and delivery
+  -> Rhai processor
+  -> sink delivery
   -> event sinks
 ```
 
