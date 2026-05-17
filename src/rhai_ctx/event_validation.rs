@@ -53,10 +53,6 @@ pub(crate) fn register_event_api(engine: &mut Engine) {
     engine.register_fn("required", map_required);
     engine.register_fn("optional", map_optional);
     engine.register_fn("any", map_any);
-    engine.register_fn("result", map_result);
-
-    engine.register_fn("required", FieldRef::required);
-    engine.register_fn("optional", FieldRef::optional);
     engine.register_fn("string", FieldRef::string);
     engine.register_fn("number", FieldRef::number);
     engine.register_fn("integer", FieldRef::integer);
@@ -122,12 +118,6 @@ fn map_any(event: &mut Map, paths: Array) -> Result<AnyFields, Box<EvalAltResult
     })
 }
 
-fn map_result(_event: &mut Map) -> Map {
-    let mut output = Map::new();
-    output.insert("ok".into(), true.into());
-    output
-}
-
 impl FieldRef {
     fn new(payload: Value, path: &str, presence: FieldPresence) -> Self {
         Self {
@@ -137,26 +127,6 @@ impl FieldRef {
             field_type: None,
             ignore_case: false,
         }
-    }
-
-    fn required(&mut self, field_type: &str) -> Result<FieldRef, Box<EvalAltResult>> {
-        let value = lookup_path(&self.payload, &self.path);
-        if !is_present(value) {
-            return Err(script_error(format!(
-                "missing required field `{}`",
-                self.path
-            )));
-        }
-        validate_named_type(&self.path, field_type, value)?;
-        Ok(self.clone())
-    }
-
-    fn optional(&mut self, field_type: &str) -> Result<FieldRef, Box<EvalAltResult>> {
-        let value = lookup_path(&self.payload, &self.path);
-        if is_present(value) {
-            validate_named_type(&self.path, field_type, value)?;
-        }
-        Ok(self.clone())
     }
 
     fn string(&mut self) -> Result<FieldRef, Box<EvalAltResult>> {
@@ -505,51 +475,6 @@ impl NumberComparison {
 fn map_to_json(event: &Map) -> Result<Value, Box<EvalAltResult>> {
     from_dynamic::<Value>(&Dynamic::from(event.clone()))
         .map_err(|error| script_error(format!("failed to read processor event as json: {error}")))
-}
-
-fn validate_named_type(
-    path: &str,
-    field_type: &str,
-    value: Option<&Value>,
-) -> Result<(), Box<EvalAltResult>> {
-    let Some(value) = value.filter(|value| !value.is_null()) else {
-        return Ok(());
-    };
-
-    let valid = match field_type {
-        "string" => value.is_string(),
-        "number" => value.is_number(),
-        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "boolean" => value.is_boolean(),
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        _ => {
-            return Err(script_error(format!(
-                "unknown validation type `{field_type}`"
-            )))
-        }
-    };
-
-    if valid {
-        Ok(())
-    } else {
-        Err(script_error(format!(
-            "field `{path}` expected type `{}`",
-            display_type(field_type)
-        )))
-    }
-}
-
-fn display_type(field_type: &str) -> &'static str {
-    match field_type {
-        "string" => "String",
-        "number" => "Number",
-        "integer" => "Integer",
-        "boolean" => "Boolean",
-        "object" => "Object",
-        "array" => "Array",
-        _ => "Unknown",
-    }
 }
 
 fn type_mismatch_error(path: &str, field_type: FieldType) -> Box<EvalAltResult> {

@@ -1,18 +1,20 @@
-# Validation
+# Validation helpers
 
-Validation scripts check event fields and are implemented with Rhai. Entry point is fixed:
+Validation in `ingest4x` is no longer modeled as a separate `fn validate(event)` stage. The active runtime model is a single Rhai entrypoint:
 
 ```rhai
-fn validate(event) {
-    event.required("appid").string().min(1);
-    event.required("xwhat").string().min(1);
-    event.required("xcontext").object();
-    event.required("xcontext.installid").string().min(1);
+fn process(event, request) {
+    try {
+        event.required("appid").string().min(1);
+        event.required("xwhat").string().min(1);
+        emit(SINK_EVENTS, event);
+    } catch (err) {
+        emit(SINK_EVENTS_ERROR, event);
+    }
 }
 ```
 
-`event` is not a plain JSON object. It is an ingest4x validation wrapper exposed to Rhai. Validation uses
-`event.required(...)`, `event.optional(...)`, and `event.field(...)` to read values and record errors.
+`event` is not a plain JSON object. It is an ingest4x wrapper that exposes validation helpers for use inside `process(...)`.
 
 ## Field path
 
@@ -37,15 +39,9 @@ event.optional("xcontext.currencyamount").number();
 | `.object()` | Type must be object |
 | `.array()` | Type must be array |
 
-Note: `.string()` validates type only; add `.min(1)` for non-empty checks.
-
-```rhai
-event.required("xwho").string().min(1);
-```
+`.string()` validates type only. Add `.min(1)` when the string must be non-empty.
 
 ## Type-specific constraints
-
-Choose constraints after the type check, for example `.string()`, `.number()`, `.integer()`.
 
 ### String
 
@@ -62,11 +58,11 @@ Choose constraints after the type check, for example `.string()`, `.number()`, `
 Example:
 
 ```rhai
-event.required("xwho").string().min(1);
-event.required("xcontext.os")
+let os = event.required("xcontext.os")
     .string()
     .ignore_case()
     .enum(["ios", "android"]);
+
 event.optional("xcontext.event_date").string().date("%Y-%m-%d");
 ```
 
@@ -79,7 +75,7 @@ event.optional("xcontext.event_date").string().date("%Y-%m-%d");
 | `.lt(n)` | Less than |
 | `.lte(n)` | Less than or equal |
 
-Add these after `.number()` or `.integer()`.
+Use these after `.number()` or `.integer()`.
 
 ```rhai
 event.required("xcontext.level").integer().gt(0);
@@ -96,7 +92,7 @@ event.required("xcontext").object();
 event.optional("items").array();
 ```
 
-### General helper APIs
+## General helper APIs
 
 | API | Description |
 | --- | --- |
@@ -115,7 +111,7 @@ if xwhat.eq("payment") {
 }
 ```
 
-### Compound validation
+## Compound validation
 
 | API | Description |
 | --- | --- |
@@ -124,62 +120,54 @@ if xwhat.eq("payment") {
 Example:
 
 ```rhai
-fn validate(event) {
-    let os = event.required("xcontext.os")
-        .string()
-        .ignore_case()
-        .enum(["ios", "android", "harmony"]);
+let os = event.required("xcontext.os")
+    .string()
+    .ignore_case()
+    .enum(["ios", "android", "harmony"]);
 
-    if os.eq("ios") {
-        event.any(["xcontext.idfa", "xcontext.caid"]).required();
-    }
+if os.eq("ios") {
+    event.any(["xcontext.idfa", "xcontext.caid"]).required();
+}
 
-    if os.eq("android") || os.eq("harmony") {
-        event.any(["xcontext.oaid", "xcontext.androidid"]).required();
-    }
+if os.eq("android") || os.eq("harmony") {
+    event.any(["xcontext.oaid", "xcontext.androidid"]).required();
 }
 ```
 
-`event.any([...]).required()` means at least one field in the list must exist and be non-null.
+## Failure semantics
 
-## Result semantics
+Validation helpers do not return a structured `result` object anymore. They either:
 
-Validation is side-effect-based. The return value of `fn validate(event)` is not used directly; runtime reads the first error recorded in validation calls.
+- return the next `FieldRef` in the chain when the check passes
+- raise a normal Rhai runtime error when the check fails
+
+That means processor authors decide the behavior:
 
 ```rhai
-fn validate(event) {
-    event.required("appid").string().min(1);
-    event.required("xcontext.installid").string().min(1);
+fn process(event, request) {
+    try {
+        event.required("appid").string().min(1);
+        emit(SINK_EVENTS, event);
+    } catch (err) {
+        event["xcontext"]["validation_error"] = `${err}`;
+        emit(SINK_EVENTS_ERROR, event);
+    }
 }
 ```
 
-Therefore calling `event.result()` is not required. `event.result()` is retained for compatibility/debugging and only converts internal state to a map; its return value does not decide pass/fail.
+If the script does not catch the error, replay treats it as a processor runtime failure and quarantines the record.
 
-Behavior:
+## Removed compatibility APIs
 
-- Validation works even without `event.result()`.
-- `{ ok: true }` at end does not force success if DSL previously recorded errors.
-- `{ ok: false }` does not force failure if no errors were recorded.
+These legacy validator APIs are no longer part of the supported surface:
 
-When validation fails, processor `validate(event)` returns something like:
+- `event.result()`
+- `event.field(path).required("string")`
+- `event.field(path).optional("string")`
 
-```text
-{
-  ok: false,
-  code: "...",
-  message: "...",
-  error: "...",
-  path: "xcontext.installid"
-}
+The supported style is the explicit chain:
+
+```rhai
+event.required("appid").string().min(1);
+event.optional("xcontext.paymentstatus").boolean();
 ```
-
-## Rule set model
-
-Rhai validation rules are stored in rule sets in DB. Current constraints:
-
-- A Rhai validation rule set can have only one enabled Rhai rule.
-- The Rhai rule must be a root wildcard rule.
-- The Rhai rule must define `fn validate(event)`.
-- Projects bind to rule sets.
-
-Legacy YAML/tree rule forms may coexist in code paths, but an enabled Rhai rule set cannot be mixed with other enabled rule types.

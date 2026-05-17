@@ -28,8 +28,7 @@ Thus a successful `/ingest/{project_key}` response means the event is accepted i
 - Ingress: `POST /ingest/{project_key}`, `GET /ingest/{project_key}?appid=...&xwhat=...`.
 - Project access: `auth_mode = token | public`, with optional project IP allowlist.
 - WAL: local segmented write, checkpoint, per-sink replay, and failure retry. See [WAL](docs/wal.md).
-- Rules: Rhai validation rules from DB, bound per project via rule sets.
-- Processor: Rhai `process(event, request)` plus `validate(event)` and `emit(target, event)`.
+- Processor: Rhai `process(event, request)` with inline validation helpers on `event`, plus `emit(target, event)`.
 - Sinks: runtime config from DB, default supported sinks listed above.
 - Admin: admin console, OpenAPI, Swagger UI, Prometheus metrics, service node registration and heartbeat.
 - Storage: SQLite / MySQL with migration and default seed on startup.
@@ -71,7 +70,7 @@ Thus a successful `/ingest/{project_key}` response means the event is accepted i
 |        v                                                                       |
 | +-------------------------------------+                                        |
 | | Run Rhai processor                  |                                        |
-| | validate(event), emit(target,event) |                                        |
+| | event.required(...), emit(target,event) |                                    |
 | +-------------------------------------+                                        |
 |        |                                                                       |
 |        v                                                                       |
@@ -238,14 +237,15 @@ GET query fields are converted into one flat JSON object. Field names are kept a
 
 `/ingest/{project_key}` accepts one event per request; array payloads are not supported. For detailed request decoding, auth behavior, field mapping, and failure responses, see [ingest protocol](docs/ingest-protocol.md).
 
-Default processor implementation:
+Default processor pattern:
 
 ```rhai
 fn process(event, request) {
-    let validation = validate(event);
-    if validation["ok"] {
+    try {
+        event.required("appid").string().min(1);
+        event.required("xwhat").string().min(1);
         emit(SINK_EVENTS, event);
-    } else {
+    } catch (err) {
         emit(SINK_EVENTS_ERROR, event);
     }
 }
@@ -337,10 +337,10 @@ See [Admin console and API](docs/admin-api.md) for endpoint URLs, auth behavior,
 
 ## Validation and transform
 
-Replay processing is two-stage:
+Replay processing is centered on one Rhai entrypoint:
 
-- Validation: `fn validate(event)` validates event fields.
-- Transformation/delivery: `fn process(event, request)` applies rule set validation, mutates/extends events, and emits to event sinks.
+- `fn process(event, request)` validates fields through `event.required(...)` and related helpers, mutates/extends the event, and emits to event sinks.
+- Validation helper failures are ordinary script errors. Processor scripts can `try/catch` them and route to an error sink, or let them bubble up as processor runtime failures.
 
 See [Event processing](docs/event-processing/index.md).
 

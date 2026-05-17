@@ -506,7 +506,7 @@ fn process(event, ctx) {
         event.required("xcontext").object();
         event.required("xcontext.installid").string().min(1);
         event.required("xcontext.os").string().min(1);
-    } catch (_) {
+    } catch (err) {
         emit(SINK_EVENTS_ERROR, event);
         return;
     }

@@ -350,6 +350,66 @@ fn main(event, request) {
     }
 
     #[test]
+    fn processor_does_not_expose_legacy_event_result_helper() {
+        let processor = ProcessorState::new(
+            r#"
+fn process(event, request) {
+    let result = event.result();
+    if result["ok"] {
+        emit(SINK_STDOUT, event);
+    }
+}
+"#
+            .to_string(),
+            10_000,
+        )
+        .expect("processor should compile");
+
+        let error = match processor.process(
+            json!({
+                "appid": "APPID",
+                "xwhat": "custom_event",
+                "xcontext": {}
+            }),
+            ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+        ) {
+            Ok(_) => panic!("event.result helper should not be available"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("Function not found: result"));
+    }
+
+    #[test]
+    fn processor_does_not_expose_legacy_fieldref_type_overloads() {
+        let processor = ProcessorState::new(
+            r#"
+fn process(event, request) {
+    event.field("xwhat").required("string");
+    emit(SINK_STDOUT, event);
+}
+"#
+            .to_string(),
+            10_000,
+        )
+        .expect("processor should compile");
+
+        let error = match processor.process(
+            json!({
+                "appid": "APPID",
+                "xwhat": "custom_event",
+                "xcontext": {}
+            }),
+            ProcessorRequestContext::new(None, "POST", "/ingest", Default::default()),
+        ) {
+            Ok(_) => panic!("legacy type overloads should not be available"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("Function not found: required"));
+    }
+
+    #[test]
     fn processor_collects_emit_deliveries_per_event() {
         let processor = ProcessorState::new_with_sink_targets(
             r#"

@@ -1,15 +1,16 @@
 # Transform and delivery
 
-Transformation scripts process WAL records during replay: they run project validation rules, optionally mutate/augment events, and decide which event sinks receive events. Implementation is Rhai.
+Transformation scripts process WAL records during replay: they validate fields through helper APIs on `event`, optionally mutate/augment events, and decide which event sinks receive events. Implementation is Rhai.
 
 Entry point is fixed:
 
 ```rhai
 fn process(event, request) {
-    let validation = validate(event);
-    if validation["ok"] {
+    try {
+        event.required("appid").string().min(1);
+        event.required("xwhat").string().min(1);
         emit(SINK_EVENTS, event);
-    } else {
+    } catch (err) {
         emit(SINK_EVENTS_ERROR, event);
     }
 }
@@ -28,11 +29,12 @@ Processor output is recorded through `emit(target, event)`; `process(...)` retur
 
 | API | Description |
 | --- | --- |
-| `validate(event)` | Run current project rules; returns a map like `{ ok, code, message, path }` |
 | `emit(target, event)` | Add delivery record to the chosen sink |
 | `epoch_ms()` | Current service timestamp in milliseconds |
 | `host_ip()` | Current service node IP |
 | `ingest4x_version()` | Current ingest4x version |
+
+Validation helper APIs exposed on `event` are documented in [Validation helpers](event-validation.md).
 
 ## Sink constants
 
@@ -82,9 +84,8 @@ Runtime refreshes processor snapshot every `database.refresh_interval_secs`; adm
 
 | Failure point | Behavior |
 | --- | --- |
-| Rules compile failure | Admin write or runtime replay compile of project rules fails |
-| Rule execution failure | `validate(event)` returns failed result; default processor emits to `SINK_EVENTS_ERROR` |
 | Processor compile failure | Admin write or runtime refresh fails |
+| Validation helper failure | Raises a normal Rhai runtime error; script may catch it and emit to an error sink |
 | Processor runtime error | Replay treats the record as processor failure and moves it to quarantine |
 | `emit` target missing | Replay treats as delivery plan error and moves to quarantine |
 | Sink commit failure | Not quarantined; pipeline checkpoint does not advance and the replay window retries later |
@@ -94,17 +95,18 @@ Runtime refreshes processor snapshot every `database.refresh_interval_secs`; adm
 
 ## Default script
 
-Default seed creates a baseline rule and processor with simple logic:
+Default seed creates a baseline processor with inline validation logic:
 
 ```rhai
 fn process(event, request) {
-    let validation = validate(event);
-    if validation["ok"] {
+    try {
+        event.required("appid").string().min(1);
+        event.required("xwhat").string().min(1);
         emit(SINK_EVENTS, event);
-    } else {
+    } catch (err) {
         emit(SINK_EVENTS_ERROR, event);
     }
 }
 ```
 
-In short, rules decide whether an event is valid; processor decides how to transform and where to deliver it.
+In short, `process(...)` owns validation, transformation, and delivery planning in one script. Validation helpers only provide field checks and comparisons.
